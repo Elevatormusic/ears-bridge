@@ -58,9 +58,32 @@ the same design.
 
 ## One intentional change
 
-The bottom bar shows the input meters as a **pre-routing monitor** so levels can be checked before
+The monitor shows the input meters as a **pre-routing monitor** so levels can be checked before
 pressing Start. (Today the engine only meters while running.) This is a small usability addition, not
 required by the current code.
+
+## Option B (Studio) — selected direction, refinements applied
+
+`mockup-b.html` was revised after review:
+
+1. **One transport zone (top-right).** Start/Stop and the run state are a single control — the button
+   reads Start when stopped and Stop when running, and *is* the state indicator. The redundant
+   "Stopped" pill is gone, and Start no longer sits under the Calibration header (it governs the whole
+   bridge, not calibration). Capture status ("Clean") lives in the same zone when running.
+2. **Start is the only filled control.** It is the single filled accent button; every other button
+   (Replace…, etc.) is secondary/outlined.
+3. **"Recommended", not "Rec".** Spelled out with a check, so it can't read as a record-arm in a
+   live-audio tool.
+4. **Honest meter zones.** Green through the normal range; amber only in the last ~3 dB before clip;
+   red at/over 0 dBFS. A healthy −6 dB output reads green, not amber.
+5. **Start is gated when calibration is incomplete.** With the right ear unloaded, Start is disabled
+   with a one-line reason ("Load a right-ear calibration to start"), the right-ear card is tagged
+   "Required to start", and the empty card guides the next action.
+
+Polish: one consistent load affordance (a "Replace…" button on loaded cards, a click-or-drop zone on
+empty ones); plot axes labelled (dB and Hz); cards separated by an elevation fill-step with no
+outline so the blue curve stays the most colourful thing on screen; the Dirac helper expanded to
+"In Dirac Live, choose this device's capture side as the recording input."
 
 ## Status
 
