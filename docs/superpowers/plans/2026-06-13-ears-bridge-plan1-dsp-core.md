@@ -14,12 +14,28 @@
 
 ---
 
+## Build environment
+
+This machine has **CMake 3.30**, **Git**, and **Visual Studio Build Tools 2026 (MSVC v18, cl 19.51)**, but **no Ninja on PATH**, and **CMake 3.30 ships no generator for VS 2026**. So the build uses the **Ninja generator + MSVC**, entered through a committed helper that loads `vcvars64.bat` and puts the VS-bundled Ninja on PATH.
+
+- Helper: `tools/dev.ps1` (already in the repo) runs any command inside the MSVC x64 dev environment.
+- **On Windows, prefix every `cmake` and `ctest` command in this plan** with `powershell -ExecutionPolicy Bypass -File tools/dev.ps1`, and pass **`-G Ninja`** on the first configure:
+  - Configure: `powershell -ExecutionPolicy Bypass -File tools/dev.ps1 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release`
+  - Build:     `powershell -ExecutionPolicy Bypass -File tools/dev.ps1 cmake --build build --target eb_tests`
+  - Test:      `powershell -ExecutionPolicy Bypass -File tools/dev.ps1 ctest --test-dir build --output-on-failure`
+- **On macOS** (later plans), run the same `cmake`/`ctest` commands directly — no wrapper needed.
+
+Verified working: `tools/dev.ps1` exposes `cl 19.51`, `ninja 1.13.2`, `cmake 3.30`.
+
+---
+
 ## File structure (created by this plan)
 
 ```
 EARS_program/
   CMakeLists.txt                       # top-level: JUCE+Catch2 fetch, app + lib + tests
   .gitignore
+  tools/dev.ps1                        # Windows MSVC+Ninja dev-shell wrapper (committed)
   src/
     Main.cpp                           # placeholder GUI app entry (empty window)
     cal/
@@ -245,12 +261,12 @@ TEST_CASE("smoke: test runner links and runs") {
 }
 ```
 
-- [ ] **Step 6: Configure and build**
+- [ ] **Step 6: Configure and build** (Windows commands shown; see Build environment)
 
-Run: `cmake -B build -DCMAKE_BUILD_TYPE=Release`
+Run: `powershell -ExecutionPolicy Bypass -File tools/dev.ps1 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release`
 Expected: configures, fetches JUCE 8.0.4 + Catch2 v3.6.0 (first run is slow), ends with "Generating done".
 
-Run: `cmake --build build --target eb_tests`
+Run: `powershell -ExecutionPolicy Bypass -File tools/dev.ps1 cmake --build build --target eb_tests`
 Expected: builds `eb_tests` with no errors.
 
 > Note: `eb_core/CMakeLists.txt` lists `CalFile.cpp`, `FirDesigner.cpp`, `ProcessingGraph.cpp` which don't exist yet. Create empty stubs so Task 1 builds: add the next step.
@@ -265,10 +281,11 @@ Create matching headers `src/cal/CalFile.h`, `src/cal/FirDesigner.h`, `src/audio
 
 - [ ] **Step 8: Re-build and run the smoke test**
 
-Run: `cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --target eb_tests`
+Run: `powershell -ExecutionPolicy Bypass -File tools/dev.ps1 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release`
+then: `powershell -ExecutionPolicy Bypass -File tools/dev.ps1 cmake --build build --target eb_tests`
 Expected: builds cleanly.
 
-Run: `ctest --test-dir build --output-on-failure`
+Run: `powershell -ExecutionPolicy Bypass -File tools/dev.ps1 ctest --test-dir build --output-on-failure`
 Expected: `100% tests passed, 0 tests failed out of 1`.
 
 - [ ] **Step 9: Copy the cal-file fixtures into the repo**
