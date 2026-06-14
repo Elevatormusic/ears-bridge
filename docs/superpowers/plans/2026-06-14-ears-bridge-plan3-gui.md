@@ -1879,8 +1879,15 @@ void MainComponent::rebuildFirsAsync() {
     auto left  = leftCal.calFile();
     auto right = rightCal.calFile();
 
+    // Component::SafePointer (created HERE on the message thread) lets the result-marshalling
+    // detect a destroyed MainComponent. The destructor's firPool->removeAllJobs(true, ...) waits
+    // for a RUNNING design, but a callAsync already posted by a just-finished job would otherwise
+    // fire on a dead `this` -> use-after-free on engine. Capture `safe` (not `this`) into the job
+    // and each callAsync, and null-check before touching engine.
+    juce::Component::SafePointer<MainComponent> safe (this);
+
     firPool->removeAllJobs (false, 0);   // drop a stale pending rebuild; let a running one finish
-    firPool->addJob ([this, sr, taps, mode, left, right] {
+    firPool->addJob ([safe, sr, taps, mode, left, right] {
         FirDesignParams p;
         p.sampleRate = sr;
         p.numTaps    = taps;
@@ -1888,14 +1895,14 @@ void MainComponent::rebuildFirsAsync() {
         p.invert     = true;
         if (left) {
             auto ir = FirDesigner::design (*left, p);
-            juce::MessageManager::callAsync ([this, ir = std::move (ir)]() mutable {
-                engine.setLeftCalFir (std::move (ir));
+            juce::MessageManager::callAsync ([safe, ir = std::move (ir)]() mutable {
+                if (auto* mc = safe.getComponent()) mc->engine.setLeftCalFir (std::move (ir));
             });
         }
         if (right) {
             auto ir = FirDesigner::design (*right, p);
-            juce::MessageManager::callAsync ([this, ir = std::move (ir)]() mutable {
-                engine.setRightCalFir (std::move (ir));
+            juce::MessageManager::callAsync ([safe, ir = std::move (ir)]() mutable {
+                if (auto* mc = safe.getComponent()) mc->engine.setRightCalFir (std::move (ir));
             });
         }
     });
