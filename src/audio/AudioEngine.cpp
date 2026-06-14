@@ -37,6 +37,15 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
 
         e.graph.process (l, r, mono.data(), numSamples);   // per-ear FIR + combine
         e.bridge.pushCapture (mono.data(), numSamples);
+
+        // Surface producer-side FIFO-full losses into Health (the render callback handles the
+        // consumer-side underrun via observeRenderBlock; overruns originate HERE). Diff the bridge's
+        // cumulative dropped-frame count against a capture-thread-only baseline and forward the delta.
+        // RT-safe: atomic load + an int member + an atomic fetch_add inside reportDroppedFrames.
+        const long long dropped = e.bridge.droppedCaptureFrames();
+        const long long delta   = dropped - e.lastDroppedCapture_;
+        e.lastDroppedCapture_ = dropped;
+        if (delta > 0) e.hm.reportDroppedFrames (delta);   // latches cleanCapture=false + grows droppedFrames
     }
 };
 
@@ -223,6 +232,12 @@ bool AudioEngine::start (juce::String& errorOut) {
     bridge.prepare (capRate, renRate, 1, cap);
     hm.prepare (inputId.model, cap, capRate / juce::jmax (1.0, renRate));   // reset + size + NOMINAL ratio (drift detection)
     bridge.reset();
+    // Reset the per-callback diff baselines: bridge.reset() zeroed the bridge's under/over/dropped
+    // counters, so the callbacks' "last seen" baselines must also return to 0 or a stale-high value
+    // from a prior run would suppress detection (underruns) / inject a spurious negative delta
+    // (dropped frames) at the top of THIS run.
+    lastUnderruns_      = 0;
+    lastDroppedCapture_ = 0;
 
     // Render is the master: start it last so the FIFO has primed once capture runs.
     inD->start (captureCb.get());

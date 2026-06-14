@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "audio/ClockBridge.h"
+#include "audio/HealthMonitor.h"
 #include <cmath>
 #include <vector>
 
@@ -129,4 +130,39 @@ TEST_CASE("ClockBridge: reset clears stats and fill") {
     cb.reset();
     CHECK (cb.underruns() == 0);
     CHECK (cb.overruns()  == 0);
+    CHECK (cb.droppedCaptureFrames() == 0);
+}
+
+// Producer-side overrun: push far more than the FIFO can hold without draining. The bridge must
+// (a) record overrun EVENTS, (b) account the actual FRAMES dropped, and (c) when those frames are
+// forwarded to a HealthMonitor exactly as AudioEngine's capture callback does (diff-and-forward
+// against a per-callback baseline), the monitor must report droppedFrames > 0 AND latch
+// cleanCapture == false -- the spec §5.6 slip/dropped-frame trend reaching the Health snapshot.
+TEST_CASE("ClockBridge overrun surfaces dropped frames into a HealthMonitor (cleanCapture latches false)") {
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 1024);   // small FIFO, never drained below
+    eb::HealthMonitor hm; hm.prepare (eb::EarsModel::Ears, 1024);
+
+    REQUIRE (cb.overruns() == 0);
+    REQUIRE (cb.droppedCaptureFrames() == 0);
+    REQUIRE (hm.cleanCapture());
+    REQUIRE (hm.snapshot().droppedFrames == 0);
+
+    std::vector<float> blk (2048, 0.5f);   // each push is 2x capacity -> guaranteed overflow
+    long long baseline = 0;                 // mirrors AudioEngine::lastDroppedCapture_
+    for (int i = 0; i < 8; ++i) {
+        cb.pushCapture (blk.data(), (int) blk.size());
+        const long long dropped = cb.droppedCaptureFrames();
+        const long long delta   = dropped - baseline;     // exactly the capture-callback wiring
+        baseline = dropped;
+        if (delta > 0) hm.reportDroppedFrames (delta);
+    }
+
+    CHECK (cb.overruns() > 0);                     // events recorded
+    CHECK (cb.droppedCaptureFrames() > 0);         // frames recorded (frame-accurate, not event count)
+    CHECK (hm.snapshot().droppedFrames > 0);       // trend surfaced into the Health snapshot
+    CHECK_FALSE (hm.cleanCapture());               // overflow invalidates the measurement
+    CHECK (eb::any (hm.flags() & eb::HealthFlag::Dropout));  // and raises a flag (symmetric w/ underrun path)
+
+    // The forwarded total equals the bridge's accounted frames (no double counting, no loss).
+    CHECK (hm.snapshot().droppedFrames == cb.droppedCaptureFrames());
 }

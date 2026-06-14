@@ -44,7 +44,11 @@ void HealthMonitor::reportXrun() {
 void HealthMonitor::reportDroppedFrames (long long n) {
     if (n > 0) {
         droppedA.fetch_add (n);
-        clean.store (false);            // Plan 2 behavior: dropped frames invalidate the run
+        // Dropped frames (capture-side overrun OR render-side underrun) are a Dropout: raise the
+        // flag AND invalidate cleanCapture (raise() clears clean for invalidating flags). This keeps
+        // the overrun path symmetric with the render-side FifoStarved+Dropout path -- previously an
+        // overrun-only run latched cleanCapture=false but surfaced NO flag to explain why.
+        raise (HealthFlag::Dropout);
     }
 }
 

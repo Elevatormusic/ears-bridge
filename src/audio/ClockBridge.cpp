@@ -13,7 +13,8 @@ void ClockBridge::prepare (double capRate, double renRate, int /*channels*/, int
     srcInput.assign ((size_t) capacity, 0.0f);
     src.reset();
     smoothedFill = 0.5; ratioTrim = 1.0; integ = 0.0;
-    underrunCount.store (0); overrunCount.store (0); publishedFill.store (0.5);
+    underrunCount.store (0); overrunCount.store (0); droppedFrameCount.store (0);
+    publishedFill.store (0.5);
     publishedRatio.store (captureRate / juce::jmax (1.0, renderRate));
 }
 
@@ -24,14 +25,16 @@ void ClockBridge::reset() {
     std::fill (ring.begin(), ring.end(), 0.0f);
     src.reset();
     smoothedFill = 0.5; ratioTrim = 1.0; integ = 0.0;
-    underrunCount.store (0); overrunCount.store (0); publishedFill.store (0.5);
+    underrunCount.store (0); overrunCount.store (0); droppedFrameCount.store (0);
+    publishedFill.store (0.5);
     publishedRatio.store (captureRate / juce::jmax (1.0, renderRate));
 }
 
 void ClockBridge::pushCapture (const float* mono, int numFrames) {
     int free = fifo.getFreeSpace();
-    if (numFrames > free) {                       // ring full: drop oldest by overwriting policy
-        overrunCount.fetch_add (1);
+    if (numFrames > free) {                       // ring full: producer frames are lost
+        overrunCount.fetch_add (1);               // one overrun EVENT
+        droppedFrameCount.fetch_add ((long long) (numFrames - free));  // actual FRAMES lost
         numFrames = free;                         // write only what fits; lock-free, no alloc
     }
     int s1, sz1, s2, sz2;
@@ -81,6 +84,7 @@ int ClockBridge::pullRender (float* out, int numFrames) {
 double ClockBridge::fifoFill()  const { return publishedFill.load(); }
 int    ClockBridge::underruns() const { return underrunCount.load(); }
 int    ClockBridge::overruns()  const { return overrunCount.load(); }
+long long ClockBridge::droppedCaptureFrames() const { return droppedFrameCount.load(); }
 double ClockBridge::currentRatio() const { return publishedRatio.load(); }
 
 } // namespace eb

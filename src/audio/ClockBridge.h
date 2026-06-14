@@ -20,7 +20,8 @@ public:
 
     double fifoFill()  const;   // 0..1 fraction of capacity currently buffered (smoothed)
     int    underruns() const;
-    int    overruns()  const;
+    int    overruns()  const;   // count of overrun EVENTS (one per FIFO-full pushCapture)
+    long long droppedCaptureFrames() const;  // cumulative producer FRAMES dropped on FIFO-full
     double currentRatio() const;   // current trimmed capture:render resample ratio
 
 private:
@@ -41,6 +42,7 @@ private:
 
     std::atomic<int>    underrunCount { 0 };
     std::atomic<int>    overrunCount  { 0 };
+    std::atomic<long long> droppedFrameCount { 0 };   // producer frames lost to FIFO-full (cumulative)
     std::atomic<double> publishedFill  { 0.5 };
     std::atomic<double> publishedRatio { 1.0 };   // last trimmed capture:render ratio (for currentRatio())
 };

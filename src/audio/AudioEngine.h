@@ -90,6 +90,7 @@ private:
     AggregateDevice aggregate_;     // Plan 4 Task 7: macOS CoreAudio aggregate (no-op on Windows)
     juce::String  lastFallbackMessage_;   // surfaced by the GUI after an ASIO fallback
     int           lastUnderruns_ = 0;     // render-thread-only: ClockBridge underrun count seen last block
+    long long     lastDroppedCapture_ = 0;// capture-thread-only: ClockBridge dropped-frame count seen last block
     bool          usingAggregate_ = false; // macOS: true when the CoreAudio aggregate path is active
                                            // (Task 7 sets it; the render callback reads it). Always
                                            // false on Windows.
