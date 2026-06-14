@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "audio/HealthMonitor.h"
+#include <cmath>   // std::abs in the Task-2 level/ratio round-trip cases appended below
+// (HealthMonitor.h / EngineTypes.h already included by the Plan-2 test prologue above)
 using Catch::Matchers::WithinAbs;
 
 TEST_CASE("HealthMonitor: counters accumulate and snapshot reflects them") {
@@ -39,4 +41,27 @@ TEST_CASE("HealthMonitor: levels round-trip and clip flags") {
     CHECK_FALSE (lv.clipL);
     CHECK (lv.clipR);
     CHECK_FALSE (lv.clipOut);
+}
+
+TEST_CASE("DipGainProfile reflects each EARS model range") {
+    auto ears = eb::DipGainProfile::forModel (eb::EarsModel::Ears);
+    CHECK(ears.minDb == 0.0);
+    CHECK(ears.maxDb == 36.0);
+
+    auto pro = eb::DipGainProfile::forModel (eb::EarsModel::EarsPro);
+    CHECK(pro.minDb == 0.0);
+    CHECK(pro.maxDb == 45.0);
+
+    // Unknown falls back to the conservative original-EARS range.
+    auto unk = eb::DipGainProfile::forModel (eb::EarsModel::Unknown);
+    CHECK(unk.maxDb == 36.0);
+}
+
+TEST_CASE("HealthFlag bitwise algebra ORs and ANDs as expected") {
+    using eb::HealthFlag;
+    auto combined = HealthFlag::Xrun | HealthFlag::ClipInput;
+    CHECK(eb::any (combined & HealthFlag::Xrun));
+    CHECK(eb::any (combined & HealthFlag::ClipInput));
+    CHECK_FALSE(eb::any (combined & HealthFlag::Dropout));
+    CHECK_FALSE(eb::any (HealthFlag::None & HealthFlag::Xrun));
 }
