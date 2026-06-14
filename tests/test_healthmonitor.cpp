@@ -65,3 +65,126 @@ TEST_CASE("HealthFlag bitwise algebra ORs and ANDs as expected") {
     CHECK_FALSE(eb::any (combined & HealthFlag::Dropout));
     CHECK_FALSE(eb::any (HealthFlag::None & HealthFlag::Xrun));
 }
+
+TEST_CASE("HealthMonitor flags input clip above -1 dBFS but clip does NOT invalidate cleanCapture") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    // L peak clips (>= kClipLinear), R is fine; the caller passes the matching clip bools.
+    h.reportInLevels (0.95f, 0.10f, true, false);
+    auto lv = h.levels();
+    CHECK(lv.clipL);
+    CHECK_FALSE(lv.clipR);
+    CHECK(eb::any (h.flags() & eb::HealthFlag::ClipInput));
+    // Clip is a guidance warning, not a measurement invalidation.
+    CHECK(h.cleanCapture());
+}
+
+TEST_CASE("HealthMonitor flags ClipOutput from reportOutLevel") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    h.reportOutLevel (0.95f, true);   // mono output clips
+    CHECK(h.levels().clipOut);
+    CHECK(eb::any (h.flags() & eb::HealthFlag::ClipOutput));
+    CHECK(h.cleanCapture());          // output clip is guidance, not invalidation
+}
+
+TEST_CASE("HealthMonitor flags low input level only after the grace window") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::EarsPro, 4096);
+    // During grace: silent input must NOT raise LowLevel.
+    for (int i = 0; i < eb::HealthMonitor::kLowLevelGraceBlocks; ++i) {
+        h.observeRenderBlock (256, 256, 1.0, 0.5);  // advances the block counter
+        h.reportInLevels (0.0f, 0.0f, false, false);
+    }
+    CHECK_FALSE(eb::any (h.flags() & eb::HealthFlag::LowLevel));
+    // After grace, a sustained near-silent capture raises LowLevel.
+    h.observeRenderBlock (256, 256, 1.0, 0.5);
+    h.reportInLevels (0.001f, 0.001f, false, false);
+    CHECK(eb::any (h.flags() & eb::HealthFlag::LowLevel));
+}
+
+TEST_CASE("HealthMonitor latches Dropout and invalidates cleanCapture on silence-filled render") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    CHECK(h.cleanCapture());
+    h.observeRenderBlock (256, 200, 1.0, 0.1);     // got < wanted -> FIFO starved + dropout
+    CHECK(eb::any (h.flags() & eb::HealthFlag::Dropout));
+    CHECK(eb::any (h.flags() & eb::HealthFlag::FifoStarved));
+    CHECK_FALSE(h.cleanCapture());                 // latched
+    // Latch is sticky: a subsequent clean block does not clear it.
+    h.observeRenderBlock (256, 256, 1.0, 0.5);
+    CHECK_FALSE(h.cleanCapture());
+    CHECK(h.snapshot().droppedFrames == 56);       // 256 - 200 accounted via observeRenderBlock
+}
+
+TEST_CASE("HealthMonitor latches ExcessDrift only after sustained out-of-tolerance ratio") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::EarsPro, 4096);
+    const double bad = 1.0 + 2.0 * eb::HealthMonitor::kDriftRatioTol; // +1.0% > 0.5% tol
+    // One bad block must NOT latch.
+    h.observeRenderBlock (256, 256, bad, 0.5);
+    CHECK_FALSE(eb::any (h.flags() & eb::HealthFlag::ExcessDrift));
+    // Sustain to the threshold -> latch.
+    for (int i = 1; i < eb::HealthMonitor::kDriftSustainBlocks; ++i)
+        h.observeRenderBlock (256, 256, bad, 0.5);
+    CHECK(eb::any (h.flags() & eb::HealthFlag::ExcessDrift));
+    CHECK_FALSE(h.cleanCapture());
+    // observeRenderBlock forwarded the ratio through the Plan-2 micro-fixed-point setter, so
+    // compare within the 1e-6 storage resolution rather than bit-exact.
+    CHECK(std::abs (h.snapshot().captureToRenderRatio - bad) < 1e-6);
+}
+
+TEST_CASE("HealthMonitor: an in-tolerance block resets the drift run so noise does not accumulate") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::EarsPro, 4096);
+    const double bad = 1.0 + 2.0 * eb::HealthMonitor::kDriftRatioTol;
+    for (int i = 0; i < eb::HealthMonitor::kDriftSustainBlocks - 1; ++i)
+        h.observeRenderBlock (256, 256, bad, 0.5);
+    h.observeRenderBlock (256, 256, 1.0, 0.5);     // good block resets the run
+    h.observeRenderBlock (256, 256, bad, 0.5);     // start over
+    CHECK_FALSE(eb::any (h.flags() & eb::HealthFlag::ExcessDrift));
+}
+
+TEST_CASE("HealthMonitor measures drift against the NOMINAL ratio, not 1.0 (mismatched-rate run)") {
+    // 96k capture -> 48k render: nominal capture:render ratio is 2.0. A ratio AT nominal must NOT
+    // latch ExcessDrift (the pre-fix |ratio-1.0| check would have falsely tripped on every block).
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::EarsPro, 16384, 2.0);
+    for (int i = 0; i < eb::HealthMonitor::kDriftSustainBlocks + 4; ++i)
+        h.observeRenderBlock (256, 256, 2.0, 0.5);          // on-nominal: no drift
+    CHECK_FALSE(eb::any (h.flags() & eb::HealthFlag::ExcessDrift));
+
+    // A ratio deviating from nominal by > tol, sustained, DOES latch.
+    const double off = 2.0 * (1.0 + 2.0 * eb::HealthMonitor::kDriftRatioTol);
+    for (int i = 0; i < eb::HealthMonitor::kDriftSustainBlocks; ++i)
+        h.observeRenderBlock (256, 256, off, 0.5);
+    CHECK(eb::any (h.flags() & eb::HealthFlag::ExcessDrift));
+}
+
+TEST_CASE("HealthMonitor xrun counter, flag, and reset (Plan-2 reportXrun preserved)") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    h.reportXrun(); h.reportXrun();
+    CHECK(h.snapshot().xruns == 2);
+    CHECK(eb::any (h.flags() & eb::HealthFlag::Xrun));
+    CHECK_FALSE(h.cleanCapture());                 // xrun invalidates a measurement (spec §3.5)
+    h.reset();
+    CHECK(h.snapshot().xruns == 0);
+    CHECK(h.cleanCapture());
+    CHECK_FALSE(eb::any (h.flags() & eb::HealthFlag::Xrun));
+}
+
+TEST_CASE("HealthMonitor: Plan-2 reportDroppedFrames still accumulates + invalidates") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    h.reportDroppedFrames (128);
+    h.reportDroppedFrames (64);
+    CHECK(h.snapshot().droppedFrames == 192);
+    CHECK_FALSE(h.cleanCapture());                 // dropped frames invalidate the run
+}
+
+TEST_CASE("HealthMonitor: Plan-2 setFifoFill / setCaptureToRenderRatio / levels round-trip") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    h.setFifoFill (0.42);
+    h.setCaptureToRenderRatio (2.0);
+    h.reportInLevels (0.5f, 0.25f, false, false);
+    h.reportOutLevel (0.8f, false);
+    auto s  = h.snapshot();
+    auto lv = h.levels();
+    CHECK(std::abs (s.fifoFill - 0.42) < 1e-3);
+    CHECK(std::abs (s.captureToRenderRatio - 2.0) < 1e-3);
+    CHECK(std::abs (lv.inL - 0.5f) < 2e-3f);
+    CHECK(std::abs (lv.inR - 0.25f) < 2e-3f);
+    CHECK(std::abs (lv.outMono - 0.8f) < 2e-3f);
+}

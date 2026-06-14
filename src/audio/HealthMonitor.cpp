@@ -1,20 +1,51 @@
 #include "audio/HealthMonitor.h"
 #include <algorithm>
 #include <cmath>
+
 namespace eb {
 
+// ---- Plan 4 addition: flag bookkeeping ------------------------------------------------
+void HealthMonitor::raise (HealthFlag f) noexcept {
+    flagBits.fetch_or (static_cast<unsigned> (f));
+    // Conditions that invalidate a measurement clear cleanCapture; pure guidance warnings do not.
+    const unsigned invalidating =
+        static_cast<unsigned> (HealthFlag::Xrun)        |
+        static_cast<unsigned> (HealthFlag::Dropout)     |
+        static_cast<unsigned> (HealthFlag::ExcessDrift) |
+        static_cast<unsigned> (HealthFlag::FifoStarved);
+    if ((static_cast<unsigned> (f) & invalidating) != 0u)
+        clean.store (false);
+}
+
+// ---- Plan 4 addition: per-run configure -----------------------------------------------
+void HealthMonitor::prepare (EarsModel m, int fifoCapacityFrames, double nominalRatio) noexcept {
+    model_ = m;
+    capacity_ = fifoCapacityFrames;
+    nominal_ = (nominalRatio > 0.0 ? nominalRatio : 1.0);
+    reset();
+}
+
+// ---- Plan 2 canonical surface (bodies preserved; flag logic folded in where noted) -----
 void HealthMonitor::reset() {
-    xruns.store (0); dropped.store (0);
+    xrunsA.store (0); droppedA.store (0);
     fifoFillMilli.store (500); ratioMicro.store (1000000);
     clean.store (true);
     inLm.store (0); inRm.store (0); outM.store (0);
     cL.store (false); cR.store (false); cO.store (false);
+    flagBits.store (0);                 // Plan 4: clear the sticky flags on a fresh run
+    driftRun.store (0); blockCount.store (0);
 }
 
-void HealthMonitor::reportXrun() { xruns.fetch_add (1); clean.store (false); }
+void HealthMonitor::reportXrun() {
+    xrunsA.fetch_add (1);
+    raise (HealthFlag::Xrun);           // Plan 4: also latches cleanCapture=false (invalidating)
+}
 
 void HealthMonitor::reportDroppedFrames (long long n) {
-    if (n > 0) { dropped.fetch_add (n); clean.store (false); }
+    if (n > 0) {
+        droppedA.fetch_add (n);
+        clean.store (false);            // Plan 2 behavior: dropped frames invalidate the run
+    }
 }
 
 void HealthMonitor::setFifoFill (double frac) {
@@ -29,20 +60,31 @@ void HealthMonitor::reportInLevels (float peakL, float peakR, bool clipL, bool c
     inLm.store ((int) std::lround (juce::jlimit (0.0f, 8.0f, peakL) * 1000.0f));
     inRm.store ((int) std::lround (juce::jlimit (0.0f, 8.0f, peakR) * 1000.0f));
     cL.store (clipL); cR.store (clipR);
+    // Plan 4: raise ClipInput if the caller flagged a clip OR the peak crosses the threshold.
+    if (clipL || clipR || peakL >= kClipLinear || peakR >= kClipLinear)
+        raise (HealthFlag::ClipInput);  // guidance (does NOT invalidate cleanCapture)
+    // Plan 4: low-level only AFTER the grace window has fully elapsed (strictly greater, so the
+    // 64-block warm-up does not itself trip it) and only when both ears are quiet.
+    if (blockCount.load() > kLowLevelGraceBlocks
+        && peakL < kLowLevelLinear && peakR < kLowLevelLinear)
+        raise (HealthFlag::LowLevel);   // guidance
 }
 
 void HealthMonitor::reportOutLevel (float peakMono, bool clipOut) {
     outM.store ((int) std::lround (juce::jlimit (0.0f, 8.0f, peakMono) * 1000.0f));
     cO.store (clipOut);
+    if (clipOut || peakMono >= kClipLinear)
+        raise (HealthFlag::ClipOutput); // Plan 4: guidance warning
 }
 
 Health HealthMonitor::snapshot() const {
     Health h;
-    h.xruns = xruns.load();
-    h.droppedFrames = dropped.load();
+    h.xruns = xrunsA.load();
+    h.droppedFrames = droppedA.load();
     h.fifoFill = fifoFillMilli.load() / 1000.0;
     h.captureToRenderRatio = ratioMicro.load() / 1.0e6;
     h.cleanCapture = clean.load();
+    h.flags = static_cast<HealthFlag> (flagBits.load());   // Plan 4: surface sticky flags
     return h;
 }
 
@@ -54,5 +96,33 @@ Levels HealthMonitor::levels() const {
     lv.clipL = cL.load(); lv.clipR = cR.load(); lv.clipOut = cO.load();
     return lv;
 }
+
+// ---- Plan 4 addition: per-render-block observer (folds onto the Plan-2 setters) --------
+void HealthMonitor::observeRenderBlock (int framesWanted, int framesGot,
+                                        double captureToRenderRatio, double fifoFillFrac) noexcept {
+    blockCount.fetch_add (1);
+    setCaptureToRenderRatio (captureToRenderRatio);   // reuse the Plan-2 setter (one copy of state)
+    setFifoFill (fifoFillFrac);                        // reuse the Plan-2 setter
+
+    if (framesGot < framesWanted) {
+        droppedA.fetch_add (static_cast<long long> (framesWanted - framesGot));
+        raise (HealthFlag::FifoStarved);
+        raise (HealthFlag::Dropout);
+    }
+
+    // Sustained drift state machine: count consecutive ratios deviating from the NOMINAL
+    // capture:render ratio (not from 1.0 — a 96k->48k run has nominal ~2.0); latch at threshold.
+    const double drift = (nominal_ > 0.0) ? std::abs (captureToRenderRatio / nominal_ - 1.0)
+                                          : std::abs (captureToRenderRatio - 1.0);
+    if (drift > kDriftRatioTol) {
+        const int run = driftRun.fetch_add (1) + 1;
+        if (run >= kDriftSustainBlocks) raise (HealthFlag::ExcessDrift);
+    } else {
+        driftRun.store (0);
+    }
+}
+
+HealthFlag HealthMonitor::flags() const noexcept { return static_cast<HealthFlag> (flagBits.load()); }
+bool       HealthMonitor::cleanCapture() const noexcept { return clean.load(); }
 
 } // namespace eb
