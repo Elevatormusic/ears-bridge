@@ -1,12 +1,32 @@
 # EARS Bridge — GUI redesign (design notes)
 
 A proposed redesign of the desktop window, applying `docs/GUIDesignGuide.md` (the Apple-HIG-derived,
-framework-neutral guideline). This is a **design mockup** ([`mockup.html`](mockup.html)) for review —
-not yet implemented in the JUCE code. Open `mockup.html` in a browser to see it full size.
+framework-neutral guideline). These are **design mockups** for review — not yet implemented in the
+JUCE code. Open the HTML files in a browser to see them full size.
 
-It keeps the existing functionality (input, two per-ear calibrations, combine mode, output sink,
+All three keep the same functionality (input, two per-ear calibrations, combine mode, output sink,
 sample rate, bit depth, level meters, clean-capture status, Start/Stop, and the Advanced disclosure)
-and restructures the presentation.
+and the same design system (tokens, type ramp, components); they differ in composition.
+
+## Three directions
+
+- **A — Panel** ([`mockup-a.html`](mockup-a.html)): dark, a single sectioned column (Input →
+  Calibration → Routing → Format → Advanced) with the meters and Start in a bottom transport bar.
+- **B — Studio** ([`mockup-b.html`](mockup-b.html)): dark, a two-pane layout — a compact config rail
+  on the left, the calibration plots and meters given the most space on the right, Start in the
+  content header.
+- **C — Clean (light)** ([`mockup-c.html`](mockup-c.html)): the light appearance, with the meters,
+  clean status, and Start anchored in a top bar above an airier single-column body.
+
+## Same design on Windows and macOS
+
+The shared design system — layout, components, color tokens, and the type roles — renders identically
+on both platforms (the JUCE app draws its own widgets). What differs is the OS-owned chrome, which you
+let each platform handle: window-frame controls (traffic lights top-left on macOS vs. min/max/close
+top-right on Windows — the mockups show the macOS dots), the menu-bar placement, the native file
+dialogs, and the actual system font the stack resolves to (San Francisco on macOS, Segoe UI on
+Windows). Theme (light/dark) follows the OS appearance setting; mockup C shows the light variant of
+the same design.
 
 ## How it maps to the guide
 
