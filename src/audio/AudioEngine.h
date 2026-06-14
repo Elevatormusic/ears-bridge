@@ -9,6 +9,7 @@
 #include "audio/LrVerify.h"
 #include "audio/AsioFallback.h"
 #include "audio/CalBinder.h"
+#include "platform/AggregateDevice_mac.h"   // portable header; macOS-gated .mm (Plan 4 Task 7)
 #include "cal/CalFile.h"
 #include "cal/FirDesigner.h"
 #include <atomic>
@@ -86,6 +87,7 @@ private:
 
     LrVerify      lrVerify_;        // Plan 4 (pure state machine)
     CalBinder     calBinder_;       // Plan 4 (re-bind cal across re-enumeration)
+    AggregateDevice aggregate_;     // Plan 4 Task 7: macOS CoreAudio aggregate (no-op on Windows)
     juce::String  lastFallbackMessage_;   // surfaced by the GUI after an ASIO fallback
     int           lastUnderruns_ = 0;     // render-thread-only: ClockBridge underrun count seen last block
     bool          usingAggregate_ = false; // macOS: true when the CoreAudio aggregate path is active
