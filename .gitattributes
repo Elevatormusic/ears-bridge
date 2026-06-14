@@ -1,0 +1,7 @@
+# Shell scripts must keep LF endings so they run on macOS/Linux regardless of a
+# contributor's core.autocrlf setting. (A CRLF in a .sh breaks bash with "\r: command not found".)
+*.sh  text eol=lf
+
+# Windows batch wrappers need CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
