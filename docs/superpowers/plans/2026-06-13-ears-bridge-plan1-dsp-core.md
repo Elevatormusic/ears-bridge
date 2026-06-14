@@ -921,11 +921,27 @@ Create `tests/test_processinggraph.cpp`:
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "audio/ProcessingGraph.h"
+#include <cmath>
+#include <vector>
 
 using Catch::Matchers::WithinAbs;
 
 static juce::AudioBuffer<float> unitImpulse (int taps) {
     juce::AudioBuffer<float> b (1, taps); b.clear(); b.setSample (0, 0, 1.0f); return b;
+}
+
+// Spin the graph until juce::dsp::Convolution finishes its ASYNC IR load + gain
+// ramp, so steady-state DC-through-identity equals the input. Brief sleeps give the
+// Convolution background loader thread wall-clock time. Returns false if never settles.
+static bool warmUp (eb::ProcessingGraph& g, const std::vector<float>& inL,
+                    const std::vector<float>& inR, std::vector<float>& out, int N) {
+    g.setCombineMode (eb::CombineMode::TwoPassLeft);
+    for (int rep = 0; rep < 3000; ++rep) {
+        g.process (inL.data(), inR.data(), out.data(), N);
+        if (std::abs (out[N - 1] - inL[0]) < 1.0e-4f) return true;
+        juce::Thread::sleep (1);
+    }
+    return false;
 }
 
 TEST_CASE("ProcessingGraph combine modes with identity FIRs") {
@@ -934,6 +950,7 @@ TEST_CASE("ProcessingGraph combine modes with identity FIRs") {
     g.setFir (0, unitImpulse (8)); g.setFir (1, unitImpulse (8));
 
     std::vector<float> inL (N, 0.5f), inR (N, 0.3f), out (N, 0.0f);
+    REQUIRE (warmUp (g, inL, inR, out, N)); // wait out the async IR load + gain ramp
 
     SECTION("Average") {
         g.setCombineMode (eb::CombineMode::Average);
@@ -958,7 +975,7 @@ TEST_CASE("ProcessingGraph combine modes with identity FIRs") {
 }
 ```
 
-> Steady-state DC input through an identity (unit-impulse) FIR yields the input value once the convolution latency has filled — checking `out[N-1]` avoids the initial latency ramp.
+> `juce::dsp::Convolution` loads the IR on a background thread and ramps gain, so a single `process` right after `setFir` still reflects the placeholder IR. `warmUp` spins (with brief sleeps to let the loader thread run) until DC-through-identity reaches unity; each combine mode is then asserted from that settled state. `getLatency()` is 0 — this is async-load/ramp, not latency.
 
 - [ ] **Step 3: Run to verify failure**
 
