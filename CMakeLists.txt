@@ -51,6 +51,7 @@ add_library(eb_engine STATIC
     src/audio/AudioEngine.cpp)
 target_sources(eb_engine PRIVATE src/audio/CalBinder.cpp)
 target_sources(eb_engine PRIVATE src/audio/AsioFallback.cpp)
+target_sources(eb_engine PRIVATE src/audio/LrVerify.cpp)
 target_include_directories(eb_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(eb_engine PUBLIC cxx_std_20)
 # DeviceManager.h / AudioEngine.h are PUBLIC headers that #include <juce_audio_devices/...> and
