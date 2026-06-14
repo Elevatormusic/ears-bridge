@@ -869,15 +869,17 @@ Then replace the `// ComplexWithPhase path` return with:
                 spec[(size_t)(fftSize-k)*2+1] = -m * std::sin ((float) ph);
             }
         }
+        // IFFT OUT-OF-PLACE — in-place perform() corrupts results in this JUCE/MSVC build (proven in Task 5).
+        std::vector<float> imp ((size_t) fftSize * 2, 0.0f);
         fft.perform (reinterpret_cast<juce::dsp::Complex<float>*> (spec.data()),
-                     reinterpret_cast<juce::dsp::Complex<float>*> (spec.data()), true);
+                     reinterpret_cast<juce::dsp::Complex<float>*> (imp.data()), true);
         // zero-phase IR is centered at 0 (wraps); rotate so the bulk sits inside numTaps
         juce::AudioBuffer<float> ir (1, p.numTaps);
         auto* d = ir.getWritePointer (0);
         const int half = p.numTaps / 2;
         for (int i = 0; i < p.numTaps; ++i) {
             int src = (i - half + fftSize) % fftSize;   // linear-phase center
-            d[i] = spec[(size_t) src * 2];
+            d[i] = imp[(size_t) src * 2];
         }
         // symmetric window
         for (int i = 0; i < p.numTaps; ++i) {
