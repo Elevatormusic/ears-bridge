@@ -1,0 +1,132 @@
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include "audio/ClockBridge.h"
+#include <cmath>
+#include <vector>
+
+using Catch::Matchers::WithinAbs;
+
+// Drive the bridge with a producer feeding a capture-time sine at f0, BALANCED against the
+// consumer so the FIFO hovers near its primed fill: we generate capture on demand and push
+// just enough each block to keep cumulative push ~= consumed * capPerRender + prime. That
+// avoids the two ways a naive harness lies about the bridge: over-feeding (-> overruns) and
+// then exhausting a fixed capture budget (-> starvation/underruns).
+//
+// The FEED ratio is captureRate/renderRate. The bridge's OWN nominal ratio comes from however
+// the test prepared it; when the two differ (the drift case) the PI fill-control loop must trim
+// to hold the FIFO, which this harness then exercises.
+//
+// Error metric: the LagrangeInterpolator imposes a constant (fractional) group delay, so a
+// sample-by-sample compare against an un-delayed ideal sine is dominated by that delay (~0.3 at
+// 997 Hz) and says nothing about transparency. Instead we least-squares-fit a single tone at f0
+// (any phase) over the steady region and return max(|amplitude - 1|, peak residual): delay- and
+// phase-invariant, and sensitive to amplitude error, distortion, and the discontinuities that
+// any under/overrun would inject.
+static double runBridge (eb::ClockBridge& cb, double captureRate, double renderRate,
+                         double f0, int capBlock, int renderBlock, int renderBlocks,
+                         int& underruns, int& overruns) {
+    const double capPerRender = captureRate / renderRate;          // feed ratio
+    double capPhase = 0.0;
+    const double dCap = 2.0 * juce::MathConstants<double>::pi * f0 / captureRate;
+
+    std::vector<float> capBuf ((size_t) capBlock);
+    auto pushOneBlock = [&]() {
+        for (int i = 0; i < capBlock; ++i) { capBuf[(size_t) i] = (float) std::sin (capPhase); capPhase += dCap; }
+        cb.pushCapture (capBuf.data(), capBlock);
+    };
+
+    const int primeBlocks = juce::jmax (1, 4096 / capBlock);       // ~4096 samples primed
+    for (int i = 0; i < primeBlocks; ++i) pushOneBlock();
+
+    std::vector<float> out ((size_t) renderBlock, 0.0f);
+    std::vector<float> rendered;
+    rendered.reserve ((size_t) renderBlocks * renderBlock);
+
+    long long capPushed  = (long long) primeBlocks * capBlock;
+    long long renderDone = 0;
+    for (int b = 0; b < renderBlocks; ++b) {
+        const long long target = (long long) ((double) (renderDone + renderBlock) * capPerRender)
+                               + (long long) primeBlocks * capBlock;
+        while (capPushed < target) { pushOneBlock(); capPushed += capBlock; }
+
+        cb.pullRender (out.data(), renderBlock);
+        renderDone += renderBlock;
+        for (int i = 0; i < renderBlock; ++i) rendered.push_back (out[(size_t) i]);
+    }
+    underruns = cb.underruns(); overruns = cb.overruns();
+
+    // Transparency metric, frequency/phase-invariant (so it is NOT fooled by the SRC's tiny
+    // fill-control retune, which slightly shifts the output frequency): over the steady region,
+    // a pure tone of ANY frequency obeys the resonator recurrence r[i+1] + r[i-1] = 2cos(w)*r[i].
+    // Estimate k = 2cos(w) by least squares and take the worst residual of that recurrence
+    // (catches distortion / clicks / dropouts), normalised by peak, combined with the peak-
+    // amplitude error (catches gain change). ~0 for a clean unit-amplitude tone.
+    const int n    = (int) rendered.size();
+    const int warm = juce::jmin (n / 2, 24 * renderBlock);
+    double peak = 0.0;
+    for (int i = warm; i < n; ++i)
+        peak = std::max (peak, std::abs ((double) rendered[(size_t) i]));
+
+    double num = 0.0, den = 0.0;
+    for (int i = warm + 1; i < n - 1; ++i) {
+        const double ri = (double) rendered[(size_t) i];
+        num += ((double) rendered[(size_t) i + 1] + (double) rendered[(size_t) i - 1]) * ri;
+        den += ri * ri;
+    }
+    const double k = (den > 1.0e-12) ? num / den : 0.0;          // == 2 cos(w)
+    double resid = 0.0;
+    for (int i = warm + 1; i < n - 1; ++i)
+        resid = std::max (resid, std::abs ((double) rendered[(size_t) i + 1]
+                                         + (double) rendered[(size_t) i - 1]
+                                         - k * (double) rendered[(size_t) i]));
+    const double cleanliness = resid / std::max (peak, 1.0e-6);
+    return std::max (std::abs (peak - 1.0), cleanliness);
+}
+
+TEST_CASE("ClockBridge: equal nominal rates, no under/overflow, bounded fill") {
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 8192);
+    int u = 0, o = 0;
+    double err = runBridge (cb, 48000.0, 48000.0, 997.0, 256, 256, 400, u, o);
+    INFO ("err=" << err << " under=" << u << " over=" << o << " fill=" << cb.fifoFill());
+    CHECK (u == 0);
+    CHECK (o == 0);
+    CHECK (cb.fifoFill() > 0.05);
+    CHECK (cb.fifoFill() < 0.95);
+    CHECK (err < 0.05);   // async SRC transparent at 997 Hz
+}
+
+TEST_CASE("ClockBridge: 96k capture -> 48k render downsample passes a sine") {
+    eb::ClockBridge cb; cb.prepare (96000.0, 48000.0, 1, 16384);
+    int u = 0, o = 0;
+    double err = runBridge (cb, 96000.0, 48000.0, 997.0, 256, 256, 400, u, o);
+    INFO ("err=" << err << " under=" << u << " over=" << o << " fill=" << cb.fifoFill());
+    CHECK (u == 0);
+    CHECK (o == 0);
+    CHECK (cb.fifoFill() > 0.05);
+    CHECK (cb.fifoFill() < 0.95);
+    CHECK (err < 0.05);
+}
+
+TEST_CASE("ClockBridge: small clock drift is absorbed by the fill-control loop") {
+    // Bridge prepared at nominal 1.0 but FED at 48000/48010 (~0.02% slow): the feed ratio
+    // differs from the bridge's nominal, so the PI loop must trim to hold the FIFO -- a real
+    // drift the loop has to absorb over a long run without the FIFO running away.
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 8192);
+    int u = 0, o = 0;
+    double err = runBridge (cb, 48000.0, 48010.0, 997.0, 256, 256, 800, u, o);
+    INFO ("err=" << err << " fill=" << cb.fifoFill() << " under=" << u << " over=" << o);
+    CHECK (u == 0);
+    CHECK (o == 0);
+    CHECK (cb.fifoFill() > 0.05);
+    CHECK (cb.fifoFill() < 0.95);
+}
+
+TEST_CASE("ClockBridge: reset clears stats and fill") {
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 4096);
+    std::vector<float> z (256, 0.0f), out (256, 0.0f);
+    for (int i = 0; i < 4; ++i) cb.pushCapture (z.data(), 256);
+    cb.pullRender (out.data(), 256);
+    cb.reset();
+    CHECK (cb.underruns() == 0);
+    CHECK (cb.overruns()  == 0);
+}

@@ -4,7 +4,8 @@ add_executable(eb_tests
     test_firdesigner.cpp
     test_processinggraph.cpp
     test_deviceid.cpp
-    test_modeldetect.cpp)
+    test_modeldetect.cpp
+    test_clockbridge.cpp)
 # Link the JUCE modules the test sources include directly, plus the recommended config flags,
 # so eb_tests compiles regardless of eb_core's link visibility.
 target_link_libraries(eb_tests PRIVATE
@@ -18,3 +19,11 @@ target_compile_definitions(eb_tests PRIVATE
 
 include(Catch)
 catch_discover_tests(eb_tests)
+
+add_executable(diag_clockbridge diag_clockbridge.cpp)
+target_link_libraries(diag_clockbridge PRIVATE
+    eb_core eb_engine
+    juce::juce_audio_basics juce::juce_dsp juce::juce_audio_devices
+    juce::juce_recommended_config_flags)
+target_compile_definitions(diag_clockbridge PRIVATE
+    JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
