@@ -116,12 +116,12 @@ add_library(eb_gui STATIC
     src/gui/MainComponent.cpp)
 target_include_directories(eb_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(eb_gui PUBLIC cxx_std_20)
-# GUI headers expose juce_gui_* and juce_audio_basics types publicly -> PUBLIC so
-# include dirs/defines reach eb_tests and the app target. eb_core gives us CalFile/
-# FirDesigner/ProcessingGraph/AudioEngine.
+# GUI headers expose juce_gui_* and juce_audio types publicly -> PUBLIC so include dirs/
+# defines reach eb_tests and the app target. AudioEngine + DeviceId::key()/operator== live in
+# eb_engine (which PUBLIC-links eb_core + juce_audio_devices), so link eb_engine (NOT eb_core).
 target_link_libraries(eb_gui
     PUBLIC
-        eb_core
+        eb_engine
         juce::juce_gui_extra juce::juce_gui_basics
         juce::juce_audio_basics juce::juce_dsp
         juce::juce_recommended_config_flags
@@ -142,7 +142,7 @@ target_include_directories(eb_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(eb_gui PUBLIC cxx_std_20)
 target_link_libraries(eb_gui
     PUBLIC
-        eb_core
+        eb_engine
         juce::juce_gui_extra juce::juce_gui_basics
         juce::juce_audio_basics juce::juce_dsp
         juce::juce_recommended_config_flags
@@ -151,7 +151,7 @@ target_compile_definitions(eb_gui PUBLIC
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 ```
 
-- [ ] **Wire `eb_gui` into the test target.** In `tests/CMakeLists.txt`, add `test_settings.cpp` to `add_executable(eb_tests ...)` and add `eb_gui` to its `target_link_libraries`. Result:
+- [ ] **Wire `eb_gui` into the test target — ADDITIVELY.** In `tests/CMakeLists.txt`, **APPEND** `test_settings.cpp` to the EXISTING `add_executable(eb_tests ...)` list (which already has the Plan 1 + Plan 2 test sources — do NOT delete them) and ADD `eb_gui` to the existing `target_link_libraries` (keep `eb_engine` + `juce_audio_devices`; also keep the separate `diag_clockbridge` target further down). Result:
 
 ```cmake
 add_executable(eb_tests
@@ -159,11 +159,16 @@ add_executable(eb_tests
     test_calfile.cpp
     test_firdesigner.cpp
     test_processinggraph.cpp
+    test_deviceid.cpp
+    test_modeldetect.cpp
+    test_clockbridge.cpp
+    test_healthmonitor.cpp
+    test_devicemanager.cpp
+    test_audioengine.cpp
     test_settings.cpp)
 target_link_libraries(eb_tests PRIVATE
-    eb_core
-    eb_gui
-    juce::juce_audio_basics juce::juce_dsp
+    eb_core eb_engine eb_gui
+    juce::juce_audio_basics juce::juce_dsp juce::juce_audio_devices
     juce::juce_recommended_config_flags
     Catch2::Catch2WithMain)
 target_compile_definitions(eb_tests PRIVATE
@@ -173,6 +178,7 @@ target_compile_definitions(eb_tests PRIVATE
 include(Catch)
 catch_discover_tests(eb_tests)
 ```
+(Later GUI-logic tasks append `test_plotmath.cpp` / `test_ratemenu.cpp` the same additive way. The `diag_clockbridge` executable block below the test target stays unchanged.)
 
 - [ ] **Write the failing test** `tests/test_settings.cpp`:
 
@@ -256,6 +262,7 @@ Expected: configure succeeds; build FAILS with `state/Settings.h: No such file o
 ```cpp
 #pragma once
 #include <juce_core/juce_core.h>
+#include <juce_data_structures/juce_data_structures.h>   // juce::PropertiesFile / Options (NOT in juce_core)
 #include "audio/EngineTypes.h"   // eb::EarsModel (Plan 2 SPINE)
 #include "audio/CombineMode.h"   // eb::CombineMode (Plan 1)
 
@@ -293,7 +300,7 @@ private:
 } // namespace eb
 ```
 
-> The include `audio/EngineTypes.h` is the Plan-2 SPINE header that defines `enum class EarsModel`. If Plan 2 is not yet merged when building Task 1, add a one-line shim header `src/audio/EngineTypes.h` containing exactly `#pragma once` + the `EarsModel` enum from the SPINE (Plan 2 will replace it with the full file). Do NOT duplicate the enum anywhere else.
+> Plan 2 is already merged: `src/audio/EngineTypes.h` (defining `enum class EarsModel`) and `src/audio/CombineMode.h` are the real, fully-populated headers. Include them as-is — do NOT create shim headers (a duplicate definition would cause an ODR/redefinition clash), and do NOT `git add src/audio/EngineTypes.h` in the Task 1 commit (it already exists).
 
 - [ ] **Implement `src/state/Settings.cpp`:**
 
