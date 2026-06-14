@@ -18,11 +18,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Set up the MSVC toolchain regardless of which Visual Studio version the runner ships
+      # (the runner image dropped VS 2022, which broke a hardcoded "Visual Studio 17 2022"
+      # generator). This mirrors the local Ninja + MSVC build.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Configure (Release, static MSVC runtime)
-        run: cmake -G "Visual Studio 17 2022" -A x64 -B build
+        run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build app
-        run: cmake --build build --config Release --target EarsBridge
+        run: cmake --build build --target EarsBridge
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
