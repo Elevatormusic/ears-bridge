@@ -1,0 +1,56 @@
+cmake_minimum_required(VERSION 3.22)
+project(EarsBridge VERSION 0.1.0 LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+include(FetchContent)
+
+FetchContent_Declare(juce
+    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+    GIT_TAG        8.0.4)        # JUCE >= 7 required (Convolution realtime-safe)
+FetchContent_MakeAvailable(juce)
+
+FetchContent_Declare(Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG        v3.6.0)
+FetchContent_MakeAvailable(Catch2)
+# Catch2's CMake helpers (Catch.cmake -> catch_discover_tests) are NOT registered by
+# FetchContent; add its extras dir to the module path. Note the lowercase catch2_SOURCE_DIR
+# (CMake lowercases the declared name). Without this, include(Catch) fails at configure time.
+list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+
+# ---- Core DSP library (no devices, no GUI) ----
+add_library(eb_core STATIC
+    src/cal/CalFile.cpp
+    src/cal/FirDesigner.cpp
+    src/audio/ProcessingGraph.cpp)
+target_include_directories(eb_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_features(eb_core PUBLIC cxx_std_20)
+# Modules whose types appear in eb_core's PUBLIC headers (FirDesigner.h / ProcessingGraph.h
+# include <juce_dsp/..> and <juce_audio_basics/..>) MUST be PUBLIC so their include dirs/defines
+# reach consumers (eb_tests); juce_core is implementation-only -> PRIVATE. Link the recommended
+# config/warning flags PUBLIC — every official JUCE example links them to the module-consuming target.
+target_link_libraries(eb_core
+    PUBLIC
+        juce::juce_audio_basics juce::juce_dsp
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+    PRIVATE
+        juce::juce_core)
+target_compile_definitions(eb_core PUBLIC
+    JUCE_STANDALONE_APPLICATION=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+
+# ---- Placeholder GUI app (proves JUCE links + builds on both OSes) ----
+juce_add_gui_app(EarsBridge PRODUCT_NAME "EARS Bridge")
+target_sources(EarsBridge PRIVATE src/Main.cpp)
+# Set these on the app directly: juce_gui_extra (curl / WebBrowserComponent) links to the app,
+# not through eb_core, so don't rely on transitive defines reaching it.
+target_compile_definitions(EarsBridge PRIVATE
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_link_libraries(EarsBridge PRIVATE
+    eb_core juce::juce_gui_extra
+    juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+enable_testing()
+add_subdirectory(tests)

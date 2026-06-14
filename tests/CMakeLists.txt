@@ -1,0 +1,15 @@
+add_executable(eb_tests
+    test_smoke.cpp)
+# Link the JUCE modules the test sources include directly, plus the recommended config flags,
+# so eb_tests compiles regardless of eb_core's link visibility.
+target_link_libraries(eb_tests PRIVATE
+    eb_core
+    juce::juce_audio_basics juce::juce_dsp
+    juce::juce_recommended_config_flags
+    Catch2::Catch2WithMain)
+target_compile_definitions(eb_tests PRIVATE
+    EB_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+    JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+
+include(Catch)
+catch_discover_tests(eb_tests)
