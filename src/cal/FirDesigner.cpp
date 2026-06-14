@@ -37,8 +37,11 @@ std::vector<float> FirDesigner::targetMagnitudeLinear (const CalFile& cal,
 }
 
 juce::AudioBuffer<float> FirDesigner::design (const CalFile& cal, const FirDesignParams& p) {
-    const int order   = p.designFftOrder;          // e.g. 16
-    const int fftSize = 1 << order;                 // 65536
+    // Ensure the design FFT is at least as large as numTaps (guard against misconfig).
+    int order = p.designFftOrder;
+    while ((1 << order) < p.numTaps) ++order;
+    jassert (p.numTaps <= (1 << order));
+    const int fftSize = 1 << order;
     const int nBins   = fftSize / 2 + 1;
     auto mag = targetMagnitudeLinear (cal, p, fftSize); // size nBins, linear gain
     juce::ignoreUnused (nBins);
