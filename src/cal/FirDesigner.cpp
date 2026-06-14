@@ -127,6 +127,8 @@ juce::AudioBuffer<float> FirDesigner::design (const CalFile& cal, const FirDesig
                 spec[(size_t)(fftSize-k)*2+1] = -m * std::sin ((float) ph);
             }
         }
+        spec[1] = 0.0f;                              // DC must be purely real
+        spec[(size_t)(fftSize / 2) * 2 + 1] = 0.0f;  // Nyquist must be purely real
         // IFFT OUT-OF-PLACE — in-place perform() corrupts results in this JUCE/MSVC build (Task 5).
         std::vector<float> imp ((size_t) fftSize * 2, 0.0f);
         fft.perform (reinterpret_cast<juce::dsp::Complex<float>*> (spec.data()),
