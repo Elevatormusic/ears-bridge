@@ -8,7 +8,7 @@
 
 ## 1. Purpose & context
 
-The [miniDSP EARS](https://www.minidsp.com/products/acoustic-measurement/ears-headphone-jig) is a USB headphone-measurement jig that presents to the OS as a **2-channel capture device** (channel 0 = left-ear mic, channel 1 = right-ear mic). Each capsule has its own per-unit calibration file (FRD format: `freq(Hz)  SPL(dB)  phase(deg)`). The owner has both compensation sets for serial **860-4350** — `L_HEQ`/`R_HEQ` and `L_HPN`/`R_HPN`.
+The [miniDSP EARS](https://www.minidsp.com/products/acoustic-measurement/ears-headphone-jig) and its successor the [EARS Pro](https://www.minidsp.com/products/acoustic-measurement/ears-pro) are USB headphone-measurement jigs that present to the OS as a **2-channel capture device** (channel 0 = left-ear mic, channel 1 = right-ear mic). Each capsule has its own per-unit calibration file (FRD format: `freq(Hz)  SPL(dB)  phase(deg)`). The owner has the original-EARS compensation sets for serial **860-4350** — `L_HEQ`/`R_HEQ` and `L_HPN`/`R_HPN`. **The app supports both the original EARS and the EARS Pro** (see §3 for the device differences).
 
 The Dirac Live Calibration Tool (DLCT) corrects headphones well, but its measurement path accepts only **one** recording device and only **one** mic-calibration curve. It has no per-channel (left-ear vs right-ear) calibration import. There is no way, inside Dirac, to apply two different cal curves to two mic channels and combine them.
 
@@ -34,11 +34,12 @@ This spec reflects an adversarial verification pass (see `docs/research/` refere
 - Modern, legible GUI with cal-curve thumbnails, level/clip metering, and clear device pickers.
 - A clean, glitch-free audio path with no *unintended* resampling, and explicit handling of the unavoidable cross-device clock boundary.
 - Cross-platform: Windows and macOS from one JUCE codebase.
+- Support **both the original EARS and the EARS Pro**, and **16- and 24-bit** capture/output, negotiating each device's native sample rate and bit depth (EARS Pro adds 88.2/96/176.4/192 kHz and 32-bit).
 
 ### Non-goals (YAGNI)
 - No built-in sweep generator, measurement capture, or live FR analyzer — Dirac does the measuring. (We render only a *static* thumbnail of each loaded cal curve.)
 - No custom virtual-audio driver.
-- No EARS *Pro* support in v1 (different hardware; see §5). The architecture must not let Pro's rate capability leak into the original-EARS path.
+- No support for measurement fixtures outside the miniDSP EARS / EARS Pro family (other 2-channel USB jigs with FRD cal files may work but are untested).
 - No correction *target* shaping — that's Dirac's job. The Bridge does mic-only correction.
 
 ---
@@ -47,7 +48,10 @@ This spec reflects an adversarial verification pass (see `docs/research/` refere
 
 These are the verified facts that shaped the design. Citations in §13.
 
-1. **EARS is fixed 24-bit / 48 kHz, UAC1, driverless.** The original EARS (serial 860-4350) cannot capture at any other rate. Higher rates are physically impossible on this device; selecting them would resample the 48 kHz capture, which only *adds* error. EARS *Pro* (XMOS/UAC2, 44.1–192 kHz) is a different product.
+1. **Two supported devices with very different capture capabilities.**
+   - **Original EARS** — UAC1, driverless, **fixed 24-bit / 48 kHz**, 2-channel, 0–36 dB DIP gain. Cannot capture at any other rate; a non-48 kHz selection only resamples it.
+   - **EARS Pro** — XMOS, **UAC2, 16/24/32-bit, 44.1–192 kHz**, 2-channel, 0–45 dB DIP gain, USB-C. Class-compliant (plug-and-play) on macOS/Linux and on Windows 10+ via WASAPI; a vendor **ASIO driver** is also provided but is **not used here** (ASIO can't bridge to a different output — item 3). Both devices share the IEC 60318-4 coupler and per-channel FRD `.txt` cal files, so the same `CalFile` / `FirDesigner` / `ProcessingGraph` core (already built rate-agnostic) handles both.
+   The app must **detect which device is connected and expose only the sample rates and bit depths that device natively supports** (full 44.1–192 kHz, 16/24-bit for EARS Pro; 48 kHz, 24-bit for the original EARS), warning only when a chosen rate would force a resample of the selected input.
 
 2. **Two independent clock domains.** Capturing from the EARS while rendering to a *different* device (a virtual cable) means two free-running clocks (EARS USB clock vs virtual-device clock) that **drift** over a multi-minute measurement, even when both are nominally 48 kHz. A lock-free FIFO plus an **asynchronous sample-rate converter (ASRC)** at the boundary is mandatory, not optional. "Bit-perfect, no resampling" is not achievable across two devices; the realistic guarantee is *in-band-transparent* SRC.
 
@@ -107,10 +111,11 @@ These are the verified facts that shaped the design. Citations in §13.
 ## 5. Component breakdown
 
 ### 5.1 Audio device layer
-- Enumerate input devices; identify the EARS by a **stable composite key** (device name + USB VID:PID / serial), not a transient OS index, so re-plugs don't mis-bind cal files.
-- Enumerate output devices; tag likely virtual sinks (VB-CABLE, VoiceMeeter, BlackHole, Loopback) for a "recommended" affordance, but allow any.
-- Open EARS at 48 kHz; open the virtual sink in **WASAPI shared** (Windows) so Dirac can later hog the capture side; never open the virtual capture endpoint.
-- Detect ASIO-only configs (`hasSeparateInputsAndOutputs()==false`) and fall back to WASAPI with a clear message.
+- Enumerate input devices; identify the EARS / EARS Pro by a **stable composite key** (device name + USB VID:PID / serial), not a transient OS index, so re-plugs don't mis-bind cal files. Tag the recognised **model** (original EARS vs EARS Pro) so the UI exposes the correct native rates/bit-depths.
+- For the selected input, **query its actually-supported sample rates and bit depths** and expose only those as native: original EARS → 48 kHz / 24-bit; EARS Pro → 44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz and 16/24/32-bit. The chain runs **float32 internally** regardless of device bit depth.
+- Enumerate output devices; tag likely virtual sinks (VB-CABLE, VoiceMeeter, BlackHole, Loopback) for a "recommended" affordance, but allow any. Let the user pick the **output bit depth (16 or 24-bit)** for the virtual sink (some virtual cables / Dirac setups expect a particular format); request it on the render side.
+- Open the virtual sink in **WASAPI shared** (Windows) so Dirac can later hog the capture side; never open the virtual capture endpoint.
+- Use **WASAPI even for EARS Pro** — its vendor ASIO driver can't pair a capture device with a *different* render device. Detect ASIO-only configs (`hasSeparateInputsAndOutputs()==false`) and fall back to WASAPI with a clear message.
 
 ### 5.2 Calibration engine (off audio thread)
 - **FRD parser:** tolerant of the miniDSP header (quoted lines, `*` comments, "Sens Factor", serial, version). Validates monotonic increasing frequency, parses `freq, SPL, phase`. Surfaces parse errors with line context. Reads the embedded **type tag** ("HEQ"/"HPN"/"RAW"/"IDF") for guidance/warnings.
@@ -131,7 +136,7 @@ These are the verified facts that shaped the design. Citations in §13.
 
 ### 5.6 Health monitoring
 - Count xruns/underruns and track accumulated capture↔render **slip** (FIFO-fill trend, dropped/silence-filled block counters) during a sweep; invalidate/warn on a measurement if a dropout or excessive drift occurs.
-- Live input/clip meters (EARS analog gain is a hardware DIP switch, 0–36 dB, outside software control — so warn on near-full-scale or very low capture).
+- Live input/clip meters (analog gain is a hardware DIP switch outside software control — 0–36 dB on the original EARS, 0–45 dB on EARS Pro — so warn on near-full-scale or very low capture).
 - One-time **physical L/R verification** step (signal into one earcup) so a silent channel swap can't apply the wrong cal to each ear.
 
 ### 5.7 Settings persistence
@@ -155,7 +160,7 @@ UI orders modes by rigor: TwoPass single-ear → Average → Sum.
 
 ## 7. DSP detail — FIR design
 
-**Default mode: magnitude-exact, minimum-phase FIR @ 48 kHz.**
+**Default mode: magnitude-exact, minimum-phase FIR at the active sample rate** (48 kHz for the original EARS; up to 192 kHz for EARS Pro).
 
 Pipeline:
 1. Parse FRD → (freq, SPL dB, phase deg).
@@ -164,8 +169,8 @@ Pipeline:
 4. IFFT → impulse; **window** with a Hann/Tukey taper (not rectangular).
 5. Enforce **minimum phase** via real-cepstrum folding (discrete Hilbert of log-magnitude).
 
-Sizing:
-- **N = 8192 taps @ 48 kHz** (resolution ≈ 5.9 Hz; LF-effective ≈ 18–20 Hz) to genuinely reach the low bass. N = 4096 (≈ 11.7 Hz; LF-effective ≈ 35 Hz) is a lighter option exposed in advanced settings.
+Sizing (the FIR is designed at the **active sample rate**, so taps scale with it to preserve low-frequency resolution):
+- Baseline **N = 8192 taps @ 48 kHz** (resolution ≈ 5.9 Hz; LF-effective ≈ 18–20 Hz). Since resolution = fs/N, **scale taps with rate** — `N ≈ 8192 × (fs / 48 kHz)` rounded to a power of two (≈ 16384 @ 96 kHz, ≈ 32768 @ 192 kHz) — so EARS Pro's high rates keep the same bass reach. N = 4096 (lighter) and N = 16384 (finer) are also selectable in advanced settings.
 - **Design-time FFT length 4–8× N** before windowing, to avoid cepstral time-aliasing.
 - No IIR-for-LF split — the EARS correction is a gentle broadband trim, not a steep sub-20 Hz filter.
 
@@ -185,7 +190,7 @@ Single resizable window, modern dark theme. Top-to-bottom:
 2. **Two cal slots:** "Left ear cal" and "Right ear cal" file pickers (drag-and-drop), each showing filename, parsed serial + type tag, and a **static FR thumbnail** of the loaded curve. HEQ-as-mic-cal shows a small warning badge.
 3. **Combine mode** selector, ordered by rigor, with the recommended TwoPass workflow surfaced and a one-line method hint.
 4. **Output row:** virtual-device picker (recommended sinks tagged) + the "set this device's capture side as Dirac's Recording device" hint + preflight warnings (Communications default / enhancements / endpoint busy).
-5. **Sample-rate** selector: full 44.1–192 kHz menu; non-48 kHz selections show a **resample warning** (EARS is native 48 kHz).
+5. **Sample-rate + bit-depth** selectors: the rate menu offers the **selected input's native rates** (48 kHz for the original EARS; 44.1–192 kHz for EARS Pro); a rate the input can't do natively shows a **resample warning**. A **bit-depth** control (16 / 24-bit) sets the virtual-sink output format.
 6. **Meters:** large L/R input meters + mono output meter with clip LEDs; live xrun/slip indicator and a "clean capture" status light.
 7. **Transport:** Start/Stop bridge + status (running, rate, latency, xruns).
 8. **Advanced disclosure:** cal phase mode, FIR length, output trim, `DAUDIO_WASAPI_NON_EXCLUSIVE` guidance, macOS aggregate-device controls.
@@ -196,11 +201,11 @@ Settings persist between launches.
 
 ## 9. Sample-rate policy
 
-Per user decision, the rate menu stays full (44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz). Behavior:
-- **48 kHz** is the EARS native rate and the default — no resample of the capture.
-- Any other selection shows a clear warning that the 48 kHz EARS capture will be **resampled**, with no fidelity benefit, and is offered mainly for non-EARS inputs / forced-rate scenarios.
-- 44.1 kHz is exposed only if the connected unit's USB descriptor actually reports it.
-- The architecture remains rate-flexible for future non-EARS inputs.
+The rate menu is **driven by the selected input device's actual capabilities**:
+- **Original EARS** → native **48 kHz** only (default). Any other rate shows a **resample warning** (the 48 kHz capture would be resampled with no fidelity benefit) and is offered only for forced-rate scenarios. 44.1 kHz is exposed only if the unit's USB descriptor reports it.
+- **EARS Pro** → **44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz** are all native (no resample); the FIR is designed at the chosen rate (§7) and the ClockBridge still resamples to the *output* device's clock.
+- **Bit depth:** the chain is float32 internally. The user selects **16- or 24-bit** for the virtual-sink output; the input runs at its native depth (EARS 24-bit; EARS Pro 16/24/32-bit).
+- A rate/bit-depth the **selected input** can't do natively is the only thing that triggers the resample/format warning — the menu reflects reality per device, not a fixed list.
 
 ---
 
