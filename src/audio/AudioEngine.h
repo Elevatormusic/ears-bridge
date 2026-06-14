@@ -6,6 +6,9 @@
 #include "audio/EngineTypes.h"
 #include "audio/ProcessingGraph.h"
 #include "audio/CombineMode.h"
+#include "audio/LrVerify.h"
+#include "audio/AsioFallback.h"
+#include "audio/CalBinder.h"
 #include "cal/CalFile.h"
 #include "cal/FirDesigner.h"
 #include <atomic>
@@ -49,6 +52,22 @@ public:
     Levels levels() const;
     Health health() const;
 
+    // --- Plan 4 additions (additive) ---
+    // Detailed sticky health flags for the GUI status light / tooltip (reads the same `hm`).
+    HealthFlag     healthFlags() const noexcept;
+    bool           cleanCapture() const noexcept;
+    DipGainProfile gainProfile() const noexcept;   // for the "lower/raise DIP gain" hint
+
+    // Drive a short tone into ONE earcup (user routes playback to that earcup) and report which
+    // mic channel responded. Runs only while Stopped; uses a dedicated short capture-only open.
+    // Returns the verdict; the GUI presents it. Non-blocking variant: begin + poll.
+    void     beginLrVerify (Ear earUnderTest);
+    LrResult lrVerifyResult() const noexcept;
+    bool     lrVerifyComplete() const noexcept;
+
+    // Last ASIO->WASAPI/CoreAudio fallback message (empty when no fallback occurred).
+    juce::String lastFallbackMessage() const { return lastFallbackMessage_; }
+
     // ---- Headless test seam ----
     // Re-prepare the graph at the given rate and process one injected 2-ch block to mono.
     // No device I/O. Spins until the async Convolution IR load + gain ramp settles.
@@ -64,6 +83,14 @@ private:
     ProcessingGraph    graph;
     ClockBridge        bridge;
     HealthMonitor      hm;
+
+    LrVerify      lrVerify_;        // Plan 4 (pure state machine)
+    CalBinder     calBinder_;       // Plan 4 (re-bind cal across re-enumeration)
+    juce::String  lastFallbackMessage_;   // surfaced by the GUI after an ASIO fallback
+    int           lastUnderruns_ = 0;     // render-thread-only: ClockBridge underrun count seen last block
+    bool          usingAggregate_ = false; // macOS: true when the CoreAudio aggregate path is active
+                                           // (Task 7 sets it; the render callback reads it). Always
+                                           // false on Windows.
 
     DeviceId inputId, outputId;
     double   activeRate = 48000.0;

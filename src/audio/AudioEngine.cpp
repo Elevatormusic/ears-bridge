@@ -57,14 +57,26 @@ struct AudioEngine::RenderCallback : juce::AudioIODeviceCallback {
                                            int numSamples,
                                            const juce::AudioIODeviceCallbackContext&) override {
         if ((int) mono.size() < numSamples) { e.hm.reportXrun(); return; }
-        e.bridge.pullRender (mono.data(), numSamples);
+        const int got = e.bridge.pullRender (mono.data(), numSamples);   // capture frames written
         float pk = 0;
-        for (int i = 0; i < numSamples; ++i) pk = juce::jmax (pk, std::abs (mono[i]));
-        e.hm.reportOutLevel (pk, pk >= 0.999f);
-        for (int ch = 0; ch < numOut; ++ch)            // duplicate mono to both channels
-            if (out[ch] != nullptr)
-                juce::FloatVectorOperations::copy (out[ch], mono.data(), numSamples);
-        e.hm.setFifoFill (e.bridge.fifoFill());
+        for (int i = 0; i < got; ++i) pk = juce::jmax (pk, std::abs (mono[i]));
+        e.hm.reportOutLevel (pk, pk >= 0.999f);                          // Plan 2 method (raises ClipOutput)
+        // pullRender ALWAYS returns numSamples (it zero-pads on starvation), so `got` alone never signals
+        // a shortfall. The LIVE starvation signal is the ClockBridge underrun delta: a NEW underrun this
+        // block means the FIFO starved and the interpolator zero-padded -> report 0 delivered so
+        // observeRenderBlock raises FifoStarved+Dropout and invalidates cleanCapture (the Plan-2 gap).
+        const int und    = e.bridge.underruns();
+        const int effGot = (und > e.lastUnderruns_) ? 0 : got;
+        e.lastUnderruns_ = und;
+        // One new additive observer: forwards ratio+fill to the Plan-2 setters AND adds dropout/drift.
+        // On the macOS aggregate path (Task 7) the ClockBridge is bypassed, so report a nominal ratio.
+        if (e.usingAggregate_) e.hm.observeRenderBlock (numSamples, numSamples, 1.0, 0.5);
+        else                   e.hm.observeRenderBlock (numSamples, effGot, e.bridge.currentRatio(), e.bridge.fifoFill());
+        for (int ch = 0; ch < numOut; ++ch)                             // duplicate mono to both channels
+            if (out[ch] != nullptr) {
+                for (int i = 0; i < got; ++i)        out[ch][i] = mono[i];
+                for (int i = got; i < numSamples; ++i) out[ch][i] = 0.0f;   // silence-fill on starvation
+            }
     }
 };
 
@@ -111,19 +123,49 @@ void AudioEngine::loadRightCal (const CalFile& cal) {
 EngineStatus AudioEngine::status() const { return (EngineStatus) engineStatus.load(); }
 Levels AudioEngine::levels() const { return hm.levels(); }
 Health AudioEngine::health() const {
-    auto h = hm.snapshot();
-    h.fifoFill = bridge.fifoFill();
-    // Report the actual trimmed capture:render ratio the ClockBridge control loop is using.
-    // devices.outputDevice() is const-qualified in DeviceManager, so this stays const-legal.
-    double ren = activeRate;
-    if (auto* od = devices.outputDevice()) ren = od->getCurrentSampleRate();
-    h.captureToRenderRatio = activeRate / juce::jmax (1.0, ren);
-    return h;
+    // The single monitor `hm` now carries fifoFill + captureToRenderRatio (from observeRenderBlock),
+    // plus the sticky flags and cleanCapture. Return it directly — no manual overwrite.
+    return hm.snapshot();
 }
+
+HealthFlag AudioEngine::healthFlags() const noexcept     { return hm.flags(); }
+bool       AudioEngine::cleanCapture() const noexcept    { return hm.cleanCapture(); }
+DipGainProfile AudioEngine::gainProfile() const noexcept { return hm.gainProfile(); }
+
+void AudioEngine::beginLrVerify (Ear earUnderTest) {
+    jassert (status() == EngineStatus::Stopped);   // verification runs only while stopped
+    lrVerify_.begin (earUnderTest);
+    // Engine opens a short capture-only stream and, per block, calls:
+    //   lrVerify_.observe (peakL, peakR);
+    // until lrVerify_.isComplete(); see the MANUAL VERIFICATION block for the wiring contract.
+}
+LrResult AudioEngine::lrVerifyResult() const noexcept   { return lrVerify_.result(); }
+bool     AudioEngine::lrVerifyComplete() const noexcept { return lrVerify_.isComplete(); }
 
 bool AudioEngine::start (juce::String& errorOut) {
     if (status() == EngineStatus::Running) return true;
-    hm.reset();
+
+    // ASIO-incapability guard: ASIO cannot pair an EARS capture with a different virtual render.
+    // Build the decision from the DeviceManager's type capabilities and fall back if needed.
+    {
+        auto cur = devices.currentTypeCaps();                       // DeviceManager::TypeCaps
+        eb::DeviceTypeCaps preferred { cur.typeName, cur.separateInputsAndOutputs };
+        juce::Array<eb::DeviceTypeCaps> available;
+        for (auto& c : devices.availableTypeCaps())
+            available.add ({ c.typeName, c.separateInputsAndOutputs });
+        auto decision = eb::AsioFallback::decide (preferred, available);
+        if (decision.mustFallback) {
+            if (decision.chosenTypeName.isEmpty()) {
+                errorOut = decision.message;
+                engineStatus.store ((int) EngineStatus::Error);
+                return false;
+            }
+            devices.setCurrentType (decision.chosenTypeName);       // honored by the next open
+            lastFallbackMessage_ = decision.message;                // surfaced by the GUI
+        } else {
+            lastFallbackMessage_.clear();
+        }
+    }
 
     const int bufSize = 512;   // typical WASAPI shared block; device may adjust
     auto eIn = devices.openInput (inputId, activeRate, bufSize);
@@ -142,6 +184,7 @@ bool AudioEngine::start (juce::String& errorOut) {
     // Capacity: ~250 ms of capture-rate mono, power-of-two-ish, never below 4096.
     const int cap = juce::jmax (4096, juce::nextPowerOfTwo ((int) (capRate * 0.25)));
     bridge.prepare (capRate, renRate, 1, cap);
+    hm.prepare (inputId.model, cap, capRate / juce::jmax (1.0, renRate));   // reset + size + NOMINAL ratio (drift detection)
     bridge.reset();
 
     // Render is the master: start it last so the FIFO has primed once capture runs.
