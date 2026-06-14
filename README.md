@@ -29,15 +29,9 @@ Dirac sees exactly what it expects — one calibrated mic — while both capsule
 
 <img src="assets/headers/01-how-it-works.png" alt="How it works" width="100%">
 
-```
- EARS / EARS Pro            EARS Bridge                         Virtual cable        Dirac Live
- ┌───────────────┐   ┌──────────────────────────────┐   ┌──────────────────┐   ┌──────────────┐
- │ Left  capsule ├──►│ Left  cal FIR  ┐               │   │  VB-CABLE (Win)  │   │  Recording   │
- │ Right capsule ├──►│ Right cal FIR  ├─► combine ──► │──►│  BlackHole (mac) │──►│  device =    │
- └───────────────┘   │                ┘   to mono     │   │                  │   │  the cable   │
-   2-ch capture      │  async sample-rate bridge      │   └──────────────────┘   └──────────────┘
-                     └──────────────────────────────┘
-```
+<p align="center">
+  <img src="assets/how-it-works.png" alt="Signal path: EARS / EARS Pro 2-channel capture -&gt; EARS Bridge (per-ear calibration FIR, combine to mono, async sample-rate bridge) -&gt; virtual cable (VB-CABLE / BlackHole) -&gt; Dirac Live recording device" width="100%">
+</p>
 
 The capture device and the virtual output device run on independent clocks, so the audio path
 includes a lock-free, drift-correcting asynchronous sample-rate converter between them. The
