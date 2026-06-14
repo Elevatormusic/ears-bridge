@@ -18,5 +18,11 @@ struct FirDesignParams {
 class FirDesigner {
 public:
     static juce::AudioBuffer<float> design (const CalFile& cal, const FirDesignParams& p);
+
+    // Linear-frequency target spectrum of size (fftSize/2 + 1), magnitude only
+    // (phase 0). Exposed for testing the interpolation/inversion/clamp.
+    static std::vector<float> targetMagnitudeLinear (const CalFile& cal,
+                                                     const FirDesignParams& p,
+                                                     int fftSize);
 };
 }
