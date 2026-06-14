@@ -1,0 +1,61 @@
+// Console diagnostic for Plan 2: lists devices with detected model + native rates/bit-depths,
+// then opens an EARS/EARS-Pro input + a virtual sink and runs a ~5 s passthrough.
+// Usage:  eb_diag                 -> list only
+//         eb_diag run "<outName>" -> list + 5 s passthrough into the named output
+#include <juce_audio_devices/juce_audio_devices.h>
+#include "audio/AudioEngine.h"
+#include "audio/ModelDetect.h"
+#include <iostream>
+
+static const char* modelName (eb::EarsModel m) {
+    switch (m) { case eb::EarsModel::Ears: return "EARS";
+                 case eb::EarsModel::EarsPro: return "EARS Pro";
+                 default: return "—"; }
+}
+
+int main (int argc, char** argv) {
+    juce::ScopedJuceInitialiser_GUI juceInit;   // needed for device subsystem on some OSes
+    eb::AudioEngine eng;
+
+    std::cout << "== INPUT DEVICES ==\n";
+    for (auto& d : eng.inputDevices()) {
+        std::cout << "  [" << modelName (d.model) << "] " << d.name << "\n";
+        std::cout << "      rates:";
+        for (double r : eng.supportedSampleRates (d)) std::cout << " " << (int) r;
+        std::cout << "   bits:";
+        for (int b : eng.supportedBitDepths (d)) std::cout << " " << b;
+        std::cout << "\n";
+    }
+    std::cout << "== OUTPUT DEVICES ==\n";
+    for (auto& d : eng.outputDevices())
+        std::cout << "  " << (d.isVirtualSink ? "[virtual] " : "          ") << d.name << "\n";
+
+    if (argc >= 3 && juce::String (argv[1]) == "run") {
+        // Pick the first recognised EARS/EARS-Pro input.
+        eb::DeviceId chosenIn;
+        for (auto& d : eng.inputDevices())
+            if (d.model != eb::EarsModel::Unknown) { chosenIn = d; break; }
+        if (chosenIn.name.isEmpty()) { std::cout << "No EARS input found.\n"; return 2; }
+
+        eb::DeviceId chosenOut;
+        for (auto& d : eng.outputDevices())
+            if (d.name == juce::String (argv[2])) { chosenOut = d; break; }
+        if (chosenOut.name.isEmpty()) { std::cout << "Output not found: " << argv[2] << "\n"; return 3; }
+
+        auto rates = eng.supportedSampleRates (chosenIn);
+        const double rate = rates.empty() ? 48000.0 : rates.front();
+        eng.setInput (chosenIn); eng.setOutput (chosenOut);
+        eng.setSampleRate (rate); eng.setOutputBitDepth (24);
+
+        juce::String err;
+        if (! eng.start (err)) { std::cout << "start failed: " << err << "\n"; return 4; }
+        std::cout << "Passthrough running at " << (int) rate << " Hz for 5 s...\n";
+        juce::Thread::sleep (5000);
+        auto h = eng.health(); auto lv = eng.levels();
+        eng.stop();
+        std::cout << "xruns=" << h.xruns << " dropped=" << h.droppedFrames
+                  << " fifoFill=" << h.fifoFill << " clean=" << (h.cleanCapture ? "yes" : "no") << "\n";
+        std::cout << "inL=" << lv.inL << " inR=" << lv.inR << " outMono=" << lv.outMono << "\n";
+    }
+    return 0;
+}
