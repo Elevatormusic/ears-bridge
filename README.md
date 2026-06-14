@@ -19,7 +19,15 @@ captures both ear channels, applies each ear's calibration as an inverse-correct
 two into a single mono signal, and presents that mono signal to Dirac through a virtual audio device.
 Dirac sees exactly what it expects — one calibrated mic — while both capsules are accounted for.
 
-## How it works
+<p align="center"><b>· INDEX ·</b></p>
+
+<p align="center">
+<a href="#how-it-works"><code>01</code> How it works</a> &nbsp;·&nbsp; <a href="#status-and-platform-support"><code>02</code> Status</a> &nbsp;·&nbsp; <a href="#requirements"><code>03</code> Requirements</a> &nbsp;·&nbsp; <a href="#install-windows"><code>04</code> Install / Windows</a> &nbsp;·&nbsp; <a href="#install-macos"><code>05</code> Install / macOS</a> &nbsp;·&nbsp; <a href="#build-from-source-developers"><code>06</code> Build from source</a> &nbsp;·&nbsp; <a href="#usage"><code>07</code> Usage</a> &nbsp;·&nbsp; <a href="#calibration-files"><code>08</code> Calibration files</a> &nbsp;·&nbsp; <a href="#notes-and-tips"><code>09</code> Notes &amp; tips</a> &nbsp;·&nbsp; <a href="#health-indicators"><code>10</code> Health indicators</a> &nbsp;·&nbsp; <a href="#building-and-testing"><code>11</code> Building &amp; testing</a> &nbsp;·&nbsp; <a href="#project-structure"><code>12</code> Project structure</a> &nbsp;·&nbsp; <a href="#bench-validation"><code>13</code> Bench validation</a> &nbsp;·&nbsp; <a href="#license"><code>14</code> License</a> &nbsp;·&nbsp; <a href="#acknowledgements"><code>15</code> Acknowledgements</a>
+</p>
+
+<a id="how-it-works"></a>
+
+<img src="assets/headers/01-how-it-works.png" alt="How it works" width="100%">
 
 ```
  EARS / EARS Pro            EARS Bridge                         Virtual cable        Dirac Live
@@ -36,7 +44,9 @@ includes a lock-free, drift-correcting asynchronous sample-rate converter betwee
 correction filters are minimum-phase FIRs derived from each ear's calibration file and rebuilt
 off-thread whenever you change a file or the sample rate.
 
-## Status and platform support
+<a id="status-and-platform-support"></a>
+
+<img src="assets/headers/02-status-and-platform-support.png" alt="Status and platform support" width="100%">
 
 - **Windows** — built and tested with the bundled test suite, and packaged as a one-click installer
   (a self-contained `.exe`, no redistributable required). This is the primary, verified platform.
@@ -46,7 +56,9 @@ off-thread whenever you change a file or the sample rate.
   real Apple hardware; see the bench-validation runbook below. The `.dmg` is not yet code-signed or
   notarized, so first launch needs a one-time Gatekeeper step (below).
 
-## Requirements
+<a id="requirements"></a>
+
+<img src="assets/headers/03-requirements.png" alt="Requirements" width="100%">
 
 ### Hardware
 - A **miniDSP EARS** (USB, fixed 48 kHz / 24-bit) **or EARS Pro** (USB-C, 44.1–192 kHz, 16/24/32-bit).
@@ -60,7 +72,9 @@ off-thread whenever you change a file or the sample rate.
 - On Windows, nothing else — the installer's app is self-contained. (Building from source or for
   macOS needs a C++20 toolchain; see [Build from source](#build-from-source-developers).)
 
-## Install (Windows)
+<a id="install-windows"></a>
+
+<img src="assets/headers/04-install-windows.png" alt="Install (Windows)" width="100%">
 
 1. **Install the app.** Download the latest `EARS-Bridge-<version>-Setup.exe` from the
    [Releases page](https://github.com/Elevatormusic/ears-bridge/releases) and run it. The wizard
@@ -73,7 +87,9 @@ off-thread whenever you change a file or the sample rate.
 
 That is all that is needed to run the app. The measurement workflow is below under [Usage](#usage).
 
-## Install (macOS)
+<a id="install-macos"></a>
+
+<img src="assets/headers/05-install-macos.png" alt="Install (macOS)" width="100%">
 
 1. **Install the app.** Download the latest `EARS-Bridge-<version>-macOS.dmg` from the
    [Releases page](https://github.com/Elevatormusic/ears-bridge/releases), open it, and drag
@@ -91,7 +107,9 @@ That is all that is needed to run the app. The measurement workflow is below und
 
 The measurement workflow is below under [Usage](#usage).
 
-## Build from source (developers)
+<a id="build-from-source-developers"></a>
+
+<img src="assets/headers/06-build-from-source-developers.png" alt="Build from source (developers)" width="100%">
 
 You only need this to modify the app or build for macOS; end users should use the installer above.
 
@@ -156,7 +174,9 @@ it. The same CI workflow builds the `.dmg` on a macOS runner and attaches it to 
 > code-sign and notarize the app; until then users clear Gatekeeper once as shown under
 > [Install (macOS)](#install-macos).
 
-## Usage
+<a id="usage"></a>
+
+<img src="assets/headers/07-usage.png" alt="Usage" width="100%">
 
 1. **Connect the EARS** and launch **EARS Bridge**.
 2. **Select devices:** choose the EARS (or EARS Pro) as the input and your virtual cable as the
@@ -178,7 +198,9 @@ it. The same CI workflow builds the `.dmg` on a macOS runner and attaches it to 
 Keep an eye on the health indicators while a measurement runs (see below); a clean capture is the
 prerequisite for a trustworthy measurement.
 
-## Calibration files
+<a id="calibration-files"></a>
+
+<img src="assets/headers/08-calibration-files.png" alt="Calibration files" width="100%">
 
 Each EARS capsule ships with its own calibration, distributed as an FRD-format text file (frequency,
 magnitude in dB, and optionally phase). miniDSP provides them per serial number. EARS Bridge applies
@@ -192,7 +214,9 @@ sees — the same convention REW uses when it subtracts a mic calibration.
   on top of one already in the signal — a double correction. EARS Bridge flags HEQ files so you do
   not select them by accident.
 
-## Notes and tips
+<a id="notes-and-tips"></a>
+
+<img src="assets/headers/09-notes-and-tips.png" alt="Notes and tips" width="100%">
 
 - **Run Dirac once per ear.** Dirac correlates one mic; measuring left and right separately gives each
   earcup its own correction.
@@ -205,7 +229,9 @@ sees — the same convention REW uses when it subtracts a mic calibration.
 - **Let the filters settle.** The correction filters load on a background thread; give them a moment
   after changing a calibration file or sample rate before starting a sweep.
 
-## Health indicators
+<a id="health-indicators"></a>
+
+<img src="assets/headers/10-health-indicators.png" alt="Health indicators" width="100%">
 
 While running, EARS Bridge monitors the capture for conditions that would invalidate a measurement:
 
@@ -218,7 +244,9 @@ While running, EARS Bridge monitors the capture for conditions that would invali
 
 If clean-capture is not green for the duration of a sweep, re-run it.
 
-## Building and testing
+<a id="building-and-testing"></a>
+
+<img src="assets/headers/11-building-and-testing.png" alt="Building and testing" width="100%">
 
 The project builds several targets:
 
@@ -235,7 +263,9 @@ tools\dev.cmd cmake --build build --target eb_tests
 tools\dev.cmd ctest --test-dir build --output-on-failure
 ```
 
-## Project structure
+<a id="project-structure"></a>
+
+<img src="assets/headers/12-project-structure.png" alt="Project structure" width="100%">
 
 ```
 src/
@@ -253,19 +283,25 @@ assets/       README banner and its generator
 .github/      CI workflow that builds and publishes the installer
 ```
 
-## Bench validation
+<a id="bench-validation"></a>
+
+<img src="assets/headers/13-bench-validation.png" alt="Bench validation" width="100%">
 
 The behaviors that can only be confirmed against real Dirac and real hardware — virtual-cable
 visibility, calibration polarity, sample-rate negotiation, inter-clock drift, and the macOS aggregate
 path — are written up as manual procedures with explicit pass criteria in
 [`docs/bench-validation-runbook.md`](docs/bench-validation-runbook.md).
 
-## License
+<a id="license"></a>
+
+<img src="assets/headers/14-license.png" alt="License" width="100%">
 
 This project does not yet declare a license. Until a `LICENSE` file is added, all rights are reserved
 by the repository owner.
 
-## Acknowledgements
+<a id="acknowledgements"></a>
+
+<img src="assets/headers/15-acknowledgements.png" alt="Acknowledgements" width="100%">
 
 Built with [JUCE](https://juce.com/) and tested with [Catch2](https://github.com/catchorg/Catch2).
 For the miniDSP EARS / EARS Pro measurement jigs and Dirac Live room correction.
