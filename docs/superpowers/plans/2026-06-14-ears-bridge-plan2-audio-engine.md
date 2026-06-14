@@ -208,16 +208,17 @@ Stand up the new static library, the shared POD types, and `DeviceId` with its s
       src/audio/AudioEngine.cpp)
   target_include_directories(eb_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_compile_features(eb_engine PUBLIC cxx_std_20)
-  # eb_engine's public headers expose juce_audio_basics (AudioBuffer) and juce_core (String);
-  # the .cpp files use juce_audio_devices. Keep audio_basics/dsp/core PUBLIC so eb_tests sees them.
+  # DeviceManager.h / AudioEngine.h are PUBLIC headers that #include <juce_audio_devices/...> and
+  # declare juce::AudioDeviceManager / std::unique_ptr<juce::AudioIODevice> members, so juce_audio_devices
+  # is part of eb_engine's PUBLIC interface and MUST be linked PUBLIC (mirrors the eb_core rule) so its
+  # include dirs + JUCE config defines (JUCE_MODULE_AVAILABLE_juce_audio_devices, JUCE_WASAPI, ...) reach consumers.
   target_link_libraries(eb_engine
       PUBLIC
           eb_core
           juce::juce_audio_basics juce::juce_dsp juce::juce_core
+          juce::juce_audio_devices
           juce::juce_recommended_config_flags
-          juce::juce_recommended_warning_flags
-      PRIVATE
-          juce::juce_audio_devices)
+          juce::juce_recommended_warning_flags)
   target_compile_definitions(eb_engine PUBLIC
       JUCE_STANDALONE_APPLICATION=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
   ```
@@ -661,34 +662,36 @@ The core real-time component: an `AbstractFifo`-backed mono ring buffer written 
       // --- PI fill-control: target half-full; trim the SRC ratio slowly. ---
       const double fillFrac = (double) fifo.getNumReady() / (double) capacity;
       smoothedFill += 0.01 * (fillFrac - smoothedFill);        // 1-pole smoother
-      const double err = smoothedFill - 0.5;                   // want 0.5
-      integ = juce::jlimit (-0.02, 0.02, integ + 1.0e-4 * err);
+      const double errFill = smoothedFill - 0.5;               // want 0.5
+      integ = juce::jlimit (-0.02, 0.02, integ + 1.0e-4 * errFill);
       // If fill is high, consume faster (ratio up); if low, slower. Bound the trim tightly.
-      ratioTrim = juce::jlimit (0.97, 1.03, 1.0 + (2.0e-2 * err + integ));
+      ratioTrim = juce::jlimit (0.97, 1.03, 1.0 + (2.0e-2 * errFill + integ));
       publishedFill.store (smoothedFill);
 
-      const double nominal = captureRate / renderRate;          // input samples per output sample
+      const double nominal = captureRate / renderRate;          // input samples per output sample (== speedRatio)
       const double ratio   = nominal * ratioTrim;
       publishedRatio.store (ratio);                              // expose to currentRatio() (lock-free)
 
-      // Input samples the interpolator will need for numFrames outputs.
+      // Input samples the interpolator MAY need for numFrames outputs (upper bound).
       int needIn = (int) std::ceil (ratio * numFrames) + 4;
       needIn = juce::jmin (needIn, (int) srcInput.size());
       const int avail = fifo.getNumReady();
       const int toRead = juce::jmin (needIn, avail);
 
+      // Peek toRead samples into the scratch buffer WITHOUT advancing the read pointer yet.
       int s1, sz1, s2, sz2;
       fifo.prepareToRead (toRead, s1, sz1, s2, sz2);
       if (sz1 > 0) juce::FloatVectorOperations::copy (srcInput.data(), ring.data() + s1, sz1);
       if (sz2 > 0) juce::FloatVectorOperations::copy (srcInput.data() + sz1, ring.data() + s2, sz2);
-      fifo.finishedRead (sz1 + sz2);
 
       if (toRead < needIn)
-          underrunCount.fetch_add (1);   // not enough input: interpolator will zero-pad the tail
+          underrunCount.fetch_add (1);   // FIFO starved: interpolator zero-pads the tail (wrapAround = 0)
 
-      // LagrangeInterpolator::process consumes ratio*numOut input samples; numInAvailable
-      // guards against reading past what we drained (wrapAround=0 -> feeds zeroes).
-      src.process (ratio, srcInput.data(), out, numFrames, toRead, 0);
+      // process() RETURNS the actual number of input samples consumed (~ratio*numFrames, NOT toRead).
+      // Advance the FIFO by exactly that, so the stateful interpolator's input stays continuous and the
+      // FIFO drains at the true rate (advancing by toRead would skip samples and slowly empty the FIFO).
+      const int usedIn = src.process (ratio, srcInput.data(), out, numFrames, toRead, 0);
+      fifo.finishedRead (juce::jmin (usedIn, toRead));
       return numFrames;
   }
 
