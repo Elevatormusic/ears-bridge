@@ -1,4 +1,13 @@
-# EARS Bridge
+<p align="center">
+  <img src="assets/banner.png" alt="EARS BRIDGE — headphone measurement bridge for Dirac Live" width="100%">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/release-v0.1.1-ff5722?style=flat-square&labelColor=18140f" alt="Release v0.1.1">
+  <img src="https://img.shields.io/badge/Windows-installer-28d2bc?style=flat-square&labelColor=18140f&logo=windows&logoColor=white" alt="Windows installer">
+  <img src="https://img.shields.io/badge/macOS-universal%20.dmg-ff2d78?style=flat-square&labelColor=18140f&logo=apple&logoColor=white" alt="macOS universal disk image">
+  <img src="https://img.shields.io/badge/built%20with-JUCE-c9e740?style=flat-square&labelColor=18140f" alt="Built with JUCE">
+</p>
 
 A cross-platform desktop app that lets you use a two-channel **miniDSP EARS** or **EARS Pro**
 headphone-measurement jig with **Dirac Live**, which only accepts a single calibrated microphone
@@ -240,6 +249,7 @@ tests/        Catch2 unit tests
 docs/         Design spec, implementation plans, and the bench-validation runbook
 tools/        Build helpers (dev.cmd, build-installer.cmd, build-installer-mac.sh)
 installer/    Inno Setup script, icon, and the icon generator
+assets/       README banner and its generator
 .github/      CI workflow that builds and publishes the installer
 ```
 
