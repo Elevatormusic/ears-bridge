@@ -761,8 +761,10 @@ public:
 namespace eb {
 
 Theme::Theme() {
-    using juce::ColourScheme;
-    ColourScheme scheme = {
+    // ColourScheme is a NESTED type of LookAndFeel_V4 — there is no juce::ColourScheme at
+    // namespace scope, so name it via the base class (the 9-colour braced init then invokes
+    // the variadic ColourScheme ctor which static_asserts exactly 9 colours).
+    LookAndFeel_V4::ColourScheme scheme = {
         bg(),          // windowBackground
         panel(),       // widgetBackground
         outline(),     // menuBackground
