@@ -67,7 +67,8 @@ target_compile_definitions(eb_engine PUBLIC
 
 # ---- GUI + state library (components, theme, persistence) ----
 add_library(eb_gui STATIC
-    src/state/Settings.cpp)
+    src/state/Settings.cpp
+    src/gui/Theme.cpp)
 target_include_directories(eb_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(eb_gui PUBLIC cxx_std_20)
 target_link_libraries(eb_gui
