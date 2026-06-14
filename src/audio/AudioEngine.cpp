@@ -69,7 +69,8 @@ struct AudioEngine::RenderCallback : juce::AudioIODeviceCallback {
         const int effGot = (und > e.lastUnderruns_) ? 0 : got;
         e.lastUnderruns_ = und;
         // One new additive observer: forwards ratio+fill to the Plan-2 setters AND adds dropout/drift.
-        // On the macOS aggregate path (Task 7) the ClockBridge is bypassed, so report a nominal ratio.
+        // On the macOS aggregate path (Task 7) the FIFO runs at a clock-locked 1:1, so report a NOMINAL
+        // ratio/fill -- the aggregate's own drift-correction wobble must not trip the drift latch.
         if (e.usingAggregate_) e.hm.observeRenderBlock (numSamples, numSamples, 1.0, 0.5);
         else                   e.hm.observeRenderBlock (numSamples, effGot, e.bridge.currentRatio(), e.bridge.fifoFill());
         for (int ch = 0; ch < numOut; ++ch)                             // duplicate mono to both channels
@@ -169,9 +170,10 @@ bool AudioEngine::start (juce::String& errorOut) {
 
 #if JUCE_MAC
     // macOS-preferred path: build a private CoreAudio aggregate (EARS clock-master + virtual
-    // output, OS drift-corrects the follower) and open it for BOTH capture and render, so the OS
-    // handles capture<->render resampling and the ClockBridge FIFO+ASRC is bypassed. On any
-    // failure or partial open, fall through to the Plan-2 two-device + ClockBridge path.
+    // output, OS drift-corrects the follower) and open it for BOTH capture and render. The two
+    // sub-devices then share one clock, so the ClockBridge ASRC runs at a trivial 1:1 and never has
+    // to correct drift (the FIFO conduit between the capture/render IOProcs is still required and is
+    // sized below). On any failure or partial open, fall through to the Plan-2 two-device path.
     usingAggregate_ = false;
     {
         juce::String aggErr;
@@ -211,10 +213,14 @@ bool AudioEngine::start (juce::String& errorOut) {
     graph.prepare (capRate, maxBlk);
     // Capacity: ~250 ms of capture-rate mono, power-of-two-ish, never below 4096.
     const int cap = juce::jmax (4096, juce::nextPowerOfTwo ((int) (capRate * 0.25)));
-    // The ClockBridge is bypassed on the aggregate path (the OS drift-corrects), so only prepare it
-    // for the Plan-2 two-device path; the render callback reports a nominal ratio when aggregate.
-    if (! usingAggregate_)
-        bridge.prepare (capRate, renRate, 1, cap);
+    // Prepare the ClockBridge on BOTH paths. The capture and render IOProcs are always separate
+    // callbacks (DeviceManager opens input-only + output-only devices), so the lock-free FIFO is the
+    // REQUIRED conduit between them in every case. On the macOS aggregate path the two sub-devices
+    // share one clock (capRate == renRate == activeRate), so the ASRC runs at a trivial 1:1 with no
+    // drift to correct -- but the FIFO must still be sized, or render pulls from an empty FIFO and the
+    // output is silent. (The render callback still reports a NOMINAL ratio on the aggregate path so the
+    // aggregate's internal drift-correction wobble can't trip the drift latch.)
+    bridge.prepare (capRate, renRate, 1, cap);
     hm.prepare (inputId.model, cap, capRate / juce::jmax (1.0, renRate));   // reset + size + NOMINAL ratio (drift detection)
     bridge.reset();
 
