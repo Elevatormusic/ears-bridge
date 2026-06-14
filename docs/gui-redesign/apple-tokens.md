@@ -60,6 +60,18 @@ The current system **blue is `#0091FF`** (dark), not the older `#0A84FF`. Apple 
 Elevation is a translucent **white fill step** over the base (e.g. a card ≈ base + white @0.05), not a
 heavier border — which is why the mockup uses fill-step cards with minimal outlines.
 
+## Controls (from the kit's Components page)
+
+Browsed the Sketch library directly (Playwright). The macOS 27 buttons are **fully rounded capsules**
+(pill-shaped, radius = half the height), 28 px tall, with three roles shown:
+
+- **Preferred / default** — solid system-blue fill, white text (the one filled button).
+- **Cancel / secondary** — filled neutral-gray capsule, no border (not an outline button).
+- **Destructive** — red-tinted capsule with red text, kept separate from the safe actions.
+
+So push-buttons should be capsules, not 6–8 px rounded rectangles. Pop-up buttons / text fields stay
+rounded rectangles (~8 px). This is the visible macOS 26/27 ("Liquid Glass") shift.
+
 ## Applied in `mockup-b.html`
 
 Dark: bg `#1E1E1E`, cards `#2A2A2A` (fill step), controls white @0.10, separators white @0.12,
