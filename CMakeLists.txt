@@ -76,5 +76,13 @@ target_link_libraries(EarsBridge PRIVATE
     eb_core eb_engine juce::juce_gui_extra juce::juce_audio_devices
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
+# ---- Console diagnostic (live device enumeration + passthrough; manual use) ----
+juce_add_console_app(eb_diag PRODUCT_NAME "eb_diag")
+target_sources(eb_diag PRIVATE src/tools/eb_diag_main.cpp)
+target_compile_definitions(eb_diag PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(eb_diag PRIVATE
+    eb_core eb_engine juce::juce_audio_devices
+    juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
 enable_testing()
 add_subdirectory(tests)
