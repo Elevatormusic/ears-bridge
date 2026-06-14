@@ -69,7 +69,9 @@ target_compile_definitions(eb_engine PUBLIC
 add_library(eb_gui STATIC
     src/state/Settings.cpp
     src/gui/Theme.cpp
-    src/gui/LevelMeter.cpp)
+    src/gui/LevelMeter.cpp
+    src/gui/CurveThumbnail.cpp
+    src/gui/CalSlotComponent.cpp)
 target_include_directories(eb_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(eb_gui PUBLIC cxx_std_20)
 target_link_libraries(eb_gui
