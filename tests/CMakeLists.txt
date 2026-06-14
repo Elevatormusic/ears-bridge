@@ -5,7 +5,8 @@ add_executable(eb_tests
     test_processinggraph.cpp
     test_deviceid.cpp
     test_modeldetect.cpp
-    test_clockbridge.cpp)
+    test_clockbridge.cpp
+    test_healthmonitor.cpp)
 # Link the JUCE modules the test sources include directly, plus the recommended config flags,
 # so eb_tests compiles regardless of eb_core's link visibility.
 target_link_libraries(eb_tests PRIVATE
