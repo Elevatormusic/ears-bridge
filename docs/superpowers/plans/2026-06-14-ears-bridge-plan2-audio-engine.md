@@ -1047,10 +1047,10 @@ Wraps JUCE's `AudioIODeviceType` enumeration. Lists input/output endpoints as `D
   namespace eb {
 
   DeviceManager::DeviceManager() {
-      // Populate adm's internal type list without opening any device. After this,
-      // adm.getAvailableDeviceTypes() returns the managed type objects.
-      juce::OwnedArray<juce::AudioIODeviceType> tmp;
-      adm.createAudioDeviceTypes (tmp);
+      // No explicit type-list population needed: AudioDeviceManager::getAvailableDeviceTypes()
+      // lazily creates and OWNS the internal type list on first call (via scanDevicesIfNeeded()
+      // -> createAudioDeviceTypes(availableDeviceTypes)). NOTE: createAudioDeviceTypes(localList)
+      // would populate a CALLER-supplied list, NOT the manager's internal one, so it must not be used here.
   }
 
   juce::String DeviceManager::preferredTypeName() {
