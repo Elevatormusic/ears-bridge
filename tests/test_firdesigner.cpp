@@ -88,3 +88,16 @@ TEST_CASE("Min-phase FIR is causal (energy concentrated near the front)") {
     INFO("causality ratio = " << (firstQuarter / total));
     CHECK(firstQuarter / total > 0.9); // min-phase: front-loaded
 }
+
+TEST_CASE("Complex-mode FIR matches inverted-cal magnitude within 1 dB") {
+    eb::CalFile c; c.points = { {20.0,0.0,0.0}, {1000.0,0.0,0.0},
+                                {4000.0,20.0,45.0}, {20000.0,0.0,0.0} };
+    eb::FirDesignParams p; p.numTaps = 8192;
+    p.mode = eb::FirMode::ComplexWithPhase; p.invert = true; p.maxBoostDb = 12.0;
+    auto ir = eb::FirDesigner::design (c, p);
+    REQUIRE(ir.getNumSamples() == 8192);
+    CHECK_THAT(irMagnitudeDb (ir, 1000.0, p.sampleRate),
+               Catch::Matchers::WithinAbs(0.0, 1.0));
+    CHECK_THAT(irMagnitudeDb (ir, 4000.0, p.sampleRate),
+               Catch::Matchers::WithinAbs(-20.0, 1.0));
+}
