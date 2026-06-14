@@ -19,7 +19,7 @@ MainComponent::MainComponent() {
     // --- Combine selector (ordered by rigor) ---
     combineLabel.setText ("COMBINE MODE", juce::dontSendNotification);
     combineLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    combineLabel.setFont (juce::Font (11.0f, juce::Font::bold));
+    combineLabel.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
     addAndMakeVisible (combineLabel);
 
     combineModel = combineModeOrder();
@@ -43,7 +43,7 @@ MainComponent::MainComponent() {
                          "route Dirac playback to one earcup per pass.",
                          juce::dontSendNotification);
     combineHint.setColour (juce::Label::textColourId, Theme::textDim());
-    combineHint.setFont (juce::Font (10.5f));
+    combineHint.setFont (juce::Font (juce::FontOptions (10.5f)));
     combineHint.setJustificationType (juce::Justification::topLeft);
     addAndMakeVisible (combineHint);
 
@@ -54,27 +54,27 @@ MainComponent::MainComponent() {
     outputHint.setText ("In Dirac Live, pick this device's CAPTURE side as the Recording device.",
                         juce::dontSendNotification);
     outputHint.setColour (juce::Label::textColourId, Theme::textDim());
-    outputHint.setFont (juce::Font (10.5f));
+    outputHint.setFont (juce::Font (juce::FontOptions (10.5f)));
     addAndMakeVisible (outputHint);
 
     preflightLabel.setColour (juce::Label::textColourId, Theme::warn());
-    preflightLabel.setFont (juce::Font (10.5f));
+    preflightLabel.setFont (juce::Font (juce::FontOptions (10.5f)));
     addAndMakeVisible (preflightLabel);
 
     // --- Rate + bit depth ---
     rateLabel.setText ("SAMPLE RATE", juce::dontSendNotification);
     rateLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    rateLabel.setFont (juce::Font (11.0f, juce::Font::bold));
+    rateLabel.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
     addAndMakeVisible (rateLabel);
     rateBox.onChange = [this] { onRateChosen(); };
     addAndMakeVisible (rateBox);
     rateWarn.setColour (juce::Label::textColourId, Theme::warn());
-    rateWarn.setFont (juce::Font (10.5f));
+    rateWarn.setFont (juce::Font (juce::FontOptions (10.5f)));
     addAndMakeVisible (rateWarn);
 
     bitLabel.setText ("OUTPUT BIT DEPTH", juce::dontSendNotification);
     bitLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    bitLabel.setFont (juce::Font (11.0f, juce::Font::bold));
+    bitLabel.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
     addAndMakeVisible (bitLabel);
     bitBox.onChange = [this] { onBitDepthChosen(); };
     addAndMakeVisible (bitBox);
@@ -84,7 +84,7 @@ MainComponent::MainComponent() {
     addAndMakeVisible (meterR);
     addAndMakeVisible (meterOut);
     cleanLight.setColour (juce::Label::textColourId, Theme::ok());
-    cleanLight.setFont (juce::Font (11.0f, juce::Font::bold));
+    cleanLight.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
     cleanLight.setText ("clean", juce::dontSendNotification);
     addAndMakeVisible (cleanLight);
 
@@ -92,7 +92,7 @@ MainComponent::MainComponent() {
     startStop.onClick = [this] { onStartStop(); };
     addAndMakeVisible (startStop);
     statusLine.setColour (juce::Label::textColourId, Theme::textDim());
-    statusLine.setFont (juce::Font (11.0f));
+    statusLine.setFont (juce::Font (juce::FontOptions (11.0f)));
     statusLine.setText ("Stopped", juce::dontSendNotification);
     addAndMakeVisible (statusLine);
 
@@ -108,7 +108,7 @@ MainComponent::MainComponent() {
 
     firLenLabel.setText ("FIR LENGTH", juce::dontSendNotification);
     firLenLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    firLenLabel.setFont (juce::Font (10.5f, juce::Font::bold));
+    firLenLabel.setFont (juce::Font (juce::FontOptions (10.5f).withStyle ("Bold")));
     addChildComponent (firLenLabel);
     // "Auto" (item id kFirLenAutoId) means taps scale with the rate via numTapsForRate();
     // the explicit overrides keep item id == tap count. 32768 stays valid for 192 kHz.
@@ -123,7 +123,7 @@ MainComponent::MainComponent() {
 
     trimLabel.setText ("OUTPUT TRIM (dB)", juce::dontSendNotification);
     trimLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    trimLabel.setFont (juce::Font (10.5f, juce::Font::bold));
+    trimLabel.setFont (juce::Font (juce::FontOptions (10.5f).withStyle ("Bold")));
     addChildComponent (trimLabel);
     trimSlider.setRange (-24.0, 0.0, 0.1);
     trimSlider.setSliderStyle (juce::Slider::LinearHorizontal);

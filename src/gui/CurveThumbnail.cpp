@@ -43,7 +43,7 @@ void CurveThumbnail::paint (juce::Graphics& g) {
 
     if (! curve || curve->points.size() < 2) {
         g.setColour (Theme::textDim());
-        g.setFont (juce::Font (11.0f));
+        g.setFont (juce::Font (juce::FontOptions (11.0f)));
         g.drawText ("no cal loaded", r, juce::Justification::centred);
         return;
     }
@@ -62,7 +62,7 @@ void CurveThumbnail::paint (juce::Graphics& g) {
 
     // dB axis labels (top/bottom of the fitted range).
     g.setColour (Theme::textDim());
-    g.setFont (juce::Font (10.0f));
+    g.setFont (juce::Font (juce::FontOptions (10.0f)));
     g.drawText (juce::String ((int) topDb) + " dB",
                 r.removeFromTop (12.0f), juce::Justification::topLeft);
 }
