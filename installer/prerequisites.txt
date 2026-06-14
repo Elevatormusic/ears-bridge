@@ -1,0 +1,20 @@
+EARS Bridge - before you start
+
+EARS Bridge lets you use a two-channel miniDSP EARS or EARS Pro headphone jig with
+Dirac Live, which only accepts a single calibrated microphone. It applies each ear's
+calibration, combines the two channels to mono, and sends that to a virtual audio
+device that Dirac records from.
+
+To actually measure headphones you will also need:
+
+  1. A virtual audio device, so the mono signal can reach Dirac:
+        - VB-CABLE  (https://vb-audio.com/Cable/)
+
+  2. Dirac Live, the room-correction software you are measuring headphones with.
+
+  3. Your EARS / EARS Pro and its per-ear calibration files.
+
+The app itself is self-contained and needs no other runtime. See the project page
+for the full step-by-step measurement workflow:
+
+  https://github.com/Elevatormusic/ears-bridge

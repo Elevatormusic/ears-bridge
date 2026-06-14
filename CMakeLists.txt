@@ -4,6 +4,14 @@ project(EarsBridge VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Statically link the MSVC runtime so the shipped EXE has NO Visual C++ redistributable
+# dependency (otherwise it needs MSVCP140.dll / VCRUNTIME140.dll on the target machine).
+# CMP0091 is NEW by default at cmake_minimum 3.22; this applies to all targets (incl. JUCE)
+# for a consistent runtime.
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 include(FetchContent)
 
 FetchContent_Declare(juce
@@ -102,8 +110,11 @@ target_link_libraries(eb_gui
 target_compile_definitions(eb_gui PUBLIC
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 
-# ---- Placeholder GUI app (proves JUCE links + builds on both OSes) ----
-juce_add_gui_app(EarsBridge PRODUCT_NAME "EARS Bridge")
+# ---- GUI app ----
+juce_add_gui_app(EarsBridge
+    PRODUCT_NAME "EARS Bridge"
+    COMPANY_NAME "EARS Bridge"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/installer/assets/icon.png")
 target_sources(EarsBridge PRIVATE src/Main.cpp)
 # Set these on the app directly: juce_gui_extra (curl / WebBrowserComponent) links to the app,
 # not through eb_core, so don't rely on transitive defines reaching it.

@@ -1,0 +1,49 @@
+name: Release
+
+# Build the self-contained Windows app and a signed-style Inno Setup installer.
+# - Push a tag like v0.2.0  -> builds the installer AND attaches it to a GitHub Release.
+# - Run manually (workflow_dispatch) -> builds the installer and uploads it as an artifact.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the Release on a tag
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (Release, static MSVC runtime)
+        run: cmake -G "Visual Studio 17 2022" -A x64 -B build
+
+      - name: Build app
+        run: cmake --build build --config Release --target EarsBridge
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $ref = "${{ github.ref }}"
+          $ver = if ($ref -like 'refs/tags/v*') { $ref.Substring('refs/tags/v'.Length) } else { '0.1.0' }
+          Write-Host "Building installer version $ver"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" "installer\ears-bridge.iss"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ears-bridge-windows-installer
+          path: dist/*.exe
+
+      - name: Publish to Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          generate_release_notes: true
