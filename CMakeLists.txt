@@ -41,6 +41,30 @@ target_link_libraries(eb_core
 target_compile_definitions(eb_core PUBLIC
     JUCE_STANDALONE_APPLICATION=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 
+# ---- Engine library (devices, clock bridge, health, facade) ----
+add_library(eb_engine STATIC
+    src/audio/DeviceId.cpp
+    src/audio/ModelDetect.cpp
+    src/audio/ClockBridge.cpp
+    src/audio/HealthMonitor.cpp
+    src/audio/DeviceManager.cpp
+    src/audio/AudioEngine.cpp)
+target_include_directories(eb_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_features(eb_engine PUBLIC cxx_std_20)
+# DeviceManager.h / AudioEngine.h are PUBLIC headers that #include <juce_audio_devices/...> and
+# declare juce::AudioDeviceManager / std::unique_ptr<juce::AudioIODevice> members, so juce_audio_devices
+# is part of eb_engine's PUBLIC interface and MUST be linked PUBLIC (mirrors the eb_core rule) so its
+# include dirs + JUCE config defines (JUCE_MODULE_AVAILABLE_juce_audio_devices, JUCE_WASAPI, ...) reach consumers.
+target_link_libraries(eb_engine
+    PUBLIC
+        eb_core
+        juce::juce_audio_basics juce::juce_dsp juce::juce_core
+        juce::juce_audio_devices
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+target_compile_definitions(eb_engine PUBLIC
+    JUCE_STANDALONE_APPLICATION=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+
 # ---- Placeholder GUI app (proves JUCE links + builds on both OSes) ----
 juce_add_gui_app(EarsBridge PRODUCT_NAME "EARS Bridge")
 target_sources(EarsBridge PRIVATE src/Main.cpp)
@@ -49,7 +73,7 @@ target_sources(EarsBridge PRIVATE src/Main.cpp)
 target_compile_definitions(EarsBridge PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 target_link_libraries(EarsBridge PRIVATE
-    eb_core juce::juce_gui_extra
+    eb_core eb_engine juce::juce_gui_extra juce::juce_audio_devices
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
 enable_testing()
