@@ -34,7 +34,7 @@ This spec reflects an adversarial verification pass (see `docs/research/` refere
 - Modern, legible GUI with cal-curve thumbnails, level/clip metering, and clear device pickers.
 - A clean, glitch-free audio path with no *unintended* resampling, and explicit handling of the unavoidable cross-device clock boundary.
 - Cross-platform: Windows and macOS from one JUCE codebase.
-- Support **both the original EARS and the EARS Pro**, and **16- and 24-bit** capture/output, negotiating each device's native sample rate and bit depth (EARS Pro adds 88.2/96/176.4/192 kHz and 32-bit).
+- Support **both the original EARS and the EARS Pro**, and **16-, 24-, and 32-bit** audio, negotiating each device's native sample rate and bit depth (EARS Pro adds 88.2/96/176.4/192 kHz and 32-bit capture; the internal path is float32).
 
 ### Non-goals (YAGNI)
 - No built-in sweep generator, measurement capture, or live FR analyzer — Dirac does the measuring. (We render only a *static* thumbnail of each loaded cal curve.)
@@ -113,7 +113,7 @@ These are the verified facts that shaped the design. Citations in §13.
 ### 5.1 Audio device layer
 - Enumerate input devices; identify the EARS / EARS Pro by a **stable composite key** (device name + USB VID:PID / serial), not a transient OS index, so re-plugs don't mis-bind cal files. Tag the recognised **model** (original EARS vs EARS Pro) so the UI exposes the correct native rates/bit-depths.
 - For the selected input, **query its actually-supported sample rates and bit depths** and expose only those as native: original EARS → 48 kHz / 24-bit; EARS Pro → 44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz and 16/24/32-bit. The chain runs **float32 internally** regardless of device bit depth.
-- Enumerate output devices; tag likely virtual sinks (VB-CABLE, VoiceMeeter, BlackHole, Loopback) for a "recommended" affordance, but allow any. Let the user pick the **output bit depth (16 or 24-bit)** for the virtual sink (some virtual cables / Dirac setups expect a particular format); request it on the render side.
+- Enumerate output devices; tag likely virtual sinks (VB-CABLE, VoiceMeeter, BlackHole, Loopback) for a "recommended" affordance, but allow any. Let the user pick the **output bit depth (16 / 24 / 32-bit)** for the virtual sink (24-bit is the safe default — ample for measurement; some virtual cables / Dirac setups reject 32-bit while others like BlackHole are 32-bit-float native); request it on the render side and fall back to the nearest supported format.
 - Open the virtual sink in **WASAPI shared** (Windows) so Dirac can later hog the capture side; never open the virtual capture endpoint.
 - Use **WASAPI even for EARS Pro** — its vendor ASIO driver can't pair a capture device with a *different* render device. Detect ASIO-only configs (`hasSeparateInputsAndOutputs()==false`) and fall back to WASAPI with a clear message.
 
@@ -204,7 +204,7 @@ Settings persist between launches.
 The rate menu is **driven by the selected input device's actual capabilities**:
 - **Original EARS** → native **48 kHz** only (default). Any other rate shows a **resample warning** (the 48 kHz capture would be resampled with no fidelity benefit) and is offered only for forced-rate scenarios. 44.1 kHz is exposed only if the unit's USB descriptor reports it.
 - **EARS Pro** → **44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz** are all native (no resample); the FIR is designed at the chosen rate (§7) and the ClockBridge still resamples to the *output* device's clock.
-- **Bit depth:** the chain is float32 internally. The user selects **16- or 24-bit** for the virtual-sink output; the input runs at its native depth (EARS 24-bit; EARS Pro 16/24/32-bit).
+- **Bit depth:** the chain is float32 internally. The user selects **16 / 24 / 32-bit** for the virtual-sink output (24-bit default; 32-bit only where the sink accepts it, e.g. BlackHole — no measurement benefit beyond 24-bit, whose ~144 dB range is already well below any mic self-noise); the input runs at its native depth (EARS 24-bit; EARS Pro 16/24/32-bit).
 - A rate/bit-depth the **selected input** can't do natively is the only thing that triggers the resample/format warning — the menu reflects reality per device, not a fixed list.
 
 ---
