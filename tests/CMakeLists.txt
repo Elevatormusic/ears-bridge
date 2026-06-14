@@ -2,12 +2,13 @@ add_executable(eb_tests
     test_smoke.cpp
     test_calfile.cpp
     test_firdesigner.cpp
-    test_processinggraph.cpp)
+    test_processinggraph.cpp
+    test_deviceid.cpp)
 # Link the JUCE modules the test sources include directly, plus the recommended config flags,
 # so eb_tests compiles regardless of eb_core's link visibility.
 target_link_libraries(eb_tests PRIVATE
-    eb_core
-    juce::juce_audio_basics juce::juce_dsp
+    eb_core eb_engine
+    juce::juce_audio_basics juce::juce_dsp juce::juce_audio_devices
     juce::juce_recommended_config_flags
     Catch2::Catch2WithMain)
 target_compile_definitions(eb_tests PRIVATE
