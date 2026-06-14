@@ -8,11 +8,12 @@ add_executable(eb_tests
     test_clockbridge.cpp
     test_healthmonitor.cpp
     test_devicemanager.cpp
-    test_audioengine.cpp)
+    test_audioengine.cpp
+    test_settings.cpp)
 # Link the JUCE modules the test sources include directly, plus the recommended config flags,
 # so eb_tests compiles regardless of eb_core's link visibility.
 target_link_libraries(eb_tests PRIVATE
-    eb_core eb_engine
+    eb_core eb_engine eb_gui
     juce::juce_audio_basics juce::juce_dsp juce::juce_audio_devices
     juce::juce_recommended_config_flags
     Catch2::Catch2WithMain)

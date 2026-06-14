@@ -65,6 +65,21 @@ target_link_libraries(eb_engine
 target_compile_definitions(eb_engine PUBLIC
     JUCE_STANDALONE_APPLICATION=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 
+# ---- GUI + state library (components, theme, persistence) ----
+add_library(eb_gui STATIC
+    src/state/Settings.cpp)
+target_include_directories(eb_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_features(eb_gui PUBLIC cxx_std_20)
+target_link_libraries(eb_gui
+    PUBLIC
+        eb_engine
+        juce::juce_gui_extra juce::juce_gui_basics
+        juce::juce_audio_basics juce::juce_dsp
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+target_compile_definitions(eb_gui PUBLIC
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+
 # ---- Placeholder GUI app (proves JUCE links + builds on both OSes) ----
 juce_add_gui_app(EarsBridge PRODUCT_NAME "EARS Bridge")
 target_sources(EarsBridge PRIVATE src/Main.cpp)
