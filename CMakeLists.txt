@@ -68,6 +68,19 @@ target_link_libraries(eb_engine
 target_compile_definitions(eb_engine PUBLIC
     JUCE_STANDALONE_APPLICATION=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 
+# ---- Plan 4 Task 7: CoreAudio aggregate device (portable link split) ----
+# Portable TU compiled on ALL platforms: provides create()/destroy() stubs on non-macOS and the
+# unconditional ~AggregateDevice() everywhere, so the symbols always resolve at link time (the
+# Windows build excludes the .mm). The macOS-only .mm carries the real CoreAudio bodies.
+target_sources(eb_engine PRIVATE src/platform/AggregateDevice.cpp)   # ALL platforms
+if(APPLE)
+    target_sources(eb_engine PRIVATE src/platform/AggregateDevice_mac.mm)
+    set_source_files_properties(src/platform/AggregateDevice_mac.mm
+        PROPERTIES COMPILE_FLAGS "-x objective-c++")
+    # CoreAudio / AudioToolbox / CoreFoundation are already linked transitively by
+    # juce_audio_devices on macOS — no explicit -framework lines needed here.
+endif()
+
 # ---- GUI + state library (components, theme, persistence) ----
 add_library(eb_gui STATIC
     src/state/Settings.cpp

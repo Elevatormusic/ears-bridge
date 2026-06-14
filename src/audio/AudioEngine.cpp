@@ -167,11 +167,39 @@ bool AudioEngine::start (juce::String& errorOut) {
         }
     }
 
-    const int bufSize = 512;   // typical WASAPI shared block; device may adjust
-    auto eIn = devices.openInput (inputId, activeRate, bufSize);
-    if (eIn.isNotEmpty()) { errorOut = eIn; engineStatus.store ((int) EngineStatus::Error); return false; }
-    auto eOut = devices.openOutput (outputId, activeRate, bufSize, outputBits);   // best-effort depth
-    if (eOut.isNotEmpty()) { errorOut = eOut; devices.closeAll(); engineStatus.store ((int) EngineStatus::Error); return false; }
+#if JUCE_MAC
+    // macOS-preferred path: build a private CoreAudio aggregate (EARS clock-master + virtual
+    // output, OS drift-corrects the follower) and open it for BOTH capture and render, so the OS
+    // handles capture<->render resampling and the ClockBridge FIFO+ASRC is bypassed. On any
+    // failure or partial open, fall through to the Plan-2 two-device + ClockBridge path.
+    usingAggregate_ = false;
+    {
+        juce::String aggErr;
+        if (aggregate_.create (inputId.uid, outputId.uid, aggErr)) {
+            const auto aggName = aggregate_.aggregateUid();
+            eb::DeviceId aggDev; aggDev.typeName = "CoreAudio"; aggDev.name = aggName; aggDev.uid = aggName;
+            auto eAggIn  = devices.openInput  (aggDev, activeRate, 512);
+            auto eAggOut = devices.openOutput (aggDev, activeRate, 512, outputBits);
+            if (eAggIn.isEmpty() && eAggOut.isEmpty()) {
+                usingAggregate_ = true;   // proceed with the aggregate; skip the ClockBridge prepare below
+            } else {
+                devices.closeAll();
+                aggregate_.destroy();     // partial open: fall through to the ClockBridge path
+            }
+        }
+        // If usingAggregate_ stayed false, fall through to the Plan-2 two-device open + ClockBridge.
+    }
+#endif
+
+    // On the aggregate path the device is already open (for both capture and render); skip the
+    // Plan-2 two-device open. Otherwise open the separate capture + render devices as before.
+    if (! usingAggregate_) {
+        const int bufSize = 512;   // typical WASAPI shared block; device may adjust
+        auto eIn = devices.openInput (inputId, activeRate, bufSize);
+        if (eIn.isNotEmpty()) { errorOut = eIn; engineStatus.store ((int) EngineStatus::Error); return false; }
+        auto eOut = devices.openOutput (outputId, activeRate, bufSize, outputBits);   // best-effort depth
+        if (eOut.isNotEmpty()) { errorOut = eOut; devices.closeAll(); engineStatus.store ((int) EngineStatus::Error); return false; }
+    }
 
     auto* inD  = devices.inputDevice();
     auto* outD = devices.outputDevice();
@@ -183,7 +211,10 @@ bool AudioEngine::start (juce::String& errorOut) {
     graph.prepare (capRate, maxBlk);
     // Capacity: ~250 ms of capture-rate mono, power-of-two-ish, never below 4096.
     const int cap = juce::jmax (4096, juce::nextPowerOfTwo ((int) (capRate * 0.25)));
-    bridge.prepare (capRate, renRate, 1, cap);
+    // The ClockBridge is bypassed on the aggregate path (the OS drift-corrects), so only prepare it
+    // for the Plan-2 two-device path; the render callback reports a nominal ratio when aggregate.
+    if (! usingAggregate_)
+        bridge.prepare (capRate, renRate, 1, cap);
     hm.prepare (inputId.model, cap, capRate / juce::jmax (1.0, renRate));   // reset + size + NOMINAL ratio (drift detection)
     bridge.reset();
 
@@ -195,8 +226,15 @@ bool AudioEngine::start (juce::String& errorOut) {
 }
 
 void AudioEngine::stop() {
-    if (status() != EngineStatus::Running) { devices.closeAll(); return; }
+    if (status() != EngineStatus::Running) {
+        devices.closeAll();
+        aggregate_.destroy();      // idempotent: tear down any aggregate even from a non-Running state
+        usingAggregate_ = false;
+        return;
+    }
     devices.closeAll();
+    aggregate_.destroy();          // idempotent (no-op on Windows / when not using the aggregate)
+    usingAggregate_ = false;
     bridge.reset();
     engineStatus.store ((int) EngineStatus::Stopped);
 }
