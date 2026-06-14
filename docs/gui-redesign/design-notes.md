@@ -85,6 +85,15 @@ empty ones); plot axes labelled (dB and Hz); cards separated by an elevation fil
 outline so the blue curve stays the most colourful thing on screen; the Dirac helper expanded to
 "In Dirac Live, choose this device's capture side as the recording input."
 
+## Authentic macOS tokens
+
+`mockup-b.html` is now coloured and sized from the real **macOS 26 UI kit** tokens (see
+[`apple-tokens.md`](apple-tokens.md)): base window `#1E1E1E`, the current system blue `#0091FF`
+(not the older `#0A84FF`), green `#30D158`, orange `#FF9230` for caution, red `#FF4245` for clip,
+the exact label opacities (white @1.0 / 0.55 / 0.25), white-fill control/elevation steps, and the
+SF Pro type ramp (15 px card titles, 13 px body, 11 px labels). These are the values to encode in the
+JUCE `Theme`.
+
 ## Status
 
 Mockup only. If the direction is approved, the next step is to implement it in the JUCE GUI
