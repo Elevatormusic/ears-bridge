@@ -94,7 +94,7 @@ target_sources(EarsBridge PRIVATE src/Main.cpp)
 target_compile_definitions(EarsBridge PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 target_link_libraries(EarsBridge PRIVATE
-    eb_core eb_engine juce::juce_gui_extra juce::juce_audio_devices
+    eb_gui eb_core juce::juce_gui_extra
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
 # ---- Console diagnostic (live device enumeration + passthrough; manual use) ----
