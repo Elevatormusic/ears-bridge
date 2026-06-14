@@ -14,9 +14,6 @@ static eb::CalFile twoPointCal() {
     return c;
 }
 
-static double binToHz (int bin, int fftSize, double sr) {
-    return (double) bin * sr / (double) fftSize;
-}
 static int hzToBin (double hz, int fftSize, double sr) {
     return (int) std::lround (hz * (double) fftSize / sr);
 }
