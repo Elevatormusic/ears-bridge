@@ -1324,6 +1324,7 @@ Add these **additive** members to the private section — but **NOT** another `H
     LrVerify      lrVerify_;        // Plan 4 (pure state machine)
     CalBinder     calBinder_;       // Plan 4 (re-bind cal across re-enumeration)
     juce::String  lastFallbackMessage_;   // surfaced by the GUI after an ASIO fallback
+    int           lastUnderruns_ = 0;     // render-thread-only: ClockBridge underrun count seen last block
     bool          usingAggregate_ = false; // macOS: true when the CoreAudio aggregate path is active
                                            // (Task 7 sets it; the render callback reads it). Always
                                            // false on Windows.
@@ -1359,10 +1360,17 @@ void audioDeviceIOCallbackWithContext (const float* const* /*in*/, int /*numIn*/
     float pk = 0;
     for (int i = 0; i < got; ++i) pk = juce::jmax (pk, std::abs (mono[i]));
     e.hm.reportOutLevel (pk, pk >= 0.999f);                          // Plan 2 method (raises ClipOutput)
+    // pullRender ALWAYS returns numSamples (it zero-pads on starvation), so `got` alone never signals
+    // a shortfall. The LIVE starvation signal is the ClockBridge underrun delta: a NEW underrun this
+    // block means the FIFO starved and the interpolator zero-padded -> report 0 delivered so
+    // observeRenderBlock raises FifoStarved+Dropout and invalidates cleanCapture (the Plan-2 gap).
+    const int und    = e.bridge.underruns();
+    const int effGot = (und > e.lastUnderruns_) ? 0 : got;
+    e.lastUnderruns_ = und;
     // One new additive observer: forwards ratio+fill to the Plan-2 setters AND adds dropout/drift.
     // On the macOS aggregate path (Task 7) the ClockBridge is bypassed, so report a nominal ratio.
-    if (e.usingAggregate_) e.hm.observeRenderBlock (numSamples, got, 1.0, 0.5);
-    else                   e.hm.observeRenderBlock (numSamples, got, e.bridge.currentRatio(), e.bridge.fifoFill());
+    if (e.usingAggregate_) e.hm.observeRenderBlock (numSamples, numSamples, 1.0, 0.5);
+    else                   e.hm.observeRenderBlock (numSamples, effGot, e.bridge.currentRatio(), e.bridge.fifoFill());
     for (int ch = 0; ch < numOut; ++ch)                             // duplicate mono to both channels
         if (out[ch] != nullptr) {
             for (int i = 0; i < got; ++i)        out[ch][i] = mono[i];
@@ -1419,7 +1427,7 @@ later in the body (after the devices are opened), move the prepare to right afte
 i.e. immediately after the existing `bridge.prepare (capRate, renRate, 1, cap);` line:
 ```cpp
 // (existing) bridge.prepare (capRate, renRate, 1, cap);
-hm.prepare (inputId.model, cap);   // reset + size the monitor to the detected model + FIFO capacity
+hm.prepare (inputId.model, cap, capRate / juce::jmax (1.0, renRate));   // reset + size + NOMINAL ratio (drift detection)
 ```
 (Delete the now-redundant standalone `hm.reset();` at the top of `start()` — `prepare()` resets.)
 
