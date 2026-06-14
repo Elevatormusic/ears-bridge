@@ -401,8 +401,9 @@ public:
     static constexpr int    kDriftSustainBlocks  = 8;         // consecutive out-of-tol blocks to latch
     static constexpr int    kLowLevelGraceBlocks = 64;        // ignore initial silence before the sweep starts
 
-    // Configure per-run: stores the model (for gainProfile) + capacity, then reset()s all state.
-    void prepare (EarsModel model, int fifoCapacityFrames) noexcept;
+    // Configure per-run: stores the model (for gainProfile) + capacity + the NOMINAL
+    // capture:render ratio (drift is measured against this, not 1.0), then reset()s all state.
+    void prepare (EarsModel model, int fifoCapacityFrames, double nominalRatio = 1.0) noexcept;
 
     // One additive per-render-block observer. framesWanted vs framesGot (got<wanted => silence
     // fill => Dropout + FifoStarved); ratio + fill are forwarded to the existing setters so there
@@ -419,6 +420,7 @@ private:
 
     EarsModel model_   = EarsModel::Unknown;
     int       capacity_ = 0;
+    double    nominal_  = 1.0;   // nominal capture:render ratio; drift measured against THIS, not 1.0
 
     // Level/clip telemetry (peak*1000 fixed-point to keep the Plan-2 atomics-only contract).
     std::atomic<int>  inLm { 0 }, inRm { 0 }, outM { 0 };   // peak * 1000
@@ -516,6 +518,21 @@ TEST_CASE("HealthMonitor: an in-tolerance block resets the drift run so noise do
     CHECK_FALSE(eb::any (h.flags() & eb::HealthFlag::ExcessDrift));
 }
 
+TEST_CASE("HealthMonitor measures drift against the NOMINAL ratio, not 1.0 (mismatched-rate run)") {
+    // 96k capture -> 48k render: nominal capture:render ratio is 2.0. A ratio AT nominal must NOT
+    // latch ExcessDrift (the pre-fix |ratio-1.0| check would have falsely tripped on every block).
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::EarsPro, 16384, 2.0);
+    for (int i = 0; i < eb::HealthMonitor::kDriftSustainBlocks + 4; ++i)
+        h.observeRenderBlock (256, 256, 2.0, 0.5);          // on-nominal: no drift
+    CHECK_FALSE(eb::any (h.flags() & eb::HealthFlag::ExcessDrift));
+
+    // A ratio deviating from nominal by > tol, sustained, DOES latch.
+    const double off = 2.0 * (1.0 + 2.0 * eb::HealthMonitor::kDriftRatioTol);
+    for (int i = 0; i < eb::HealthMonitor::kDriftSustainBlocks; ++i)
+        h.observeRenderBlock (256, 256, off, 0.5);
+    CHECK(eb::any (h.flags() & eb::HealthFlag::ExcessDrift));
+}
+
 TEST_CASE("HealthMonitor xrun counter, flag, and reset (Plan-2 reportXrun preserved)") {
     eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
     h.reportXrun(); h.reportXrun();
@@ -581,9 +598,10 @@ void HealthMonitor::raise (HealthFlag f) noexcept {
 }
 
 // ---- Plan 4 addition: per-run configure -----------------------------------------------
-void HealthMonitor::prepare (EarsModel m, int fifoCapacityFrames) noexcept {
+void HealthMonitor::prepare (EarsModel m, int fifoCapacityFrames, double nominalRatio) noexcept {
     model_ = m;
     capacity_ = fifoCapacityFrames;
+    nominal_ = (nominalRatio > 0.0 ? nominalRatio : 1.0);
     reset();
 }
 
@@ -672,8 +690,11 @@ void HealthMonitor::observeRenderBlock (int framesWanted, int framesGot,
         raise (HealthFlag::Dropout);
     }
 
-    // Sustained drift state machine: count consecutive out-of-tolerance ratios; latch at threshold.
-    if (std::abs (captureToRenderRatio - 1.0) > kDriftRatioTol) {
+    // Sustained drift state machine: count consecutive ratios deviating from the NOMINAL
+    // capture:render ratio (not from 1.0 — a 96k->48k run has nominal ~2.0); latch at threshold.
+    const double drift = (nominal_ > 0.0) ? std::abs (captureToRenderRatio / nominal_ - 1.0)
+                                          : std::abs (captureToRenderRatio - 1.0);
+    if (drift > kDriftRatioTol) {
         const int run = driftRun.fetch_add (1) + 1;
         if (run >= kDriftSustainBlocks) raise (HealthFlag::ExcessDrift);
     } else {
