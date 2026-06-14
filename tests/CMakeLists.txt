@@ -11,7 +11,8 @@ add_executable(eb_tests
     test_audioengine.cpp
     test_settings.cpp
     test_plotmath.cpp
-    test_ratemenu.cpp)
+    test_ratemenu.cpp
+    test_calbinder.cpp)
 # Link the JUCE modules the test sources include directly, plus the recommended config flags,
 # so eb_tests compiles regardless of eb_core's link visibility.
 target_link_libraries(eb_tests PRIVATE
