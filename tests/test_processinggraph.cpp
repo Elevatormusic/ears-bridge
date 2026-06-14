@@ -1,6 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "audio/ProcessingGraph.h"
+#include "cal/CalFile.h"
+#include "cal/FirDesigner.h"
+#include <juce_dsp/juce_dsp.h>
 #include <cmath>
 #include <vector>
 
@@ -52,4 +55,25 @@ TEST_CASE("ProcessingGraph combine modes with identity FIRs") {
         g.process (inL.data(), inR.data(), out.data(), N);
         CHECK_THAT(out[N-1], WithinAbs(0.3f, 1e-4));
     }
+}
+
+TEST_CASE("Real R_HPN cal cuts the ~4 kHz EARS resonance after convolution") {
+    auto f = juce::File (EB_TEST_DATA_DIR).getChildFile ("R_HPN_8604350.txt");
+    REQUIRE(f.existsAsFile());
+    auto cal = eb::CalFile::parse (f.loadFileAsString());
+
+    eb::FirDesignParams p; p.sampleRate = 48000.0; p.numTaps = 8192;
+    p.mode = eb::FirMode::MinPhaseMagnitude; p.invert = true; p.maxBoostDb = 12.0;
+    auto ir = eb::FirDesigner::design (cal, p);
+
+    const int order = 16, fftSize = 1 << order;
+    juce::dsp::FFT fft (order);
+    std::vector<float> buf ((size_t) fftSize * 2, 0.0f);
+    for (int i = 0; i < juce::jmin (ir.getNumSamples(), fftSize); ++i)
+        buf[(size_t) i] = ir.getSample (0, i);
+    fft.performRealOnlyForwardTransform (buf.data());
+    int bin = (int) std::lround (4000.0 * fftSize / p.sampleRate);
+    float re = buf[(size_t) bin*2], im = buf[(size_t) bin*2+1];
+    double db = 20.0 * std::log10 (std::max (1e-9f, std::sqrt (re*re + im*im)));
+    CHECK(db < -10.0);   // inverse of a large positive bump = a strong cut
 }
