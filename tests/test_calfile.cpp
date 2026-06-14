@@ -25,3 +25,35 @@ TEST_CASE("CalFile parses numeric data rows") {
     CHECK_THAT(cal.points.back().freqHz,  WithinAbs(20000.0, 1e-9));
     CHECK_THAT(cal.points[2].splDb,       WithinAbs(-2.1, 1e-9));
 }
+
+TEST_CASE("CalFile extracts serial and HPN type from header") {
+    auto cal = eb::CalFile::parse (sampleFrd());
+    CHECK(cal.serial == juce::String("860-4350"));
+    CHECK(cal.type == eb::CalType::Hpn);
+}
+
+TEST_CASE("CalFile detects HEQ type") {
+    juce::String t =
+        "\"Sens Factor =0.9dB, EARS Serial 860-4350, compensation HEQ V2\"\n"
+        "* Freq(Hz) SPL(dB) Phase(degrees)\n"
+        "   100.0   0.4   4.4\n   200.0   0.5   8.1\n";
+    auto cal = eb::CalFile::parse (t);
+    CHECK(cal.type == eb::CalType::Heq);
+}
+
+TEST_CASE("CalFile rejects non-monotonic frequency") {
+    juce::String t =
+        "* Freq SPL Phase\n   100.0 0.0 0.0\n   50.0 0.0 0.0\n";
+    REQUIRE_THROWS_AS (eb::CalFile::parse (t), eb::CalParseError);
+}
+
+TEST_CASE("CalFile reads the real R_HPN fixture") {
+    auto f = juce::File (EB_TEST_DATA_DIR).getChildFile ("R_HPN_8604350.txt");
+    REQUIRE(f.existsAsFile());
+    auto cal = eb::CalFile::parse (f.loadFileAsString());
+    CHECK(cal.type == eb::CalType::Hpn);
+    CHECK(cal.serial == juce::String("860-4350"));
+    REQUIRE(cal.points.size() >= 130);
+    CHECK_THAT(cal.points.front().freqHz, Catch::Matchers::WithinAbs(10.0, 1e-9));
+    CHECK_THAT(cal.points.back().freqHz, Catch::Matchers::WithinAbs(20000.0, 1e-9));
+}
