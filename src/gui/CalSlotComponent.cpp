@@ -17,16 +17,16 @@ CalSlotComponent::CalSlotComponent (juce::String title) : slotTitle (std::move (
     addAndMakeVisible (thumbnail);
 
     fileLabel.setColour (juce::Label::textColourId, Theme::text());
-    fileLabel.setFont (juce::Font (13.0f, juce::Font::bold));
+    fileLabel.setFont (juce::Font (juce::FontOptions (13.0f).withStyle ("Bold")));
     fileLabel.setText ("Drop a cal file (.txt / .frd)", juce::dontSendNotification);
     addAndMakeVisible (fileLabel);
 
     detailLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    detailLabel.setFont (juce::Font (11.0f));
+    detailLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
     addAndMakeVisible (detailLabel);
 
     errorLabel.setColour (juce::Label::textColourId, Theme::danger());
-    errorLabel.setFont (juce::Font (11.0f));
+    errorLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
     addAndMakeVisible (errorLabel);
 }
 
@@ -106,7 +106,7 @@ void CalSlotComponent::paint (juce::Graphics& g) {
 
     // Title.
     g.setColour (Theme::textDim());
-    g.setFont (juce::Font (11.0f, juce::Font::bold));
+    g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
     g.drawText (slotTitle, getLocalBounds().reduced (10, 6).removeFromTop (16),
                 juce::Justification::topLeft);
 
@@ -117,7 +117,7 @@ void CalSlotComponent::paint (juce::Graphics& g) {
         g.setColour (Theme::warn());
         g.fillRoundedRectangle (badge, 4.0f);
         g.setColour (juce::Colours::black);
-        g.setFont (juce::Font (10.0f, juce::Font::bold));
+        g.setFont (juce::Font (juce::FontOptions (10.0f).withStyle ("Bold")));
         g.drawText ("HEQ - double-target?", badge, juce::Justification::centred);
     }
 }

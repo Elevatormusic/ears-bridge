@@ -14,7 +14,7 @@ static juce::String modelTag (EarsModel m) {
 DevicePicker::DevicePicker (juce::String caption) {
     label.setText (caption, juce::dontSendNotification);
     label.setColour (juce::Label::textColourId, Theme::textDim());
-    label.setFont (juce::Font (11.0f, juce::Font::bold));
+    label.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
     addAndMakeVisible (label);
 
     combo.setTextWhenNoChoicesAvailable ("no devices found");

@@ -33,7 +33,7 @@ void LevelMeter::paint (juce::Graphics& g) {
     g.fillRoundedRectangle (ledArea.removeFromRight (10.0f), 2.0f);
     if (label.isNotEmpty()) {
         g.setColour (Theme::textDim());
-        g.setFont (juce::Font (11.0f));
+        g.setFont (juce::Font (juce::FontOptions (11.0f)));
         g.drawText (label, ledArea, juce::Justification::centredLeft);
     }
 
