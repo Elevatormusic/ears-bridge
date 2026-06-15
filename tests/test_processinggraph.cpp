@@ -117,6 +117,35 @@ TEST_CASE("ProcessingGraph output gain scales the mono output (the Output-trim c
     CHECK_THAT (out[N-1], WithinAbs (0.0f, 1e-4));
 }
 
+TEST_CASE("ProcessingGraph AutoPerEar follows whichever earcup is sounding (Dirac per-ear)") {
+    const int N = 512;
+    eb::ProcessingGraph g; g.prepare (48000.0, N);
+    g.setFir (0, unitImpulse (8)); g.setFir (1, unitImpulse (8));
+    std::vector<float> loud (N, 0.3f), silent (N, 0.0f), out (N, 0.0f);
+
+    auto wu = warmUp (g, loud, silent, out, N, loud[0], silent[0]);   // settle the convolutions
+    REQUIRE (wu.settled);
+
+    g.setCombineMode (eb::CombineMode::AutoPerEar);
+
+    // LEFT earcup sweeping (L loud, R silent): output is the LEFT mic, NOT the silent right.
+    for (int i = 0; i < 15; ++i) g.process (loud.data(), silent.data(), out.data(), N);
+    INFO ("left active out=" << out[N-1]);
+    CHECK_THAT (out[N-1], WithinAbs (0.3f, 1e-2));
+
+    // Inter-sweep silence: the held choice should not flip.
+    for (int i = 0; i < 15; ++i) g.process (silent.data(), silent.data(), out.data(), N);
+
+    // RIGHT earcup sweeping: it switches to the RIGHT mic.
+    for (int i = 0; i < 15; ++i) g.process (silent.data(), loud.data(), out.data(), N);
+    INFO ("right active out=" << out[N-1]);
+    CHECK_THAT (out[N-1], WithinAbs (0.3f, 1e-2));
+
+    // And follows back to LEFT for the validation repeat.
+    for (int i = 0; i < 15; ++i) g.process (loud.data(), silent.data(), out.data(), N);
+    CHECK_THAT (out[N-1], WithinAbs (0.3f, 1e-2));
+}
+
 TEST_CASE("Real R_HPN cal cuts the ~4 kHz EARS resonance after convolution") {
     auto f = juce::File (EB_TEST_DATA_DIR).getChildFile ("R_HPN_0000000.txt");
     REQUIRE(f.existsAsFile());

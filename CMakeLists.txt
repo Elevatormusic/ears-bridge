@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(EarsBridge VERSION 0.2.7 LANGUAGES C CXX)
+project(EarsBridge VERSION 0.2.8 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -97,7 +97,8 @@ add_library(eb_gui STATIC
     src/gui/CurveThumbnail.cpp
     src/gui/CalSlotComponent.cpp
     src/gui/DevicePicker.cpp
-    src/gui/MainComponent.cpp)
+    src/gui/MainComponent.cpp
+    src/platform/DiracCompat.cpp)   # Windows: Dirac shared-mode env-var helper (no-op elsewhere)
 target_include_directories(eb_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(eb_gui PUBLIC cxx_std_20)
 target_link_libraries(eb_gui

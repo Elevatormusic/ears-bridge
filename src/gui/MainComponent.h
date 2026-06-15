@@ -29,6 +29,7 @@ private:
     void refreshDeviceLists();
     void onInputChosen  (const DeviceId&);
     void onOutputChosen (const DeviceId&);
+    void updateDiracCableHint();     // standard-VB-CABLE-vs-Dirac warning + one-click shared-mode fix
     void rebuildRateMenu();
     void rebuildBitDepthMenu();
     void onRateChosen();
@@ -69,6 +70,10 @@ private:
     DevicePicker outputPicker { "OUTPUT (VIRTUAL CABLE)" };
     juce::Label  outputHint;     // "set this device's capture side as Dirac's Recording device"
     juce::Label  preflightLabel; // warnings (yellow)
+    // Shown only when the chosen output is a STANDARD VB-CABLE: Dirac records it in exclusive mode,
+    // which that cable can't do (error 600007). Warns to use Hi-Fi Cable + a one-click shared-mode fix.
+    juce::Label      diracCableHint;
+    juce::TextButton diracFixButton { "Set Dirac to shared mode" };
     // Rate + bit depth.
     juce::Label    rateLabel;    juce::ComboBox rateBox;    juce::Label rateWarn;
     juce::Label    bitLabel;     juce::ComboBox bitBox;

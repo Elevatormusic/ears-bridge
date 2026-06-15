@@ -41,18 +41,21 @@ TEST_CASE("buildRateMenu without a non-native selection emits exactly the native
     CHECK (items[0].selected == true);
 }
 
-TEST_CASE("combineModeOrder lists modes by rigor with TwoPass recommended") {
+TEST_CASE("combineModeOrder lists modes in enum order with the right recommended badges") {
     auto order = eb::combineModeOrder();
-    REQUIRE (order.size() == 4);
+    REQUIRE (order.size() == 5);
+    // Order MUST match the CombineMode enum (the GUI indexes combo id == enum value).
     CHECK (order[0].mode == eb::CombineMode::TwoPassLeft);
     CHECK (order[1].mode == eb::CombineMode::TwoPassRight);
     CHECK (order[2].mode == eb::CombineMode::Average);
     CHECK (order[3].mode == eb::CombineMode::Sum);
-    // The two TwoPass single-ear modes carry the Recommended badge; Average/Sum do not.
+    CHECK (order[4].mode == eb::CombineMode::AutoPerEar);
+    // TwoPass single-ear modes and AutoPerEar carry the Recommended badge; Average/Sum do not.
     CHECK (order[0].recommended == true);
     CHECK (order[1].recommended == true);
     CHECK (order[2].recommended == false);
     CHECK (order[3].recommended == false);
+    CHECK (order[4].recommended == true);
     // Sum carries the +6 dB clip-risk warning.
     CHECK (order[3].clipRiskWarning == true);
 }

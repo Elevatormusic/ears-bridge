@@ -1,4 +1,5 @@
 #include "gui/MainComponent.h"
+#include "platform/DiracCompat.h"
 #include <algorithm>
 #include <cmath>
 
@@ -61,10 +62,11 @@ MainComponent::MainComponent() {
         auto& m = combineModel[i];
         juce::String label;
         switch (m.mode) {
-            case CombineMode::TwoPassLeft:  label = "Two-pass: Left only";   break;
-            case CombineMode::TwoPassRight: label = "Two-pass: Right only";  break;
-            case CombineMode::Average:      label = "Average (L+R)/2";       break;
-            case CombineMode::Sum:          label = "Sum L+R";               break;
+            case CombineMode::TwoPassLeft:  label = "Two-pass: Left only";    break;
+            case CombineMode::TwoPassRight: label = "Two-pass: Right only";   break;
+            case CombineMode::Average:      label = "Average (L+R)/2";        break;
+            case CombineMode::Sum:          label = "Sum L+R";                break;
+            case CombineMode::AutoPerEar:   label = "Auto per-ear (Dirac)";   break;
         }
         if (m.recommended)     label += "   (recommended)";
         if (m.clipRiskWarning) label += "   (+6 dB)";
@@ -90,6 +92,25 @@ MainComponent::MainComponent() {
     preflightLabel.setColour (juce::Label::textColourId, Theme::warn());
     preflightLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     addAndMakeVisible (preflightLabel);
+
+    // Standard-VB-CABLE-vs-Dirac compatibility hint + one-click fix (hidden unless that cable is chosen).
+    diracCableHint.setFont (juce::Font (juce::FontOptions (12.0f)));
+    diracCableHint.setJustificationType (juce::Justification::topLeft);
+    diracCableHint.setColour (juce::Label::textColourId, Theme::warn());
+    addChildComponent (diracCableHint);
+    diracFixButton.onClick = [this] {
+        juce::String msg;
+        if (eb::enableDiracSharedMode (msg)) {
+            diracCableHint.setColour (juce::Label::textColourId, Theme::ok());
+            diracCableHint.setText ("Dirac set to shared mode. " + msg, juce::dontSendNotification);
+            diracFixButton.setVisible (false);
+        } else {
+            diracCableHint.setColour (juce::Label::textColourId, Theme::danger());
+            diracCableHint.setText (msg, juce::dontSendNotification);
+        }
+        resized();
+    };
+    addChildComponent (diracFixButton);
 
     // --- Rate + depth ---
     styleEyebrow (rateLabel, "RATE");
@@ -210,6 +231,7 @@ MainComponent::MainComponent() {
     if (auto out = outputPicker.selectedDevice()) engine.setOutput (*out);
     rebuildRateMenu();
     rebuildBitDepthMenu();
+    updateDiracCableHint();   // show the standard-cable/Dirac warning on launch if applicable
 
     if (settings.leftCalPath().isNotEmpty())
         leftCal.loadFromFile (juce::File (settings.leftCalPath()));
@@ -261,7 +283,35 @@ void MainComponent::onOutputChosen (const DeviceId& d) {
                                             : "Selected output is not a known virtual cable.",
                             juce::dontSendNotification);
     rebuildBitDepthMenu();
+    updateDiracCableHint();
     updateStartGate();   // output now selected -> may enable Start
+}
+
+void MainComponent::updateDiracCableHint() {
+    auto out = outputPicker.selectedDevice();
+    // The standard VB-Audio "Virtual Cable" capture side can't be opened in WASAPI exclusive mode,
+    // which is how Dirac records by default -> error 600007. (Hi-Fi Cable / other cables are fine.)
+    const bool isStdVbCable = out && out->name.containsIgnoreCase ("VB-Audio Virtual Cable");
+    if (! isStdVbCable) {
+        diracCableHint.setVisible (false);
+        diracFixButton.setVisible (false);
+        resized();
+        return;
+    }
+    if (eb::diracSharedModeEnabled()) {
+        diracCableHint.setColour (juce::Label::textColourId, Theme::ok());
+        diracCableHint.setText ("Dirac is set to shared mode, so this cable works. If Dirac is open, "
+                                "fully close and reopen it once.", juce::dontSendNotification);
+        diracFixButton.setVisible (false);
+    } else {
+        diracCableHint.setColour (juce::Label::textColourId, Theme::warn());
+        diracCableHint.setText ("Dirac records this standard cable in exclusive mode, which it can't do "
+                                "(error 600007). Use the VB-Audio Hi-Fi Cable, or:",
+                                juce::dontSendNotification);
+        diracFixButton.setVisible (true);
+    }
+    diracCableHint.setVisible (true);
+    resized();
 }
 
 void MainComponent::rebuildRateMenu() {
@@ -335,11 +385,20 @@ void MainComponent::onCombineChosen() {
     engine.setCombineMode (mode);
     juce::String h;
     switch (mode) {
-        case CombineMode::Average: h = "Recommended. Averages both ears to one mono signal."; break;
-        case CombineMode::Sum:     h = "Sums both ears (+6 dB). Watch for clipping.";          break;
+        case CombineMode::AutoPerEar:
+            h = "Recommended for Dirac. Records only the earcup Dirac is sweeping - clean per-ear "
+                "capture in one pass, no open-back crosstalk.";
+            break;
+        case CombineMode::Average:
+            h = "Mono average. SEALED closed-backs only - on open-backs it folds in the other "
+                "earcup's leakage. Use Auto per-ear for Dirac.";
+            break;
+        case CombineMode::Sum:
+            h = "Sums both ears (+6 dB). Clip risk; folds in open-back leakage like Average.";
+            break;
         case CombineMode::TwoPassLeft:
         case CombineMode::TwoPassRight:
-            h = "Mirrors miniDSP's official single-ear method: route Dirac playback to one earcup per pass.";
+            h = "Single ear only. miniDSP's manual method: route Dirac playback to one earcup per pass.";
             break;
     }
     combineHint.setText (h, juce::dontSendNotification);
@@ -583,13 +642,21 @@ void MainComponent::resized() {
         rr.removeFromTop (6);
         combineBox.setBounds (rr.removeFromTop (40));
         rr.removeFromTop (6);
-        combineHint.setBounds (rr.removeFromTop (34));
+        combineHint.setBounds (rr.removeFromTop (44));
         rr.removeFromTop (16);
 
         outputPicker.setBounds (rr.removeFromTop (62));
         rr.removeFromTop (4);
         outputHint.setBounds (rr.removeFromTop (30));
         preflightLabel.setBounds (rr.removeFromTop (14));
+        if (diracCableHint.isVisible()) {
+            rr.removeFromTop (6);
+            diracCableHint.setBounds (rr.removeFromTop (48));
+            if (diracFixButton.isVisible()) {
+                rr.removeFromTop (4);
+                diracFixButton.setBounds (rr.removeFromTop (30).removeFromLeft (200));
+            }
+        }
         rr.removeFromTop (12);
 
         auto rb = rr.removeFromTop (62);

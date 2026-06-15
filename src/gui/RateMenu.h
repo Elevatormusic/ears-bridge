@@ -40,13 +40,15 @@ struct CombineMenuItem {
     bool clipRiskWarning = false;   // Sum: +6 dB level risk
 };
 
-// Combine modes ORDERED BY RIGOR (design-spec §6): TwoPass-L, TwoPass-R, Average, Sum.
+// Combine modes. ORDER MUST MATCH the CombineMode enum (the GUI indexes combo id == enum value):
+// TwoPass-L, TwoPass-R, Average, Sum, AutoPerEar. AutoPerEar is the recommended Dirac headphone mode.
 inline std::vector<CombineMenuItem> combineModeOrder() {
     return {
         { CombineMode::TwoPassLeft,  /*recommended*/ true,  /*clipRisk*/ false },
         { CombineMode::TwoPassRight, /*recommended*/ true,  /*clipRisk*/ false },
         { CombineMode::Average,      /*recommended*/ false, /*clipRisk*/ false },
         { CombineMode::Sum,          /*recommended*/ false, /*clipRisk*/ true  },
+        { CombineMode::AutoPerEar,   /*recommended*/ true,  /*clipRisk*/ false },
     };
 }
 

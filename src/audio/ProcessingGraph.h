@@ -18,5 +18,10 @@ private:
     std::atomic<float> outGain { 1.0f };   // post-combine output gain (1.0 = unity); lock-free for the audio thread
     juce::AudioBuffer<float> scratch;
     double sr = 48000.0; int maxBlock = 0;
+
+    // AutoPerEar state (audio-thread only; reset in prepare()/reset()). Tracks per-ear input
+    // envelopes so the mode can follow whichever earcup Dirac is currently sweeping.
+    float envL_ = 0.0f, envR_ = 0.0f;
+    int   activeEar_ = 0;   // 0 = left mic, 1 = right mic
 };
 }
