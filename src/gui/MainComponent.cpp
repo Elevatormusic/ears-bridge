@@ -1,4 +1,6 @@
 #include "gui/MainComponent.h"
+#include <algorithm>
+#include <cmath>
 
 namespace eb {
 
@@ -6,6 +8,14 @@ static void styleEyebrow (juce::Label& l, const juce::String& t) {
     l.setText (t, juce::dontSendNotification);
     l.setColour (juce::Label::textColourId, Theme::textDim());
     l.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+}
+
+// Symmetric dB range that comfortably contains a cal curve (snapped to a 6 dB multiple).
+static float fitTopDb (const eb::CalFile& c) {
+    float lo = 0.0f, hi = 0.0f;
+    for (auto& p : c.points) { lo = std::min (lo, (float) p.splDb); hi = std::max (hi, (float) p.splDb); }
+    const float mag = std::max ({ 6.0f, std::abs (lo), std::abs (hi) }) + 3.0f;
+    return std::ceil (mag / 6.0f) * 6.0f;
 }
 
 MainComponent::MainComponent() {
@@ -23,7 +33,7 @@ MainComponent::MainComponent() {
     startStop.onClick = [this] { onStartStop(); };
     addAndMakeVisible (startStop);
     statusLine.setColour (juce::Label::textColourId, Theme::textDim());
-    statusLine.setFont (juce::Font (juce::FontOptions (11.0f)));
+    statusLine.setFont (juce::Font (juce::FontOptions (12.0f)));
     statusLine.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (statusLine);
 
@@ -51,7 +61,7 @@ MainComponent::MainComponent() {
     combineBox.onChange = [this] { onCombineChosen(); };
     addAndMakeVisible (combineBox);
     combineHint.setColour (juce::Label::textColourId, Theme::textDim());
-    combineHint.setFont (juce::Font (juce::FontOptions (11.0f)));
+    combineHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     combineHint.setJustificationType (juce::Justification::topLeft);
     combineHint.setMinimumHorizontalScale (1.0f);
     addAndMakeVisible (combineHint);
@@ -62,11 +72,11 @@ MainComponent::MainComponent() {
     outputHint.setText ("In Dirac Live, choose this device's capture side as the recording input.",
                         juce::dontSendNotification);
     outputHint.setColour (juce::Label::textColourId, Theme::textDim());
-    outputHint.setFont (juce::Font (juce::FontOptions (11.0f)));
+    outputHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     outputHint.setJustificationType (juce::Justification::topLeft);
     addAndMakeVisible (outputHint);
     preflightLabel.setColour (juce::Label::textColourId, Theme::warn());
-    preflightLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
+    preflightLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     addAndMakeVisible (preflightLabel);
 
     // --- Rate + depth ---
@@ -75,7 +85,7 @@ MainComponent::MainComponent() {
     rateBox.onChange = [this] { onRateChosen(); };
     addAndMakeVisible (rateBox);
     rateWarn.setColour (juce::Label::textColourId, Theme::warn());
-    rateWarn.setFont (juce::Font (juce::FontOptions (10.5f)));
+    rateWarn.setFont (juce::Font (juce::FontOptions (12.0f)));
     addAndMakeVisible (rateWarn);
     styleEyebrow (bitLabel, "DEPTH");
     addAndMakeVisible (bitLabel);
@@ -113,8 +123,8 @@ MainComponent::MainComponent() {
     // --- Right pane: cal cards + Levels ---
     styleEyebrow (calEyebrow, "CALIBRATION");
     addAndMakeVisible (calEyebrow);
-    leftCal.onCalLoaded  = [this] (const juce::File& f) { onLeftCalLoaded (f);  updateStartGate(); };
-    rightCal.onCalLoaded = [this] (const juce::File& f) { onRightCalLoaded (f); updateStartGate(); };
+    leftCal.onCalLoaded  = [this] (const juce::File& f) { onLeftCalLoaded (f);  updateStartGate(); syncPlotScales(); };
+    rightCal.onCalLoaded = [this] (const juce::File& f) { onRightCalLoaded (f); updateStartGate(); syncPlotScales(); };
     addAndMakeVisible (leftCal);
     addAndMakeVisible (rightCal);
     styleEyebrow (levelsEyebrow, "LEVELS");
@@ -141,6 +151,7 @@ MainComponent::MainComponent() {
         rightCal.loadFromFile (juce::File (settings.rightCalPath()));
 
     updateStartGate();
+    syncPlotScales();
     setSize (900, 700);
     startTimerHz (30);
 }
@@ -330,6 +341,15 @@ void MainComponent::updateStartGate() {
     updateStatusLine();
 }
 
+void MainComponent::syncPlotScales() {
+    // Both ear curves share one dB axis so they're directly comparable.
+    float top = 6.0f;
+    if (auto l = leftCal.calFile())  top = std::max (top, fitTopDb (*l));
+    if (auto r = rightCal.calFile()) top = std::max (top, fitTopDb (*r));
+    leftCal.setPlotRange (top);
+    rightCal.setPlotRange (top);
+}
+
 void MainComponent::updateStatusLine() {
     const auto st = engine.status();
     if (st == EngineStatus::Running) {
@@ -400,10 +420,9 @@ void MainComponent::resized() {
     {
         auto x = bar.reduced (16, 0);
         brandLabel.setBounds (x.removeFromLeft (200).withTrimmedLeft (24));
-        auto col = x.removeFromRight (240);
-        col.removeFromTop (8);
+        auto col = x.removeFromRight (240).withSizeKeepingCentre (240, 49);  // centre the transport group
         startStop.setBounds (col.removeFromTop (32).removeFromRight (120));
-        col.removeFromTop (1);
+        col.removeFromTop (2);
         statusLine.setBounds (col.removeFromTop (15));
     }
 
@@ -419,8 +438,8 @@ void MainComponent::resized() {
         rr.removeFromTop (6);
         combineBox.setBounds (rr.removeFromTop (40));
         rr.removeFromTop (6);
-        combineHint.setBounds (rr.removeFromTop (32));
-        rr.removeFromTop (14);
+        combineHint.setBounds (rr.removeFromTop (34));
+        rr.removeFromTop (16);
 
         outputPicker.setBounds (rr.removeFromTop (62));
         rr.removeFromTop (4);
@@ -429,8 +448,8 @@ void MainComponent::resized() {
         rr.removeFromTop (12);
 
         auto rb = rr.removeFromTop (62);
-        auto rcol = rb.removeFromLeft (rb.getWidth() / 2 - 6);
-        rb.removeFromLeft (12);
+        auto rcol = rb.removeFromLeft (rb.getWidth() / 2 - 8);
+        rb.removeFromLeft (16);
         rateLabel.setBounds (rcol.removeFromTop (16)); rcol.removeFromTop (6);
         rateBox.setBounds (rcol.removeFromTop (40));
         bitLabel.setBounds (rb.removeFromTop (16)); rb.removeFromTop (6);
@@ -447,8 +466,8 @@ void MainComponent::resized() {
             rr.removeFromTop (4);
             complexPhaseToggle.setBounds (rr.removeFromTop (26));
             rr.removeFromTop (6);
-            firLenLabel.setBounds (rr.removeFromTop (16)); rr.removeFromTop (4);
-            firLenBox.setBounds (rr.removeFromTop (36));
+            firLenLabel.setBounds (rr.removeFromTop (16)); rr.removeFromTop (6);
+            firLenBox.setBounds (rr.removeFromTop (40));
             rr.removeFromTop (8);
             trimLabel.setBounds (rr.removeFromTop (16)); rr.removeFromTop (4);
             trimSlider.setBounds (rr.removeFromTop (28));
@@ -460,12 +479,12 @@ void MainComponent::resized() {
         auto pp = pane.reduced (16);
         calEyebrow.setBounds (pp.removeFromTop (16));
         pp.removeFromTop (10);
-        leftCal.setBounds (pp.removeFromTop (208));
-        pp.removeFromTop (12);
-        rightCal.setBounds (pp.removeFromTop (208));
-        pp.removeFromTop (14);
+        leftCal.setBounds (pp.removeFromTop (206));
+        pp.removeFromTop (16);
+        rightCal.setBounds (pp.removeFromTop (206));
+        pp.removeFromTop (20);
 
-        levelsBounds = pp.removeFromTop (106);
+        levelsBounds = pp.removeFromTop (104);
         auto lv = levelsBounds.reduced (16, 12);
         levelsEyebrow.setBounds (lv.removeFromTop (14));
         lv.removeFromTop (8);

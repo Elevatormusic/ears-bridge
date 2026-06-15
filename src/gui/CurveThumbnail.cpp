@@ -12,16 +12,25 @@ void CurveThumbnail::clear() { curve.reset(); repaint(); }
 
 void CurveThumbnail::setCalFile (const eb::CalFile& cal) {
     curve = cal;
-    // Auto-fit the dB axis to the data with a small margin, then snap to a symmetric
-    // range so 0 dB stays centred and the grid reads cleanly.
+    setRange (autoFitTopDb());
+}
+
+float CurveThumbnail::autoFitTopDb() const {
+    // Symmetric range that comfortably contains the data, snapped to a 6 dB multiple
+    // so 0 dB stays centred and the grid reads cleanly.
+    if (! curve) return 6.0f;
     float lo = 0.0f, hi = 0.0f;
-    for (auto& p : cal.points) {
+    for (auto& p : curve->points) {
         lo = std::min (lo, (float) p.splDb);
         hi = std::max (hi, (float) p.splDb);
     }
     const float mag = std::max ({ 6.0f, std::abs (lo), std::abs (hi) }) + 3.0f;
-    topDb =  std::ceil (mag / 6.0f) * 6.0f;   // round up to a 6 dB multiple
-    botDb = -topDb;
+    return std::ceil (mag / 6.0f) * 6.0f;
+}
+
+void CurveThumbnail::setRange (float top) {
+    topDb =  top;
+    botDb = -top;
     repaint();
 }
 
@@ -43,7 +52,7 @@ void CurveThumbnail::paint (juce::Graphics& g) {
 
     if (! curve || curve->points.size() < 2) {
         g.setColour (Theme::textDim());
-        g.setFont (juce::Font (juce::FontOptions (11.0f)));
+        g.setFont (juce::Font (juce::FontOptions (12.0f)));
         g.drawText ("no cal loaded", r, juce::Justification::centred);
         return;
     }
@@ -60,11 +69,11 @@ void CurveThumbnail::paint (juce::Graphics& g) {
     g.setColour (Theme::accent());
     g.strokePath (path, juce::PathStrokeType (1.5f));
 
-    // dB axis labels (top/bottom of the fitted range).
-    g.setColour (Theme::textDim());
-    g.setFont (juce::Font (juce::FontOptions (10.0f)));
+    // dB axis label (top of the fitted range).
+    g.setColour (Theme::axis());
+    g.setFont (juce::Font (juce::FontOptions (11.0f)));
     g.drawText (juce::String ((int) topDb) + " dB",
-                r.removeFromTop (12.0f), juce::Justification::topLeft);
+                r.removeFromTop (13.0f), juce::Justification::topLeft);
 }
 
 } // namespace eb

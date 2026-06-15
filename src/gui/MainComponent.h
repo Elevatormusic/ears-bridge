@@ -40,6 +40,7 @@ private:
     void onStartStop();
     void updateStatusLine();
     void updateStartGate();          // enable Start only when both ear cals are loaded
+    void syncPlotScales();           // lock both ear plots to one shared dB scale
     double activeRate() const;
 
     Theme theme;

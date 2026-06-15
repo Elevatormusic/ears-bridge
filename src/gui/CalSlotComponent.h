@@ -21,6 +21,7 @@ public:
     bool loadFromFile (const juce::File&);
     std::optional<eb::CalFile> calFile() const { return cal; }
     bool hasCal() const { return cal.has_value(); }
+    void setPlotRange (float topDb);   // lock the FR plot to a shared dB scale
 
     std::function<void (const juce::File&)> onCalLoaded;
 

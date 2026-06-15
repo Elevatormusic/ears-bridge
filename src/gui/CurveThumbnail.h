@@ -13,6 +13,12 @@ public:
     CurveThumbnail();
     void setCalFile (const eb::CalFile& cal);
     void clear();
+
+    // The symmetric dB range this curve would auto-fit to (so a parent can pick one
+    // shared scale across both ear plots), and an override that locks the axis to it.
+    float autoFitTopDb() const;
+    void  setRange (float topDb);
+
     void paint (juce::Graphics&) override;
 
 private:

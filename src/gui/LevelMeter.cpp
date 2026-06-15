@@ -58,7 +58,7 @@ void LevelMeter::paint (juce::Graphics& g) {
     }
 
     g.setColour (Theme::textDim());
-    g.setFont (juce::Font (juce::FontOptions (11.0f)));
+    g.setFont (juce::Font (juce::FontOptions (12.5f)));
     const float db = (level <= 1.0e-5f) ? -120.0f : 20.0f * std::log10 (level);
     juce::String txt = (db <= -60.0f) ? juce::String ("-")
                                       : "-" + juce::String ((int) std::round (-db)) + " dB";

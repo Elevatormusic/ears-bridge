@@ -34,12 +34,12 @@ CalSlotComponent::CalSlotComponent (juce::String name) : earName (std::move (nam
     thumbnail.setVisible (false);
 
     fileLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    fileLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
+    fileLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     fileLabel.setJustificationType (juce::Justification::centredLeft);
     addChildComponent (fileLabel);
 
     errorLabel.setColour (juce::Label::textColourId, Theme::danger());
-    errorLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
+    errorLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     addChildComponent (errorLabel);
 
     replaceBtn.onClick = [this] { browseForCal(); };
@@ -116,6 +116,8 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
     repaint();
 }
 
+void CalSlotComponent::setPlotRange (float topDb) { thumbnail.setRange (topDb); }
+
 void CalSlotComponent::resized() {
     auto r = getLocalBounds().reduced (14, 12);
     r.removeFromTop (26);   // header strip (painted)
@@ -168,12 +170,12 @@ void CalSlotComponent::paint (juce::Graphics& g) {
         juce::PathStrokeType (1.5f).createDashedStroke (stroked, dash, dashes, 2);
         g.fillPath (stroked);
 
-        g.setColour (Theme::textDim());
+        g.setColour (Theme::text());
         g.setFont (juce::Font (juce::FontOptions (13.0f)));
         auto t = body.removeFromTop (body.getHeight() * 0.5f + 8.0f);
         g.drawText ("Drop a calibration file", t.toNearestInt(), juce::Justification::centredBottom);
-        g.setColour (Theme::textFaint());
-        g.setFont (juce::Font (juce::FontOptions (11.0f)));
+        g.setColour (Theme::textDim());
+        g.setFont (juce::Font (juce::FontOptions (12.0f)));
         g.drawText ("FRD text file, or click to browse",
                     body.toNearestInt(), juce::Justification::centredTop);
     }
