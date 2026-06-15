@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(EarsBridge VERSION 0.2.9 LANGUAGES C CXX)
+project(EarsBridge VERSION 0.2.10 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -87,6 +87,17 @@ if(APPLE)
         PROPERTIES COMPILE_FLAGS "-x objective-c++")
     # CoreAudio / AudioToolbox / CoreFoundation are already linked transitively by
     # juce_audio_devices on macOS — no explicit -framework lines needed here.
+endif()
+
+# ---- Stable platform endpoint-id resolver (WASAPI IMMDevice id / CoreAudio device UID) ----
+# Same portable split: the .cpp carries the Windows impl + a non-Apple fallback (empty on macOS);
+# the .mm carries the CoreAudio impl (Apple only). Makes DeviceId.uid a real, replug-stable id so
+# key() is replug/gain/rename-stable and the macOS aggregate gets the UIDs CoreAudio requires.
+target_sources(eb_engine PRIVATE src/platform/EndpointUid.cpp)        # Windows impl + non-Apple stub
+if(APPLE)
+    target_sources(eb_engine PRIVATE src/platform/EndpointUid_mac.mm)
+    set_source_files_properties(src/platform/EndpointUid_mac.mm
+        PROPERTIES COMPILE_FLAGS "-x objective-c++")
 endif()
 
 # ---- GUI + state library (components, theme, persistence) ----

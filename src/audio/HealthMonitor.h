@@ -44,6 +44,12 @@ public:
 
     HealthFlag     flags() const noexcept;        // latched sticky condition flags
     bool           cleanCapture() const noexcept; // latched false on a measurement-invalidating condition
+
+    // Edge-triggered "did the raw input clip since you last asked" — set on the audio thread, drained
+    // (read-and-cleared) by the GUI poll. Unlike the sticky ClipInput flag this self-clears once
+    // clipping stops, so a transient-warning hold can actually decay after the user lowers the gain,
+    // while still never missing a one-block clip that occurred between two 30 Hz polls.
+    bool recentInputClip() noexcept { return recentClip_.exchange (false); }
     DipGainProfile gainProfile() const noexcept { return DipGainProfile::forModel (model_); }
 
 private:
@@ -64,6 +70,7 @@ private:
 
     std::atomic<unsigned>  flagBits { 0 };
     std::atomic<bool>      clean { true };
+    std::atomic<bool>      recentClip_ { false };   // edge-triggered input clip, drained by recentInputClip()
 
     std::atomic<int> driftRun { 0 };     // consecutive out-of-tol blocks
     std::atomic<int> blockCount { 0 };   // for the low-level grace window

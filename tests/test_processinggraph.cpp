@@ -13,6 +13,12 @@ static juce::AudioBuffer<float> unitImpulse (int taps) {
     juce::AudioBuffer<float> b (1, taps); b.clear(); b.setSample (0, 0, 1.0f); return b;
 }
 
+// A scaled impulse is a frequency-flat FIR with |H(f)| == gain everywhere, so it exercises the
+// auto-headroom path with an exactly-known peak gain.
+static juce::AudioBuffer<float> scaledImpulse (int taps, float gain) {
+    auto b = unitImpulse (taps); b.applyGain (gain); return b;
+}
+
 // Spin the graph until BOTH juce::dsp::Convolution instances finish their ASYNC IR
 // load + gain ramp, so steady-state DC-through-identity equals the input on each
 // channel. Brief sleeps give the Convolution background-loader threads wall-clock
@@ -144,6 +150,68 @@ TEST_CASE("ProcessingGraph AutoPerEar follows whichever earcup is sounding (Dira
     // And follows back to LEFT for the validation repeat.
     for (int i = 0; i < 15; ++i) g.process (loud.data(), silent.data(), out.data(), N);
     CHECK_THAT (out[N-1], WithinAbs (0.3f, 1e-2));
+}
+
+TEST_CASE("ProcessingGraph auto headroom bounds the output and preserves L/R balance") {
+    const int N = 64;
+    eb::ProcessingGraph g; g.prepare (48000.0, N);
+    const float gL = 4.0f, gR = 1.0f;                 // L cal boosts +12 dB, R is unity
+    g.setFir (0, scaledImpulse (8, gL));
+    g.setFir (1, scaledImpulse (8, gR));
+
+    const float headroom = 1.0f / juce::jmax (gL, gR);   // non-Sum modes bound by the louder ear
+    std::vector<float> inL (N, 1.0f), inR (N, 1.0f), out (N, 0.0f);   // 0 dBFS input
+
+    auto wu = warmUp (g, inL, inR, out, N, gL * headroom, gR * headroom);
+    INFO ("headroom warmUp reps=" << wu.reps << " L=" << wu.lVal << " R=" << wu.rVal);
+    REQUIRE (wu.settled);
+
+    // (a) The +12 dB FIR alone would put a 0 dBFS input at 4.0 (hard clip); the makeup pulls it back
+    //     to exactly the input level and never above it.
+    g.setCombineMode (eb::CombineMode::TwoPassLeft);
+    g.process (inL.data(), inR.data(), out.data(), N);
+    const float outL = out[N - 1];
+    CHECK (outL <= 1.0f + 1e-3f);
+    CHECK_THAT (outL, WithinAbs (1.0f, 1e-2f));
+
+    g.setCombineMode (eb::CombineMode::TwoPassRight);
+    g.process (inL.data(), inR.data(), out.data(), N);
+    const float outR = out[N - 1];
+
+    // (b) The SAME makeup is applied to both ears, so the measured L/R ratio is untouched.
+    CHECK_THAT (outL / outR, WithinAbs (gL / gR, 1e-2f));
+}
+
+TEST_CASE("ProcessingGraph clamps the mono output so it can never exceed full scale") {
+    const int N = 64;
+    eb::ProcessingGraph g; g.prepare (48000.0, N);
+    g.setFir (0, unitImpulse (8)); g.setFir (1, unitImpulse (8));   // unity -> headroom 1.0
+    std::vector<float> inL (N, 0.8f), inR (N, 0.8f), out (N, 0.0f);
+    auto wu = warmUp (g, inL, inR, out, N, inL[0], inR[0]);
+    REQUIRE (wu.settled);
+
+    // Sum (+6 dB, intentionally uncompensated) would put 0.8 + 0.8 = 1.6 over full scale; the final
+    // hard clamp keeps the cable from ever seeing a sample past 1.0.
+    g.setCombineMode (eb::CombineMode::Sum);
+    g.process (inL.data(), inR.data(), out.data(), N);
+    CHECK (out[N - 1] <= 1.0f + 1e-4f);
+    CHECK_THAT (out[N - 1], WithinAbs (1.0f, 1e-3f));
+}
+
+TEST_CASE("ProcessingGraph clearFir restores unity passthrough and resets the auto-headroom") {
+    const int N = 64;
+    eb::ProcessingGraph g; g.prepare (48000.0, N);
+    g.setFir (0, scaledImpulse (8, 4.0f)); g.setFir (1, scaledImpulse (8, 4.0f));   // +12 dB -> headroom 0.25
+    std::vector<float> inL (N, 1.0f), inR (N, 1.0f), out (N, 0.0f);
+    auto wu = warmUp (g, inL, inR, out, N, 1.0f, 1.0f);   // 1.0 * 4 * 0.25 = 1.0
+    REQUIRE (wu.settled);
+
+    g.clearFir (0); g.clearFir (1);                       // back to unity FIRs -> headroom 1.0
+    auto wu2 = warmUp (g, inL, inR, out, N, 1.0f, 1.0f);  // 1.0 * 1 * 1 = 1.0 (passthrough)
+    REQUIRE (wu2.settled);
+    g.setCombineMode (eb::CombineMode::TwoPassLeft);
+    g.process (inL.data(), inR.data(), out.data(), N);
+    CHECK_THAT (out[N - 1], WithinAbs (1.0f, 1e-2f));     // input passes through unchanged
 }
 
 TEST_CASE("Real R_HPN cal cuts the ~4 kHz EARS resonance after convolution") {

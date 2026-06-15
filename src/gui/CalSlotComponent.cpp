@@ -87,6 +87,7 @@ void CalSlotComponent::browseForCal() {
 
 bool CalSlotComponent::loadFromFile (const juce::File& file) {
     if (! file.existsAsFile()) {
+        errorLabel.setColour (juce::Label::textColourId, Theme::danger());   // real error, not a warning
         errorLabel.setText ("File not found: " + file.getFileName(), juce::dontSendNotification);
         errorLabel.setVisible (true); repaint();
         return false;
@@ -97,6 +98,7 @@ bool CalSlotComponent::loadFromFile (const juce::File& file) {
         if (onCalLoaded) onCalLoaded (file);
         return true;
     } catch (const eb::CalParseError& e) {
+        errorLabel.setColour (juce::Label::textColourId, Theme::danger());   // real error, not a warning
         errorLabel.setText (juce::String ("Parse error: ") + e.what(), juce::dontSendNotification);
         errorLabel.setVisible (true); repaint();
         return false;
@@ -110,8 +112,21 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
     fileLabel.setText (file.getFileName()
                        + "  -  serial " + (parsed.serial.isNotEmpty() ? parsed.serial : juce::String ("?")),
                        juce::dontSendNotification);
-    errorLabel.setText ({}, juce::dontSendNotification);
-    errorLabel.setVisible (false);
+    // Explain the two cal-type hazards that otherwise load silently behind only a tiny chip.
+    if (parsed.type == eb::CalType::Heq) {
+        errorLabel.setColour (juce::Label::textColourId, Theme::warn());
+        errorLabel.setText ("HEQ bakes in a headphone target - for Dirac load the HPN (or RAW) file, "
+                            "or you'll double-correct.", juce::dontSendNotification);
+        errorLabel.setVisible (true);
+    } else if (parsed.type == eb::CalType::Unknown) {
+        errorLabel.setColour (juce::Label::textColourId, Theme::warn());
+        errorLabel.setText ("Couldn't identify this calibration type - confirm it's the right HPN file.",
+                            juce::dontSendNotification);
+        errorLabel.setVisible (true);
+    } else {
+        errorLabel.setText ({}, juce::dontSendNotification);
+        errorLabel.setVisible (false);
+    }
     thumbnail.setCalFile (parsed);
     thumbnail.setVisible (true);
     fileLabel.setVisible (true);

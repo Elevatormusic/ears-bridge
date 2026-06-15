@@ -8,14 +8,29 @@ class ProcessingGraph {
 public:
     void prepare (double sampleRate, int maxBlockSize);
     void setFir  (int channel, juce::AudioBuffer<float> ir);
+    void clearFir (int channel);   // load a unit-impulse (passthrough) IR + reset that ear's headroom
     void setCombineMode (CombineMode mode);
     void setOutputGain (float linear);   // applied to the mono output (the "Output trim" control)
     void process (const float* inL, const float* inR, float* outMono, int numSamples);
     void reset();
 private:
+    // Auto makeup-attenuation so the per-ear correction FIR can never push the mono output past
+    // 0 dBFS, whatever the playback level. Because Dirac normalizes the measurement, only the
+    // RELATIVE response matters, so a frequency-flat global attenuation changes nothing about the
+    // resulting filter -- it is free headroom. The same gain is applied to BOTH ears (it is derived
+    // from the louder ear's FIR peak), so the measured L/R balance is preserved. (Sum's intentional
+    // +6 dB is left alone -- it owns the clip-risk warning.) Recomputed off-thread on every setFir().
+    void  recomputeHeadroom();
+    static float peakGainOfIr (const juce::AudioBuffer<float>& ir);   // max |H(f)| of an IR
+
     juce::dsp::Convolution convL, convR;
     std::atomic<int> combine { (int) CombineMode::TwoPassLeft };
     std::atomic<float> outGain { 1.0f };   // post-combine output gain (1.0 = unity); lock-free for the audio thread
+    // Auto makeup attenuation (<= 1), composed with outGain. Deliberately NOT reset in prepare()/reset()
+    // -- convL/convR keep their loaded IRs across those, so it stays bound to the current FIRs; setFir
+    // must remain the sole writer of both the peaks and this gain so they never desync.
+    std::atomic<float> headroomGain { 1.0f };
+    float peakGainL_ = 1.0f, peakGainR_ = 1.0f; // per-ear FIR peak |H(f)| (message-thread only)
     juce::AudioBuffer<float> scratch;
     double sr = 48000.0; int maxBlock = 0;
 
@@ -23,5 +38,7 @@ private:
     // envelopes so the mode can follow whichever earcup Dirac is currently sweeping.
     float envL_ = 0.0f, envR_ = 0.0f;
     int   activeEar_ = 0;   // 0 = left mic, 1 = right mic
+    float relCoeff_ = 0.0f; // AutoPerEar envelope-release coefficient, precomputed in prepare() (no per-block exp)
+    int   lastMode_ = (int) CombineMode::TwoPassLeft;   // detect a live combine-mode change to re-arm AutoPerEar cleanly
 };
 }

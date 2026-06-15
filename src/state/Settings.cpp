@@ -5,7 +5,6 @@ namespace eb {
 namespace {
     constexpr const char* kInputKey   = "inputKey";
     constexpr const char* kOutputKey  = "outputKey";
-    constexpr const char* kModel      = "inputModel";
     constexpr const char* kRate       = "sampleRate";
     constexpr const char* kBits       = "outputBitDepth";
     constexpr const char* kCombine    = "combineMode";
@@ -38,11 +37,6 @@ void Settings::setInputKey (const juce::String& v) { file->setValue (kInputKey, 
 
 juce::String Settings::outputKey() const { return file->getValue (kOutputKey); }
 void Settings::setOutputKey (const juce::String& v) { file->setValue (kOutputKey, v); }
-
-EarsModel Settings::inputModel() const {
-    return static_cast<EarsModel> (file->getIntValue (kModel, (int) EarsModel::Unknown));
-}
-void Settings::setInputModel (EarsModel m) { file->setValue (kModel, (int) m); }
 
 double Settings::sampleRate() const { return file->getDoubleValue (kRate, 48000.0); }
 void Settings::setSampleRate (double sr) { file->setValue (kRate, sr); }

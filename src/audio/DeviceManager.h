@@ -39,7 +39,14 @@ public:
     // fall back off ASIO to "Windows Audio"/"CoreAudio"). Persists until the next call/reset.
     void setCurrentType (const juce::String& typeName);
 
-    // Heuristic: is this output device name a known/likely virtual sink?
+    // Single source of truth for "is this output a virtual cable, and which kind". Both the
+    // isVirtualSink flag (preflight) and the Dirac-compat hint route through this so they can't drift.
+    // StdVbCable = standard VB-CABLE (and renamed VB variants) -> Dirac records it exclusive (600007),
+    // fix with shared mode. HiFiCable = bit-perfect, no SRC -> connects but drops EARS Bridge's mono
+    // feed. OtherVirtual = VoiceMeeter/BlackHole/etc. NotVirtual = a real output.
+    enum class VirtualSinkKind { NotVirtual, StdVbCable, HiFiCable, OtherVirtual };
+    static VirtualSinkKind classifyVirtualSink (const juce::String& name);
+    // Heuristic: is this output device name a known/likely virtual sink? (== classify != NotVirtual)
     static bool looksLikeVirtualSink (const juce::String& name);
 
     void rescan();                                   // populate the cached lists
@@ -66,6 +73,7 @@ public:
     juce::String openOutput (const DeviceId&, double sampleRate, int bufferSize,
                              int requestedOutputBits = 24);
     int requestedOutputBitDepth() const { return requestedOutBits; }
+    int grantedOutputBitDepth()   const { return grantedOutBits; }   // read back after open (0 = unknown/none)
 
     juce::AudioIODevice* inputDevice()  const { return inDev.get(); }
     juce::AudioIODevice* outputDevice() const { return outDev.get(); }
@@ -77,6 +85,7 @@ private:
     std::vector<DeviceId> inputList, outputList;
     std::unique_ptr<juce::AudioIODevice> inDev, outDev;
     int requestedOutBits = 24;        // last bit depth requested on openOutput (best-effort)
+    int grantedOutBits   = 0;         // depth getCurrentBitDepth() reported after the last open (0 = none)
     juce::String forcedTypeName;      // set by setCurrentType() to override the preferred type
 
     juce::AudioIODeviceType* findPreferredType();    // the "Windows Audio"/"CoreAudio" type

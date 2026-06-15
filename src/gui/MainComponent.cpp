@@ -186,8 +186,8 @@ MainComponent::MainComponent() {
     addAndMakeVisible (calEyebrow);
     leftCal.onCalLoaded  = [this] (const juce::File& f) { onLeftCalLoaded (f);  updateStartGate(); syncPlotScales(); };
     rightCal.onCalLoaded = [this] (const juce::File& f) { onRightCalLoaded (f); updateStartGate(); syncPlotScales(); };
-    leftCal.onCalCleared  = [this] { settings.setLeftCalPath  ({}); updateStartGate(); syncPlotScales(); };
-    rightCal.onCalCleared = [this] { settings.setRightCalPath ({}); updateStartGate(); syncPlotScales(); };
+    leftCal.onCalCleared  = [this] { settings.setLeftCalPath  ({}); engine.clearLeftCalFir();  updateStartGate(); syncPlotScales(); };
+    rightCal.onCalCleared = [this] { settings.setRightCalPath ({}); engine.clearRightCalFir(); updateStartGate(); syncPlotScales(); };
     addAndMakeVisible (leftCal);
     addAndMakeVisible (rightCal);
     styleEyebrow (levelsEyebrow, "LEVELS");
@@ -198,9 +198,20 @@ MainComponent::MainComponent() {
     addAndMakeVisible (meterL);
     addAndMakeVisible (meterR);
     addAndMakeVisible (meterOut);
+    inputClipHint.setFont (juce::Font (juce::FontOptions (12.0f)));
+    inputClipHint.setJustificationType (juce::Justification::topLeft);
+    inputClipHint.setColour (juce::Label::textColourId, Theme::danger());
+    inputClipHint.setText ("Input clipping - the EARS is overloading on the sweep. Lower the EARS "
+                           "gain switch a step and/or Dirac's playback level, then re-measure.",
+                           juce::dontSendNotification);
+    addChildComponent (inputClipHint);   // hidden until a raw-input clip is seen
 
     // --- Restore persisted state ---
-    combineBox.setSelectedId ((int) settings.combineMode() + 1, juce::dontSendNotification);
+    // Search combineModel for the saved mode rather than assuming menu position == enum value, so the
+    // menu can be reordered without silently restoring the wrong mode.
+    for (size_t i = 0; i < combineModel.size(); ++i)
+        if (combineModel[i].mode == settings.combineMode())
+            { combineBox.setSelectedId ((int) i + 1, juce::dontSendNotification); break; }
     complexPhaseToggle.setToggleState (settings.complexPhase(), juce::dontSendNotification);
     firLenBox.setSelectedId (settings.firLength() > 0 ? settings.firLength() : kFirLenAutoId,
                              juce::dontSendNotification);
@@ -227,7 +238,11 @@ MainComponent::MainComponent() {
     // restored sample rate + input/output selections to the engine here.
     engine.setSampleRate (settings.sampleRate());
     engine.setOutputTrimDb (settings.outputTrimDb());   // apply the restored Output-trim to the graph
-    if (auto in  = inputPicker.selectedDevice())  engine.setInput  (*in);
+    // Push the restored selection to the engine. Heal the INPUT key if an old-format / pre-rekey key
+    // resolved via the single-EARS fallback (reliably the user's one EARS, so persisting is safe). Do
+    // NOT auto-persist the OUTPUT: its fallback can pick a *different* virtual sink, and silently
+    // overwriting the saved cable with a best-guess is worse than re-resolving it each launch.
+    if (auto in  = inputPicker.selectedDevice())  { engine.setInput  (*in);  if (in->key() != settings.inputKey()) settings.setInputKey (in->key()); }
     if (auto out = outputPicker.selectedDevice()) engine.setOutput (*out);
     rebuildRateMenu();
     rebuildBitDepthMenu();
@@ -262,7 +277,6 @@ void MainComponent::onInputChosen (const DeviceId& d) {
     if (engine.status() == EngineStatus::Running) return;
     engine.setInput (d);
     settings.setInputKey (d.key());
-    settings.setInputModel (d.model);
     auto rates = engine.supportedSampleRates (d);
     if (! rates.empty()) {
         bool ok = false;
@@ -289,40 +303,41 @@ void MainComponent::onOutputChosen (const DeviceId& d) {
 
 void MainComponent::updateDiracCableHint() {
     auto out = outputPicker.selectedDevice();
-    // The standard VB-Audio "Virtual Cable" capture side can't be opened in WASAPI exclusive mode,
-    // which is how Dirac records by default -> error 600007; the one-click fix puts Dirac in shared
-    // mode. The VB-Audio Hi-Fi Cable dodges 600007 but is bit-perfect with NO sample-rate converter,
-    // so it does NOT carry our mono shared-mode stream to Dirac (Dirac connects, mic stays dead) --
-    // warn against it rather than letting a user pick it and get a silent measurement.
-    const bool isStdVbCable = out && out->name.containsIgnoreCase ("VB-Audio Virtual Cable");
-    const bool isHiFiCable  = out && out->name.containsIgnoreCase ("Hi-Fi Cable");
-    if (isHiFiCable) {
+    // Route off the single virtual-sink classifier so the preflight (isVirtualSink) and this hint can't
+    // drift. Std VB-CABLE: Dirac records it exclusive (600007) -> one-click shared-mode fix. Hi-Fi
+    // Cable: bit-perfect, no SRC -> connects but drops our mono feed (silent measurement) -> warn off it.
+    using VK = eb::DeviceManager::VirtualSinkKind;
+    const VK kind = out ? eb::DeviceManager::classifyVirtualSink (out->name) : VK::NotVirtual;
+
+    if (kind == VK::HiFiCable) {
         diracCableHint.setColour (juce::Label::textColourId, Theme::warn());
         diracCableHint.setText ("The Hi-Fi Cable connects to Dirac but won't carry audio through it "
                                 "(no sample-rate converter). Use the standard CABLE Input instead.",
                                 juce::dontSendNotification);
         diracFixButton.setVisible (false);
-        diracCableHint.setVisible (true);
-        resized();
-        return;
-    }
-    if (! isStdVbCable) {
+    } else if (kind == VK::StdVbCable) {
+        if (eb::diracSharedModeEnabled()) {
+            diracCableHint.setColour (juce::Label::textColourId, Theme::ok());
+            diracCableHint.setText ("Dirac is set to shared mode, so this cable works. If Dirac is open, "
+                                    "fully close and reopen it once.", juce::dontSendNotification);
+            diracFixButton.setVisible (false);
+        } else {
+            diracCableHint.setColour (juce::Label::textColourId, Theme::warn());
+            diracCableHint.setText ("Dirac records this standard cable in exclusive mode, which it can't do "
+                                    "(error 600007). Click below to set Dirac to shared mode:",
+                                    juce::dontSendNotification);
+            diracFixButton.setVisible (true);
+        }
+    } else if (kind == VK::OtherVirtual) {
+        diracCableHint.setColour (juce::Label::textColourId, Theme::textDim());
+        diracCableHint.setText ("If Dirac can't open this cable (error 600007), set Dirac to shared mode "
+                                "or use the standard VB-CABLE.", juce::dontSendNotification);
+        diracFixButton.setVisible (! eb::diracSharedModeEnabled());   // the one-click fix helps any cable
+    } else {   // NotVirtual
         diracCableHint.setVisible (false);
         diracFixButton.setVisible (false);
         resized();
         return;
-    }
-    if (eb::diracSharedModeEnabled()) {
-        diracCableHint.setColour (juce::Label::textColourId, Theme::ok());
-        diracCableHint.setText ("Dirac is set to shared mode, so this cable works. If Dirac is open, "
-                                "fully close and reopen it once.", juce::dontSendNotification);
-        diracFixButton.setVisible (false);
-    } else {
-        diracCableHint.setColour (juce::Label::textColourId, Theme::warn());
-        diracCableHint.setText ("Dirac records this standard cable in exclusive mode, which it can't do "
-                                "(error 600007). Click below to set Dirac to shared mode:",
-                                juce::dontSendNotification);
-        diracFixButton.setVisible (true);
     }
     diracCableHint.setVisible (true);
     resized();
@@ -471,6 +486,19 @@ void MainComponent::onStartStop() {
         juce::String err;
         if (engine.start (err)) {
             startStop.setButtonText ("Stop");
+            inputClipHold_ = 0; silentTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
+            // Surface a silent format downgrade: WASAPI shared mode can grant a different rate/depth
+            // than the user selected, which would otherwise resample with no indication.
+            juce::StringArray notes;
+            const double gr = engine.grantedSampleRate();
+            if (std::abs (gr - settings.sampleRate()) > 0.5)
+                notes.add ("Running at " + juce::String (gr / 1000.0, 1) + " kHz, not the selected "
+                           + juce::String (settings.sampleRate() / 1000.0, 1) + " kHz (resampled).");
+            const int gb = engine.grantedOutputBitDepth();
+            if (gb > 0 && gb != settings.outputBitDepth())
+                notes.add ("Cable opened " + juce::String (gb) + "-bit, not the selected "
+                           + juce::String (settings.outputBitDepth()) + "-bit.");
+            preflightLabel.setText (notes.joinIntoString (" "), juce::dontSendNotification);
         } else {
             preflightLabel.setText ("Start failed: " + err, juce::dontSendNotification);
         }
@@ -533,11 +561,29 @@ void MainComponent::updateStatusLine() {
     const auto st = engine.status();
     if (st == EngineStatus::Running) {
         const auto h = engine.health();
-        statusLine.setText (h.cleanCapture ? "Running - clean" : "Dropouts detected",
-                            juce::dontSendNotification);
-        statusLine.setColour (juce::Label::textColourId, h.cleanCapture ? Theme::ok() : Theme::danger());
+        if (! h.cleanCapture) {
+            statusLine.setText ("Dropouts detected", juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::danger());
+        } else if (any (h.flags & HealthFlag::ClipOutput)) {
+            // The output hit full scale (e.g. Sum's uncompensated +6 dB drove past the clamp). The
+            // clamp stops a cable over, but it distorts the sweep -- flag it, don't pass it as "clean".
+            statusLine.setText ("Output clipping - lower the level or avoid Sum", juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::warn());
+        } else if (silentTicks_ >= kSilentHoldTicks) {
+            // "clean" only means no dropouts -- a connected-but-silent EARS reads clean too. After ~2 s
+            // of genuinely below-floor input (debounced in timerCallback so normal gaps don't flicker),
+            // say so, since ambient room noise alone (~-30 dB) sits well above the -50 dB floor.
+            statusLine.setText ("Running - no input signal (check the EARS)", juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::warn());
+        } else {
+            statusLine.setText ("Running - clean", juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::ok());
+        }
     } else if (st == EngineStatus::Error) {
-        statusLine.setText ("Error", juce::dontSendNotification);
+        // Render the specific reason (e.g. a device disconnect) so it survives a later re-render that
+        // would otherwise clobber a directly-set label back to a bare "Error".
+        statusLine.setText (statusErrorMsg_.isNotEmpty() ? statusErrorMsg_ : juce::String ("Error"),
+                            juce::dontSendNotification);
         statusLine.setColour (juce::Label::textColourId, Theme::danger());
     } else if (! (inputPicker.selectedDevice().has_value()
                   && outputPicker.selectedDevice().has_value())) {
@@ -553,11 +599,35 @@ void MainComponent::updateStatusLine() {
 }
 
 void MainComponent::timerCallback() {
+    // A device removed mid-run (unplug / sleep / gain-DIP re-enumerate) latches deviceDied_ from its
+    // audioDeviceStopped() callback. Tear it down and surface it, instead of leaving the engine sitting
+    // in a false "Running - clean" while the cable records silence.
+    if (engine.status() == EngineStatus::Running && engine.consumeDeviceDied()) {
+        statusErrorMsg_ = "EARS or audio cable disconnected - measurement stopped.";
+        engine.onDeviceLost();              // closes devices, flips status -> Error
+        startStop.setButtonText ("Start");
+        updateStartGate();                  // -> updateStatusLine() renders statusErrorMsg_ in the Error branch
+        return;
+    }
     const auto lv = engine.levels();
     meterL.setLevel  (lv.inL,     lv.clipL);
     meterR.setLevel  (lv.inR,     lv.clipR);
     meterOut.setLevel (lv.outMono, lv.clipOut);
+    // Debounce the live silent-input check (read by updateStatusLine): count consecutive below-floor
+    // ticks so brief pre-/inter-sweep gaps don't flicker the status; reset the instant signal returns.
+    const bool blockSilent = lv.inL < HealthMonitor::kLowLevelLinear && lv.inR < HealthMonitor::kLowLevelLinear;
+    silentTicks_ = blockSilent ? (silentTicks_ + 1) : 0;
     if (engine.status() == EngineStatus::Running) updateStatusLine();
+
+    // Raw-input (ADC) clipping warning. Re-arm from the edge-triggered, self-clearing recent-clip
+    // signal (NOT the sticky ClipInput flag, which never clears mid-run and would pin the warning on
+    // forever after one clip). consumeRecentInputClip() drains any clip that occurred between polls --
+    // so a one-block overload at the coupler resonance is never missed -- yet goes false once clipping
+    // stops, letting the hold decay ~8 s after the user lowers the gain.
+    if (engine.consumeRecentInputClip()) inputClipHold_ = kInputClipHoldTicks;
+    else if (inputClipHold_ > 0)         --inputClipHold_;
+    const bool showClip = inputClipHold_ > 0;
+    if (showClip != inputClipHint.isVisible()) { inputClipHint.setVisible (showClip); resized(); }
 
     // L/R wiring check: show the verdict once it lands, or time out after ~5 s of no tone.
     if (verifyTicks > 0) {
@@ -723,6 +793,11 @@ void MainComponent::resized() {
         meterL.setBounds   (lv.removeFromTop (mh));
         meterR.setBounds   (lv.removeFromTop (mh));
         meterOut.setBounds (lv.removeFromTop (mh));
+
+        if (inputClipHint.isVisible()) {
+            pp.removeFromTop (8);
+            inputClipHint.setBounds (pp.removeFromTop (34));
+        }
     }
 }
 

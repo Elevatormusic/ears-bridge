@@ -40,8 +40,10 @@ struct CombineMenuItem {
     bool clipRiskWarning = false;   // Sum: +6 dB level risk
 };
 
-// Combine modes. ORDER MUST MATCH the CombineMode enum (the GUI indexes combo id == enum value):
-// TwoPass-L, TwoPass-R, Average, Sum, AutoPerEar. AutoPerEar is the recommended Dirac headphone mode.
+// Combine modes, in menu order. The persisted setting is the stable CombineMode ENUM VALUE, and the
+// GUI restores by SEARCHING this list for that mode (not by assuming combo position == enum value), so
+// this order may now be reordered freely. (The CombineMode enum values themselves stay append-only --
+// they are what Settings stores.) AutoPerEar is the recommended Dirac headphone mode.
 inline std::vector<CombineMenuItem> combineModeOrder() {
     return {
         { CombineMode::TwoPassLeft,  /*recommended*/ true,  /*clipRisk*/ false },

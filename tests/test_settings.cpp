@@ -20,7 +20,6 @@ TEST_CASE("Settings round-trips every field through a PropertiesFile") {
         eb::Settings s (dir);
         s.setInputKey  ("WASAPI|EARS Pro|VID_2752&PID_0034");
         s.setOutputKey ("WASAPI|CABLE Input (VB-Audio Virtual Cable)|{uid}");
-        s.setInputModel (eb::EarsModel::EarsPro);
         s.setSampleRate (96000.0);
         s.setOutputBitDepth (24);
         s.setCombineMode (eb::CombineMode::TwoPassRight);
@@ -35,7 +34,6 @@ TEST_CASE("Settings round-trips every field through a PropertiesFile") {
     eb::Settings reloaded (dir);   // re-open same folder -> reads back the file
     CHECK (reloaded.inputKey()  == juce::String ("WASAPI|EARS Pro|VID_2752&PID_0034"));
     CHECK (reloaded.outputKey() == juce::String ("WASAPI|CABLE Input (VB-Audio Virtual Cable)|{uid}"));
-    CHECK (reloaded.inputModel() == eb::EarsModel::EarsPro);
     CHECK_THAT (reloaded.sampleRate(), WithinAbs (96000.0, 1e-9));
     CHECK (reloaded.outputBitDepth() == 24);
     CHECK (reloaded.combineMode() == eb::CombineMode::TwoPassRight);
@@ -53,7 +51,6 @@ TEST_CASE("Settings returns sane defaults on a fresh store") {
     eb::Settings s (dir);
     CHECK (s.inputKey().isEmpty());
     CHECK (s.outputKey().isEmpty());
-    CHECK (s.inputModel() == eb::EarsModel::Unknown);
     CHECK_THAT (s.sampleRate(), WithinAbs (48000.0, 1e-9));  // default native EARS rate
     CHECK (s.outputBitDepth() == 24);
     CHECK (s.combineMode() == eb::CombineMode::TwoPassLeft);

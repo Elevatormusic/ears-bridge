@@ -18,7 +18,11 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
     void audioDeviceAboutToStart (juce::AudioIODevice* dev) override {
         mono.assign ((size_t) juce::jmax (1, dev->getCurrentBufferSizeSamples()), 0.0f);
     }
-    void audioDeviceStopped() override {}
+    // Fires on JUCE's audio-device thread (NOT the message thread) when the OS removes the device
+    // mid-run -- so we ONLY set an atomic here and defer the teardown to the GUI timer (calling
+    // stop()/closeAll() from inside this callback would re-enter JUCE's own close()). stop() flips
+    // status away from Running BEFORE closing, so a deliberate stop doesn't trip this; only a loss does.
+    void audioDeviceStopped() override { if (e.status() == EngineStatus::Running) e.deviceDied_.store (true); }
 
     void audioDeviceIOCallbackWithContext (const float* const* in, int numIn,
                                            float* const* /*out*/, int /*numOut*/,
@@ -55,7 +59,7 @@ struct AudioEngine::RenderCallback : juce::AudioIODeviceCallback {
         mono.assign ((size_t) juce::jmax (1, dev->getCurrentBufferSizeSamples()), 0.0f);
         e.bridge.setRenderRate (dev->getCurrentSampleRate());
     }
-    void audioDeviceStopped() override {}
+    void audioDeviceStopped() override { if (e.status() == EngineStatus::Running) e.deviceDied_.store (true); }
 
     void audioDeviceIOCallbackWithContext (const float* const* /*in*/, int /*numIn*/,
                                            float* const* out, int numOut,
@@ -138,6 +142,8 @@ void AudioEngine::setOutputBitDepth (int bits) {   // 16/24/32; anything else ->
 
 void AudioEngine::setLeftCalFir  (juce::AudioBuffer<float> fir) { graph.setFir (0, std::move (fir)); }
 void AudioEngine::setRightCalFir (juce::AudioBuffer<float> fir) { graph.setFir (1, std::move (fir)); }
+void AudioEngine::clearLeftCalFir()  { graph.clearFir (0); }   // back to unity + headroom 1.0
+void AudioEngine::clearRightCalFir() { graph.clearFir (1); }
 void AudioEngine::setCombineMode (eb::CombineMode m) { graph.setCombineMode (m); }
 void AudioEngine::setOutputTrimDb (double db) {
     // Slider is <= 0 dB; treat the bottom of the range as a hard mute, else convert dB -> linear.
@@ -164,6 +170,19 @@ Health AudioEngine::health() const {
 HealthFlag AudioEngine::healthFlags() const noexcept     { return hm.flags(); }
 bool       AudioEngine::cleanCapture() const noexcept    { return hm.cleanCapture(); }
 DipGainProfile AudioEngine::gainProfile() const noexcept { return hm.gainProfile(); }
+bool AudioEngine::consumeRecentInputClip() noexcept      { return hm.recentInputClip(); }
+bool AudioEngine::consumeDeviceDied()      noexcept      { return deviceDied_.exchange (false); }
+int  AudioEngine::grantedOutputBitDepth()  const noexcept { return devices.grantedOutputBitDepth(); }
+
+void AudioEngine::onDeviceLost() {
+    // Set status away from Running FIRST so the closeAll() below (which fires audioDeviceStopped on
+    // the remaining device) can't re-latch deviceDied_, then tear down and surface Error.
+    engineStatus.store ((int) EngineStatus::Error);
+    devices.closeAll();
+    aggregate_.destroy(); usingAggregate_ = false;
+    bridge.reset();
+    deviceDied_.store (false);
+}
 
 bool AudioEngine::beginLrVerify (Ear earUnderTest, juce::String& errorOut) {
     if (status() == EngineStatus::Running) { errorOut = "Stop the bridge before verifying L/R."; return false; }
@@ -188,6 +207,7 @@ bool     AudioEngine::lrVerifyComplete() const noexcept { return verifyResult_.l
 bool AudioEngine::start (juce::String& errorOut) {
     if (status() == EngineStatus::Running) return true;
     endLrVerify();   // a pending L/R-verify stream holds the capture device; release it first
+    deviceDied_.store (false);   // fresh run: clear any stale device-loss latch
 
     // ASIO-incapability guard: ASIO cannot pair an EARS capture with a different virtual render.
     // Build the decision from the DeviceManager's type capabilities and fall back if needed.
@@ -250,6 +270,7 @@ bool AudioEngine::start (juce::String& errorOut) {
     auto* outD = devices.outputDevice();
     const double capRate = inD->getCurrentSampleRate();
     const double renRate = outD->getCurrentSampleRate();
+    grantedRate_ = capRate;   // what the EARS actually runs at (may differ from the user's selection)
     const int    maxBlk  = juce::jmax (inD->getCurrentBufferSizeSamples(),
                                        outD->getCurrentBufferSizeSamples());
 
@@ -289,6 +310,17 @@ bool AudioEngine::start (juce::String& errorOut) {
     // Render is the master: start it last so the FIFO has primed once capture runs.
     inD->start (captureCb.get());
     outD->start (renderCb.get());
+    // A device can open yet fail to begin streaming (in use, driver glitch); don't claim Running with
+    // no callbacks (which would show a false "Running - clean" while Dirac records silence).
+    if (! inD->isPlaying() || ! outD->isPlaying()) {
+        errorOut = "Device opened but did not start streaming: "
+                 + (! inD->isPlaying() ? inD->getLastError() : outD->getLastError());
+        devices.closeAll();
+        aggregate_.destroy(); usingAggregate_ = false;
+        bridge.reset();
+        engineStatus.store ((int) EngineStatus::Error);
+        return false;
+    }
     engineStatus.store ((int) EngineStatus::Running);
     return true;
 }
@@ -300,11 +332,13 @@ void AudioEngine::stop() {
         usingAggregate_ = false;
         return;
     }
+    // Flip out of Running BEFORE closing so our own audioDeviceStopped() doesn't latch deviceDied_
+    // (it only latches while status()==Running). Then tear down.
+    engineStatus.store ((int) EngineStatus::Stopped);
     devices.closeAll();
     aggregate_.destroy();          // idempotent (no-op on Windows / when not using the aggregate)
     usingAggregate_ = false;
     bridge.reset();
-    engineStatus.store ((int) EngineStatus::Stopped);
 }
 
 // ---- Headless test seam ---------------------------------------------------------------

@@ -22,6 +22,20 @@ TEST_CASE("looksLikeVirtualSink tags known virtual cables, not real hardware") {
     CHECK_FALSE (DM::looksLikeVirtualSink ("miniDSP EARS"));
 }
 
+TEST_CASE("classifyVirtualSink distinguishes the std cable, Hi-Fi cable, and other sinks") {
+    using DM = eb::DeviceManager;
+    using VK = eb::DeviceManager::VirtualSinkKind;
+    // Hi-Fi must win over the generic "cable"/"vb-audio" std match (it also contains them).
+    CHECK (DM::classifyVirtualSink ("Hi-Fi Cable Output (VB-Audio Hi-Fi Cable)") == VK::HiFiCable);
+    // Standard VB-CABLE and a renamed VB variant both classify as the std cable (600007 path).
+    CHECK (DM::classifyVirtualSink ("CABLE Output (VB-Audio Virtual Cable)")     == VK::StdVbCable);
+    CHECK (DM::classifyVirtualSink ("CABLE-A Output (VB-Audio Cable A)")         == VK::StdVbCable);
+    // Other virtual sinks get the soft hint, not silence.
+    CHECK (DM::classifyVirtualSink ("VoiceMeeter Out (VB-Audio VoiceMeeter VAIO)") == VK::OtherVirtual);
+    CHECK (DM::classifyVirtualSink ("BlackHole 2ch")                              == VK::OtherVirtual);
+    CHECK (DM::classifyVirtualSink ("Speakers (Realtek High Definition Audio)")   == VK::NotVirtual);
+}
+
 TEST_CASE("nativeRatesFor falls back to the model whitelist for an unopened device") {
     eb::DeviceManager dm;
     eb::DeviceId pro; pro.name = "miniDSP EARS Pro"; pro.model = eb::EarsModel::EarsPro;

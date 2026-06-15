@@ -1,5 +1,6 @@
 #include "audio/DeviceManager.h"
 #include "audio/ModelDetect.h"
+#include "platform/EndpointUid.h"   // real WASAPI/CoreAudio endpoint id (replug/gain/rename-stable)
 #include <algorithm>
 namespace eb {
 
@@ -36,12 +37,20 @@ bool DeviceManager::typeSupportsSeparateIO (const juce::AudioIODeviceType& type)
     return type.hasSeparateInputsAndOutputs();
 }
 
-bool DeviceManager::looksLikeVirtualSink (const juce::String& name) {
+DeviceManager::VirtualSinkKind DeviceManager::classifyVirtualSink (const juce::String& name) {
     const auto n = name.toLowerCase();
-    static const char* tokens[] = { "cable", "vb-audio", "voicemeeter", "blackhole",
-                                    "loopback", "virtual", "soundflower" };
-    for (auto* t : tokens) if (n.contains (t)) return true;
-    return false;
+    const bool hifi = n.contains ("hi-fi cable") || n.contains ("hifi cable");
+    if (hifi) return VirtualSinkKind::HiFiCable;                      // check first: it also contains "cable"
+    // Standard VB-CABLE and its renamed variants ("CABLE-A (VB-Audio Cable A)" etc.): VB-Audio + cable.
+    if (n.contains ("vb-audio") && n.contains ("cable")) return VirtualSinkKind::StdVbCable;
+    static const char* otherTokens[] = { "cable", "voicemeeter", "blackhole",
+                                         "loopback", "virtual", "soundflower" };
+    for (auto* t : otherTokens) if (n.contains (t)) return VirtualSinkKind::OtherVirtual;
+    return VirtualSinkKind::NotVirtual;
+}
+
+bool DeviceManager::looksLikeVirtualSink (const juce::String& name) {
+    return classifyVirtualSink (name) != VirtualSinkKind::NotVirtual;
 }
 
 juce::AudioIODeviceType* DeviceManager::findPreferredType() {
@@ -74,16 +83,16 @@ void DeviceManager::setCurrentType (const juce::String& typeName) {
     forcedTypeName = typeName;   // honored by findPreferredType() on the next open
 }
 
-// Best-effort stable endpoint id for a device. JUCE's AudioIODeviceType exposes only
-// display names (getDeviceNames); it does NOT surface a persistent endpoint GUID/UID
-// through this API on Windows ("Windows Audio") or macOS ("CoreAudio"). So today this
-// returns the name itself and uid==name. That is a KNOWN LIMITATION: key() is therefore
-// name-stable, NOT replug-stable, and CalBinder keys are name-stable only. If a future
-// build resolves a real endpoint id (e.g. via a WASAPI IMMDevice GetId() or the CoreAudio
-// kAudioDevicePropertyDeviceUID side-channel), populate it here and the key() upgrades to
-// replug-stable with no other change. Do NOT claim replug-stability while this returns name.
-static juce::String stableUidFor (const juce::String& name) {
-    return name;   // name-stable only; see the limitation above
+// Stable endpoint id for a device. JUCE's AudioIODeviceType exposes only display names
+// (getDeviceNames), so we resolve the real platform endpoint id via a side channel: WASAPI
+// IMMDevice::GetId on Windows, kAudioDevicePropertyDeviceUID on macOS (platform/EndpointUid.*).
+// That id is replug-, rename- AND gain-DIP-stable, so key() (which prefers uid) is replug-stable
+// when it resolves. When it can't (unknown platform, name not matched), it returns the name and
+// key() falls back to its name-stable form. (macOS path is inspection-only on the Windows host --
+// validate per Gate 7.)
+static juce::String stableUidFor (const juce::String& name, bool isInput) {
+    auto uid = endpointUidForName (name, isInput);   // real WASAPI/CoreAudio endpoint id when resolvable
+    return uid.isNotEmpty() ? uid : name;            // else name-stable only (key() falls back gracefully)
 }
 
 void DeviceManager::rescan() {
@@ -94,12 +103,12 @@ void DeviceManager::rescan() {
     const auto typeName = type->getTypeName();
 
     for (auto& name : type->getDeviceNames (true)) {   // true => input devices
-        DeviceId d; d.typeName = typeName; d.name = name; d.uid = stableUidFor (name);
+        DeviceId d; d.typeName = typeName; d.name = name; d.uid = stableUidFor (name, true);
         d.model = detectEarsModel (name);
         inputList.push_back (d);
     }
     for (auto& name : type->getDeviceNames (false)) {  // false => output devices
-        DeviceId d; d.typeName = typeName; d.name = name; d.uid = stableUidFor (name);
+        DeviceId d; d.typeName = typeName; d.name = name; d.uid = stableUidFor (name, false);
         d.isVirtualSink = looksLikeVirtualSink (name);
         outputList.push_back (d);
     }
@@ -180,12 +189,14 @@ juce::String DeviceManager::openOutput (const DeviceId& id, double sampleRate, i
     // the extent the driver's shared-mode format allows (verify with getCurrentBitDepth()).
     auto err = outDev->open (noIn, outCh, sampleRate, bufferSize);
     if (err.isNotEmpty()) { outDev.reset(); return "Open output failed: " + err; }
+    grantedOutBits = outDev->getCurrentBitDepth();   // what the driver actually granted (vs the request)
     return {};
 }
 
 void DeviceManager::closeAll() {
     if (inDev)  { inDev->stop();  inDev->close();  inDev.reset(); }
     if (outDev) { outDev->stop(); outDev->close(); outDev.reset(); }
+    grantedOutBits = 0;
 }
 
 } // namespace eb

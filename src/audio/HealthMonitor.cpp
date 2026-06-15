@@ -33,6 +33,7 @@ void HealthMonitor::reset() {
     inLm.store (0); inRm.store (0); outM.store (0);
     cL.store (false); cR.store (false); cO.store (false);
     flagBits.store (0);                 // Plan 4: clear the sticky flags on a fresh run
+    recentClip_.store (false);
     driftRun.store (0); blockCount.store (0);
 }
 
@@ -65,8 +66,10 @@ void HealthMonitor::reportInLevels (float peakL, float peakR, bool clipL, bool c
     inRm.store ((int) std::lround (juce::jlimit (0.0f, 8.0f, peakR) * 1000.0f));
     cL.store (clipL); cR.store (clipR);
     // Plan 4: raise ClipInput if the caller flagged a clip OR the peak crosses the threshold.
-    if (clipL || clipR || peakL >= kClipLinear || peakR >= kClipLinear)
-        raise (HealthFlag::ClipInput);  // guidance (does NOT invalidate cleanCapture)
+    if (clipL || clipR || peakL >= kClipLinear || peakR >= kClipLinear) {
+        raise (HealthFlag::ClipInput);  // sticky (for measurement validity); does NOT invalidate cleanCapture
+        recentClip_.store (true);       // edge-triggered companion for the self-clearing GUI warning
+    }
     // Plan 4: low-level only AFTER the grace window has fully elapsed (strictly greater, so the
     // 64-block warm-up does not itself trip it) and only when both ears are quiet.
     if (blockCount.load() > kLowLevelGraceBlocks

@@ -79,6 +79,14 @@ private:
     juce::Label    bitLabel;     juce::ComboBox bitBox;
     // Meters.
     LevelMeter meterL { "L" }, meterR { "R" }, meterOut { "Out" };
+    // Shown when the RAW EARS capture clips (pre-cal, so it survives the inverse-cal cut at the
+    // coupler resonance where clipping is most likely). Held long enough to outlast a full sweep.
+    juce::Label inputClipHint;
+    int         inputClipHold_ = 0;
+    static constexpr int kInputClipHoldTicks = 240;   // ~8 s at the 30 Hz GUI timer
+    int          silentTicks_ = 0;                    // consecutive below-floor input ticks (debounce)
+    static constexpr int kSilentHoldTicks = 60;       // ~2 s of sustained silence before "no input signal"
+    juce::String statusErrorMsg_;                     // specific Error-state message (survives re-renders)
     // Transport.
     juce::TextButton startStop { "Start" };
     juce::Label statusLine;

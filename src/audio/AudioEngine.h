@@ -39,6 +39,8 @@ public:
     // ---- DSP config ----
     void setLeftCalFir  (juce::AudioBuffer<float> fir);   // hot-swappable while Running
     void setRightCalFir (juce::AudioBuffer<float> fir);
+    void clearLeftCalFir();    // restore a neutral (unity) FIR + reset that ear's auto-headroom
+    void clearRightCalFir();
     void setCombineMode (eb::CombineMode);
     void setOutputTrimDb (double db);   // output level trim (<= 0 dB), applied live to the mono output
 
@@ -60,6 +62,22 @@ public:
     HealthFlag     healthFlags() const noexcept;
     bool           cleanCapture() const noexcept;
     DipGainProfile gainProfile() const noexcept;   // for the "lower/raise DIP gain" hint
+
+    // Edge-triggered raw-input clip since the last poll (self-clearing; drives the GUI gain warning).
+    bool consumeRecentInputClip() noexcept;
+
+    // Device-loss handling. A capture/render device that the OS removes mid-run (unplug, sleep,
+    // gain-DIP re-enumerate) calls audioDeviceStopped(); we latch deviceDied_ there (never tear down
+    // from inside that callback -- re-entrant with JUCE's close()). The GUI drains consumeDeviceDied()
+    // on its timer and, if still Running, calls onDeviceLost() to tear down cleanly and flip to Error
+    // (so the status light stops falsely showing a clean run on a dead stream).
+    bool consumeDeviceDied() noexcept;
+    void onDeviceLost();
+
+    // The rate/depth the devices were actually GRANTED at open (WASAPI shared mode can override the
+    // request). The GUI compares these to the user's selection and warns on a silent downgrade.
+    double grantedSampleRate()    const noexcept { return grantedRate_; }
+    int    grantedOutputBitDepth() const noexcept;
 
     // Drive a short tone into ONE earcup (user routes playback to that earcup) and report which
     // mic channel responded. Runs only while Stopped; opens a dedicated capture-only stream that
@@ -104,10 +122,12 @@ private:
 
     DeviceId inputId, outputId;
     double   activeRate = 48000.0;
+    double   grantedRate_ = 48000.0;   // capture rate actually granted at the last successful start()
     int      outputBits = 24;
     int      blockSize  = 0;
 
-    std::atomic<int> engineStatus { (int) EngineStatus::Stopped };
+    std::atomic<int>  engineStatus { (int) EngineStatus::Stopped };
+    std::atomic<bool> deviceDied_  { false };   // set on the AUDIO-DEVICE thread from audioDeviceStopped()
 
     // Audio callback adapters (own no state beyond pointers back to this).
     struct CaptureCallback;  struct RenderCallback;  struct VerifyCallback;

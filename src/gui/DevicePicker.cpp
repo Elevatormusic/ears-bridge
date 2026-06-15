@@ -55,6 +55,15 @@ void DevicePicker::setDevices (const std::vector<DeviceId>& devices, const juce:
             if (items[i].model != EarsModel::Unknown) { ++modelMatches; modelId = (int) i + 1; }
         if (modelMatches == 1) selectId = modelId;
     }
+    // Output fallback: cables carry no model, so the EARS fallback above never fires for them. If a
+    // saved output cable's name changed (rename / driver reinstall) and exactly one virtual sink is
+    // present, re-select it -- the output-side mirror of the EARS gain-DIP recovery.
+    if (selectId == 0 && selectedKey.isNotEmpty()) {
+        int sinkMatches = 0, sinkId = 0;
+        for (size_t i = 0; i < items.size(); ++i)
+            if (items[i].isVirtualSink) { ++sinkMatches; sinkId = (int) i + 1; }
+        if (sinkMatches == 1) selectId = sinkId;
+    }
     if (selectId != 0) combo.setSelectedId (selectId, juce::dontSendNotification);
 }
 

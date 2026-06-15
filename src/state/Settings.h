@@ -18,7 +18,6 @@ public:
 
     juce::String inputKey()  const;   void setInputKey  (const juce::String&);
     juce::String outputKey() const;   void setOutputKey (const juce::String&);
-    EarsModel    inputModel() const;  void setInputModel (EarsModel);
     double       sampleRate() const;  void setSampleRate (double);
     int          outputBitDepth() const; void setOutputBitDepth (int);
     CombineMode  combineMode() const; void setCombineMode (CombineMode);
