@@ -114,6 +114,16 @@ Left as **JUCE-port guidance** (not applicable to a static HTML preview): bind c
 semantic roles (`controlAccentColor`, `labelColor`, `windowBackgroundColor`), drive font sizes from a
 single Theme ramp, and use logical (RTL-safe) layout. Recorded in [`apple-tokens.md`](apple-tokens.md).
 
+### Scaffold variant ([`mockup-b-scaffold.html`](mockup-b-scaffold.html))
+
+Re-generated via the `apple-hig:hig-scaffold` skill as a **compliant-by-construction** version of the
+same screen: it uses **real semantic HTML controls** instead of styled `<div>`s — native `<select>`
+pop-ups, `<button>`s with a true `disabled` state and `aria-expanded`, `<label for>` bindings,
+`role="meter"` + `aria-valuetext` on the meters, real `<h2>/<h3>` section headings, and a
+`:focus-visible` ring — so keyboard, focus, and VoiceOver behaviour come for free. A leading
+HIG-compliance legend comment maps each choice to its Apple rule. This is the better basis to port to
+JUCE (it mirrors "prefer standard components, inherit correct focus/keyboard/accessibility").
+
 ## Status
 
 Mockup only. If the direction is approved, the next step is to implement it in the JUCE GUI
