@@ -44,14 +44,9 @@ def headphones(d, cx, cy, r, color):
 
 
 def squircle_icon(size):
-    s = size * 3
-    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    pad, rad = int(s * 0.09), int(s * 0.19)
-    mask = Image.new("L", (s, s), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([pad, pad, s - pad, s - pad], radius=rad, fill=255)
-    img.paste(vgrad(s, s, BLUE_TOP, BLUE_BOT).convert("RGBA"), (0, 0), mask)
-    headphones(ImageDraw.Draw(img), s / 2, s / 2, s * 0.30, WHITE)
-    return img.resize((size, size), Image.LANCZOS)
+    # Reuse the actual app icon so the installer stays in sync with the polished icon.
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icon.png")
+    return Image.open(p).convert("RGBA").resize((size, size), Image.LANCZOS)
 
 
 def main():

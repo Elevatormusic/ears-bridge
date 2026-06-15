@@ -60,7 +60,7 @@
 .eb-disc{ display:flex; align-items:center; gap:8px; width:100%; font:600 13px var(--sans); color:var(--tx2); background:none; border:none; border-top:1px solid var(--sep); padding:14px 2px 4px; text-align:left; cursor:pointer; } .eb-disc .ti{ font-size:16px; transition:transform .2s; }
 .eb-disc[aria-expanded="true"] .ti{ transform:rotate(90deg); }
 .eb-adv{ overflow:hidden; max-height:0; opacity:0; transition:max-height .25s ease, opacity .2s ease; }
-.eb-adv.open{ max-height:200px; opacity:1; }
+.eb-adv.open{ max-height:260px; opacity:1; }
 .eb-check{ display:flex; align-items:center; gap:9px; font-size:13px; color:var(--tx); cursor:pointer; padding:6px 0; }
 .eb-box{ width:18px; height:18px; border-radius:5px; border:1px solid var(--sep2); background:var(--ctrl); display:flex; align-items:center; justify-content:center; transition:background .15s; }
 .eb-check input{ position:absolute; opacity:0; } .eb-check input:checked + .eb-box{ background:var(--accent); border-color:var(--accent); } .eb-box .ti{ font-size:14px; color:#fff; opacity:0; } .eb-check input:checked + .eb-box .ti{ opacity:1; }
@@ -116,7 +116,8 @@
       <button class="eb-disc" id="advBtn" type="button" aria-expanded="false" aria-controls="adv"><i class="ti ti-chevron-right" aria-hidden="true"></i>Advanced</button>
       <div class="eb-adv" id="adv">
         <label class="eb-check"><input type="checkbox"><span class="eb-box"><i class="ti ti-check" aria-hidden="true"></i></span>Complex (with-phase) FIR</label>
-        <div class="eb-field" style="margin-top:8px"><label class="eb-field-l" for="f-fir">FIR length</label><div class="eb-selwrap"><select id="f-fir"><option>Auto (scales with rate)</option><option>8192</option><option>16384</option><option>32768</option></select><i class="ti ti-chevron-down chev" aria-hidden="true"></i></div></div>
+        <p class="eb-help" style="margin-top:2px">Corrects phase as well as magnitude, using the cal file's phase. Minimum-phase (off) is recommended — it adds no latency or pre-ringing.</p>
+        <div class="eb-field" style="margin-top:10px"><label class="eb-field-l" for="f-fir">FIR length</label><div class="eb-selwrap"><select id="f-fir"><option>Auto (scales with rate)</option><option>8192</option><option>16384</option><option>32768</option></select><i class="ti ti-chevron-down chev" aria-hidden="true"></i></div></div>
         <div class="eb-field" style="margin-top:10px"><label class="eb-field-l" for="f-trim">Output trim</label><div class="eb-slider"><input type="range" id="f-trim" min="-24" max="0" step="0.5" value="-3"><span class="eb-num" id="trimVal">−3.0 dB</span></div></div>
       </div>
     </div>
