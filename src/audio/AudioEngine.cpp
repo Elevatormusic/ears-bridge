@@ -94,6 +94,7 @@ struct AudioEngine::RenderCallback : juce::AudioIODeviceCallback {
 AudioEngine::AudioEngine() {
     captureCb = std::make_unique<CaptureCallback> (*this);
     renderCb  = std::make_unique<RenderCallback>  (*this);
+    devices.onListChanged = [this] { if (onDevicesChanged) onDevicesChanged(); };
     devices.rescan();
 }
 AudioEngine::~AudioEngine() { stop(); }
@@ -103,7 +104,7 @@ void AudioEngine::rescanDevices() { devices.rescan(); }
 std::vector<DeviceId> AudioEngine::inputDevices()  const { return devices.inputs(); }
 std::vector<DeviceId> AudioEngine::outputDevices() const { return devices.outputs(); }
 
-std::vector<double> AudioEngine::supportedSampleRates (const DeviceId& id) const {
+std::vector<double> AudioEngine::supportedSampleRates (const DeviceId& id) {
     return devices.nativeRatesFor (id);
 }
 std::vector<int> AudioEngine::supportedBitDepths (const DeviceId& id) const {

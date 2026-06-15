@@ -8,9 +8,15 @@ namespace eb {
 // Enumerates and opens the two device contexts. The render device is the master clock;
 // the capture device feeds the ClockBridge. Uses WASAPI ("Windows Audio") on Windows and
 // CoreAudio on macOS — never ASIO (cannot pair separate in/out devices).
-class DeviceManager {
+// Also listens for OS device add/remove (hot-plug) and re-scans, firing onListChanged.
+class DeviceManager : public juce::AudioIODeviceType::Listener {
 public:
     DeviceManager();
+    ~DeviceManager() override;
+
+    // Fired (on the message thread) after a hot-plug re-scan so the GUI can refresh its pickers.
+    std::function<void()> onListChanged;
+    void audioDeviceListChanged() override;
 
     // Preferred cross-device driver type name for the current OS.
     static juce::String preferredTypeName();   // "Windows Audio" / "CoreAudio"
@@ -40,11 +46,15 @@ public:
     std::vector<DeviceId> inputs()  const { return inputList; }
     std::vector<DeviceId> outputs() const { return outputList; }
 
-    // Native rates/bit-depths for an input: model whitelist (ModelDetect) intersected with
-    // the device's actually-supported rates when the device can be queried; falls back to
-    // the pure whitelist when no live device is available (headless/test).
-    std::vector<double> nativeRatesFor   (const DeviceId&) const;
+    // Supported rates/bit-depths for an input. Rates: the DEVICE's actually-supported sample
+    // rates (queried by creating the device), so ANY input — not just a recognised EARS — gets
+    // correct rates and no spurious "resample" flag; for a recognised model the curated whitelist
+    // narrows that set. Falls back to the model whitelist if the device can't be created
+    // (headless/test). NON-const because querying may create a transient device.
+    std::vector<double> nativeRatesFor   (const DeviceId&);
     std::vector<int>    nativeBitDepthsFor (const DeviceId&) const;
+    // Real sample rates a device reports (create-and-query, no open); empty if uncreatable.
+    std::vector<double> queryDeviceRates (const DeviceId&);
 
     // Open the input (capture) and output (render) devices on the preferred type.
     // Returns empty string on success, else an error message. Channels: input opens

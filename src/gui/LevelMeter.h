@@ -18,7 +18,8 @@ public:
 
 private:
     juce::String label;
-    float level = 0.0f;          // smoothed display level (linear)
+    float level = 0.0f;          // bar level (linear, fast attack / slow release)
+    float smoothDb = -120.0f;    // slowly-smoothed dB for the READOUT so the number is readable
     bool  clipLatched = false;
     juce::String lastDesc;       // last accessible description set (avoids per-frame churn)
 

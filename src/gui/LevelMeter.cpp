@@ -16,14 +16,18 @@ float LevelMeter::linearToFrac (float linear) {
 }
 
 void LevelMeter::setLevel (float peakLinear, bool clip) {
-    // Fast attack, slow release for a readable bar.
+    // Bar: fast attack, slow release (the visual bar should still show peaks).
     level = juce::jmax (peakLinear, level * 0.80f);
     if (clip) clipLatched = true;
     if (level <= 1.0e-6f) clipLatched = false;   // clears once the signal is gone (stopped)
 
-    // Expose the readout to assistive tech (VoiceOver), so the dB / clip state isn't
-    // visual-only. Only refresh the accessible description when the announced value changes.
-    const int db = (level <= 1.0e-5f) ? -120 : juce::roundToInt (20.0f * std::log10 (level));
+    // Readout: a SEPARATE, slowly-smoothed dB so the printed number doesn't chase peaks and
+    // flicker — roughly a 0.3 s time constant at the 30 Hz GUI tick. The bar stays responsive.
+    const float instDb = (level <= 1.0e-6f) ? -120.0f : 20.0f * std::log10 (level);
+    smoothDb += (instDb - smoothDb) * 0.10f;
+
+    // Expose the readout to assistive tech (VoiceOver); only refresh when the announced value changes.
+    const int db = juce::roundToInt (smoothDb);
     const juce::String desc = clipLatched ? "Clipping"
                             : (db <= -60)  ? "below -60 decibels"
                                            : juce::String (db) + " decibels";
@@ -66,13 +70,12 @@ void LevelMeter::paint (juce::Graphics& g) {
         g.fillRoundedRectangle (fill, 4.0f);
     }
 
-    // Readout: a literal "CLIP" tag (not colour alone) latches on overload, else the dB level.
-    const float db = (level <= 1.0e-5f) ? -120.0f : 20.0f * std::log10 (level);
+    // Readout: a literal "CLIP" tag (not colour alone) latches on overload, else the smoothed dB.
     g.setColour (clipLatched ? Theme::danger() : Theme::textDim());
     g.setFont (juce::Font (juce::FontOptions (12.5f).withStyle (clipLatched ? "Bold" : "Regular")));
-    juce::String txt = clipLatched     ? juce::String ("CLIP")
-                     : (db <= -60.0f)  ? juce::String ("-")
-                                       : "-" + juce::String ((int) std::round (-db)) + " dB";
+    juce::String txt = clipLatched          ? juce::String ("CLIP")
+                     : (smoothDb <= -60.0f) ? juce::String ("-")
+                                            : "-" + juce::String (juce::roundToInt (-smoothDb)) + " dB";
     g.drawText (txt, dbBox, juce::Justification::centredRight);
 }
 

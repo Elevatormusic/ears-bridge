@@ -25,10 +25,14 @@ public:
     AudioEngine();
     ~AudioEngine();
 
+    // Fired (message thread) when the OS device list changes (hot-plug). Set by the GUI to
+    // refresh its pickers without a restart.
+    std::function<void()> onDevicesChanged;
+
     // ---- Device / format selection (call while Stopped) ----
     std::vector<DeviceId> inputDevices()  const;
     std::vector<DeviceId> outputDevices() const;
-    std::vector<double>   supportedSampleRates (const DeviceId&) const;
+    std::vector<double>   supportedSampleRates (const DeviceId&);   // non-const: may create a transient device to query rates
     std::vector<int>      supportedBitDepths   (const DeviceId&) const;
     void setInput  (const DeviceId&);
     void setOutput (const DeviceId&);

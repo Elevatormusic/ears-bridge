@@ -158,6 +158,19 @@ MainComponent::MainComponent() {
     trimSlider.setValue (settings.outputTrimDb(), juce::dontSendNotification);
     onCombineChosen();   // seed the combine helper text
 
+    // Live hot-plug: when the OS device list changes, re-populate the pickers (no restart needed),
+    // re-sync the engine selection while stopped, and re-evaluate the Start gate.
+    engine.onDevicesChanged = [this] {
+        refreshDeviceLists();
+        if (engine.status() != EngineStatus::Running) {
+            if (auto in  = inputPicker.selectedDevice())  engine.setInput  (*in);
+            if (auto out = outputPicker.selectedDevice()) engine.setOutput (*out);
+            rebuildRateMenu();
+            rebuildBitDepthMenu();
+        }
+        updateStartGate();
+    };
+
     refreshDeviceLists();
     // refreshDeviceLists()/setDevices() only PRESELECT the saved devices in the pickers — they do
     // NOT notify the engine (that happens only when the user manually picks). Without this, a fresh
@@ -423,8 +436,8 @@ void MainComponent::updateStatusLine() {
         statusLine.setText ("Select an input and output device", juce::dontSendNotification);
         statusLine.setColour (juce::Label::textColourId, Theme::textDim());
     } else if (leftCal.hasCal() && rightCal.hasCal()) {
-        statusLine.setText ("Ready", juce::dontSendNotification);
-        statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+        // Ready: no redundant label — the enabled Start button is the affordance.
+        statusLine.setText ({}, juce::dontSendNotification);
     } else {
         statusLine.setText ("Load both ear calibrations to start", juce::dontSendNotification);
         statusLine.setColour (juce::Label::textColourId, Theme::textDim());
@@ -492,10 +505,11 @@ void MainComponent::resized() {
     {
         auto x = bar.reduced (16, 0);
         brandLabel.setBounds (x.removeFromLeft (200).withTrimmedLeft (24));
-        auto col = x.removeFromRight (240).withSizeKeepingCentre (240, 49);  // centre the transport group
-        startStop.setBounds (col.removeFromTop (32).removeFromRight (120));
-        col.removeFromTop (2);
-        statusLine.setBounds (col.removeFromTop (15));
+        // Transport button at the right, vertically centred; the status reads INLINE to its left
+        // (running health / a gate reason), not stacked underneath.
+        startStop.setBounds (x.removeFromRight (120).withSizeKeepingCentre (120, 34));
+        x.removeFromRight (14);
+        statusLine.setBounds (x.withSizeKeepingCentre (x.getWidth(), 22));
     }
 
     // --- Left configuration rail ---

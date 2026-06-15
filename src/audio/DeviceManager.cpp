@@ -4,10 +4,22 @@
 namespace eb {
 
 DeviceManager::DeviceManager() {
-    // No explicit type-list population needed: AudioDeviceManager::getAvailableDeviceTypes()
-    // lazily creates and OWNS the internal type list on first call (via scanDevicesIfNeeded()
-    // -> createAudioDeviceTypes(availableDeviceTypes)). NOTE: createAudioDeviceTypes(localList)
-    // would populate a CALLER-supplied list, NOT the manager's internal one, so it must not be used here.
+    // getAvailableDeviceTypes() lazily creates and OWNS the internal type list on first call.
+    // Listen on each type for OS hot-plug (device add/remove) so the cached lists stay current.
+    // (NOTE: createAudioDeviceTypes(localList) would populate a CALLER list, not the manager's.)
+    for (auto* t : adm.getAvailableDeviceTypes())
+        t->addListener (this);
+}
+
+DeviceManager::~DeviceManager() {
+    for (auto* t : adm.getAvailableDeviceTypes())
+        t->removeListener (this);
+}
+
+void DeviceManager::audioDeviceListChanged() {
+    // Called on the message thread by the driver type when devices are added/removed.
+    rescan();
+    if (onListChanged) onListChanged();
 }
 
 juce::String DeviceManager::preferredTypeName() {
@@ -93,19 +105,38 @@ void DeviceManager::rescan() {
     }
 }
 
-std::vector<double> DeviceManager::nativeRatesFor (const DeviceId& id) const {
-    auto whitelist = nativeSampleRates (id.model);
-    // If we have a live, matching open input device, intersect with its real rates.
+std::vector<double> DeviceManager::queryDeviceRates (const DeviceId& id) {
+    // Already-open matching device: ask it directly.
     if (inDev != nullptr && inDev->getName() == id.name) {
-        auto avail = inDev->getAvailableSampleRates();
-        std::vector<double> out;
-        for (double r : whitelist)
-            if (std::any_of (avail.begin(), avail.end(),
+        auto a = inDev->getAvailableSampleRates();
+        return std::vector<double> (a.begin(), a.end());
+    }
+    // Otherwise create a transient (un-opened) device just to read its supported rates. This is
+    // what lets ANY input device report real rates, not only a recognised EARS model.
+    auto* type = findPreferredType();
+    if (type == nullptr) return {};
+    type->scanForDevices();
+    std::unique_ptr<juce::AudioIODevice> tmp (type->createDevice ({}, id.name));   // input-only
+    if (tmp == nullptr) return {};
+    auto a = tmp->getAvailableSampleRates();
+    return std::vector<double> (a.begin(), a.end());
+}
+
+std::vector<double> DeviceManager::nativeRatesFor (const DeviceId& id) {
+    const auto whitelist = nativeSampleRates (id.model);   // curated per-model set (may be empty)
+    const auto real      = queryDeviceRates (id);          // what the device actually reports
+
+    if (! real.empty()) {
+        if (whitelist.empty())
+            return real;   // unrecognised device: offer exactly the rates it supports
+        std::vector<double> out;                            // recognised model: curated set,
+        for (double r : whitelist)                          // narrowed to what the device truly supports
+            if (std::any_of (real.begin(), real.end(),
                              [r](double a){ return std::abs (a - r) < 1.0; }))
                 out.push_back (r);
-        if (! out.empty()) return out;
+        return out.empty() ? real : out;                    // disagreement -> trust the device
     }
-    return whitelist;   // headless / not-open fallback = pure model whitelist
+    return whitelist;   // couldn't create/query (headless/test) = model whitelist (may be empty)
 }
 
 std::vector<int> DeviceManager::nativeBitDepthsFor (const DeviceId& id) const {
