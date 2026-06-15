@@ -6,12 +6,15 @@ TEST_CASE("detectEarsModel: EARS Pro recognised before plain EARS") {
     CHECK (eb::detectEarsModel ("EARS Pro")            == EarsModel::EarsPro);
     CHECK (eb::detectEarsModel ("miniDSP EARS Pro")    == EarsModel::EarsPro);
     CHECK (eb::detectEarsModel ("MINIDSP EARSPRO USB") == EarsModel::EarsPro);
+    CHECK (eb::detectEarsModel ("Microphone (E.A.R.S Pro)") == EarsModel::EarsPro);  // dotted driver name
 }
 
 TEST_CASE("detectEarsModel: original EARS") {
     CHECK (eb::detectEarsModel ("EARS")        == EarsModel::Ears);
     CHECK (eb::detectEarsModel ("miniDSP EARS") == EarsModel::Ears);
     CHECK (eb::detectEarsModel ("Microphone (EARS)") == EarsModel::Ears);
+    // Real Windows endpoint name for the original EARS: the driver dots the letters.
+    CHECK (eb::detectEarsModel ("Microphone (E.A.R.S Gain: 18dB)") == EarsModel::Ears);
 }
 
 TEST_CASE("detectEarsModel: USB VID:PID promotes a generic name") {

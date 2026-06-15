@@ -13,9 +13,12 @@ EarsModel detectEarsModel (const juce::String& deviceName, const juce::String& u
     }
 
     // Name-based fallback. Check "pro" first so "EARS Pro" never falls through to Ears.
-    const bool mentionsEars = name.contains ("ears");
-    if (mentionsEars && (name.contains ("ears pro") || name.contains ("earspro")
-                          || name.replace (" ", "").contains ("earspro")))
+    // Some Windows drivers expose the unit as "E.A.R.S" (dotted) — e.g.
+    // "Microphone (E.A.R.S Gain: 18dB)" — so strip '.' before matching, or "ears" never hits.
+    const auto noDots = name.removeCharacters (".");
+    const bool mentionsEars = noDots.contains ("ears");
+    if (mentionsEars && (noDots.contains ("ears pro")
+                          || noDots.replace (" ", "").contains ("earspro")))
         return EarsModel::EarsPro;
     if (mentionsEars)
         return EarsModel::Ears;

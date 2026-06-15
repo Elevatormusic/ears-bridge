@@ -159,6 +159,13 @@ MainComponent::MainComponent() {
     onCombineChosen();   // seed the combine helper text
 
     refreshDeviceLists();
+    // refreshDeviceLists()/setDevices() only PRESELECT the saved devices in the pickers — they do
+    // NOT notify the engine (that happens only when the user manually picks). Without this, a fresh
+    // launch + Start opens an unset input and fails with "could not create input device". Push the
+    // restored sample rate + input/output selections to the engine here.
+    engine.setSampleRate (settings.sampleRate());
+    if (auto in  = inputPicker.selectedDevice())  engine.setInput  (*in);
+    if (auto out = outputPicker.selectedDevice()) engine.setOutput (*out);
     rebuildRateMenu();
     rebuildBitDepthMenu();
 
@@ -201,7 +208,7 @@ void MainComponent::onInputChosen (const DeviceId& d) {
     rebuildRateMenu();
     rebuildBitDepthMenu();
     rebuildFirsAsync();
-    updateStatusLine();
+    updateStartGate();   // input now selected -> may enable Start
 }
 
 void MainComponent::onOutputChosen (const DeviceId& d) {
@@ -212,7 +219,7 @@ void MainComponent::onOutputChosen (const DeviceId& d) {
                                             : "Selected output is not a known virtual cable.",
                             juce::dontSendNotification);
     rebuildBitDepthMenu();
-    updateStatusLine();
+    updateStartGate();   // output now selected -> may enable Start
 }
 
 void MainComponent::rebuildRateMenu() {
@@ -352,8 +359,10 @@ void MainComponent::onStartStop() {
 }
 
 void MainComponent::updateStartGate() {
-    const bool running = engine.status() == EngineStatus::Running;
-    const bool ready   = leftCal.hasCal() && rightCal.hasCal();
+    const bool running  = engine.status() == EngineStatus::Running;
+    const bool haveDevs = inputPicker.selectedDevice().has_value()
+                       && outputPicker.selectedDevice().has_value();
+    const bool ready    = haveDevs && leftCal.hasCal() && rightCal.hasCal();
     startStop.setEnabled (running || ready);
     updateStatusLine();
 }
@@ -409,6 +418,10 @@ void MainComponent::updateStatusLine() {
     } else if (st == EngineStatus::Error) {
         statusLine.setText ("Error", juce::dontSendNotification);
         statusLine.setColour (juce::Label::textColourId, Theme::danger());
+    } else if (! (inputPicker.selectedDevice().has_value()
+                  && outputPicker.selectedDevice().has_value())) {
+        statusLine.setText ("Select an input and output device", juce::dontSendNotification);
+        statusLine.setColour (juce::Label::textColourId, Theme::textDim());
     } else if (leftCal.hasCal() && rightCal.hasCal()) {
         statusLine.setText ("Ready", juce::dontSendNotification);
         statusLine.setColour (juce::Label::textColourId, Theme::textDim());
