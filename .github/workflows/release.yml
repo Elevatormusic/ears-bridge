@@ -60,6 +60,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install create-dmg (styled disk image)
+        run: brew install create-dmg
+
       - name: Build universal app + DMG
         shell: bash
         run: |

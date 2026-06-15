@@ -37,18 +37,34 @@ if [ -n "${CODESIGN_IDENTITY:-}" ]; then
   codesign --verify --deep --strict --verbose=2 "$APP"
 fi
 
-echo "==> Staging disk image contents"
-STAGE="$(mktemp -d)"
-ditto "$APP" "$STAGE/$APP_NAME.app"        # ditto preserves the bundle correctly
-ln -s /Applications "$STAGE/Applications"  # the drag-to-install target
-
 mkdir -p "$DIST"
 DMG="$DIST/EARS-Bridge-$VERSION-macOS.dmg"
 rm -f "$DMG"
+BG="$ROOT/installer/assets/dmg-background.png"
 
 echo "==> Creating $DMG"
-hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
-rm -rf "$STAGE"
+if command -v create-dmg >/dev/null 2>&1; then
+  # Styled image: branded background + the app and an Applications drop-link positioned
+  # to match the arrow in dmg-background.png (brew install create-dmg).
+  create-dmg \
+    --volname "$APP_NAME" \
+    --background "$BG" \
+    --window-pos 200 120 \
+    --window-size 660 420 \
+    --icon-size 110 \
+    --icon "$APP_NAME.app" 180 220 \
+    --app-drop-link 480 220 \
+    --hide-extension "$APP_NAME.app" \
+    --no-internet-enable \
+    "$DMG" "$APP"
+else
+  echo "create-dmg not found (brew install create-dmg) — falling back to a plain hdiutil image"
+  STAGE="$(mktemp -d)"
+  ditto "$APP" "$STAGE/$APP_NAME.app"        # ditto preserves the bundle correctly
+  ln -s /Applications "$STAGE/Applications"  # the drag-to-install target
+  hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+  rm -rf "$STAGE"
+fi
 
 echo ""
 echo "============================================================"

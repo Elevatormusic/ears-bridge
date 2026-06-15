@@ -42,6 +42,9 @@ InfoBeforeFile=prerequisites.txt
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+; Branded wizard art matching the app icon (system-blue headphones).
+WizardImageFile=assets\wizard-large.bmp
+WizardSmallImageFile=assets\wizard-small.bmp
 ; The app is built x64; install into the 64-bit Program Files and only on x64-capable Windows.
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
