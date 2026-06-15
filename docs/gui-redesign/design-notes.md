@@ -1,22 +1,20 @@
 # EARS Bridge — GUI redesign (design notes)
 
-A proposed redesign of the desktop window, applying `docs/GUIDesignGuide.md` (the Apple-HIG-derived,
-framework-neutral guideline). These are **design mockups** for review — not yet implemented in the
-JUCE code. Open the HTML files in a browser to see them full size.
+A redesign of the desktop window, applying `docs/GUIDesignGuide.md` (the Apple-HIG-derived,
+framework-neutral guideline). The canonical design is the interactive prototype
+[`prototype.html`](prototype.html) — open it in a browser to use it (it follows your system light/dark
+setting). It is a design prototype, not yet implemented in the JUCE code.
 
-All three keep the same functionality (input, two per-ear calibrations, combine mode, output sink,
-sample rate, bit depth, level meters, clean-capture status, Start/Stop, and the Advanced disclosure)
-and the same design system (tokens, type ramp, components); they differ in composition.
+## The design
 
-## Three directions
-
-- **A — Panel** ([`mockup-a.html`](mockup-a.html)): dark, a single sectioned column (Input →
-  Calibration → Routing → Format → Advanced) with the meters and Start in a bottom transport bar.
-- **B — Studio** ([`mockup-b.html`](mockup-b.html)): dark, a two-pane layout — a compact config rail
-  on the left, the calibration plots and meters given the most space on the right, Start in the
-  content header.
-- **C — Clean (light)** ([`mockup-c.html`](mockup-c.html)): the light appearance, with the meters,
-  clean status, and Start anchored in a top bar above an airier single-column body.
+A two-pane "Studio" layout: a compact configuration rail on the left (input, combine mode, output,
+format, an Advanced disclosure) and a larger content pane on the right (the per-ear calibration plots
+and a signal-level monitor). One consolidated transport zone sits top-right — a single Start/Stop
+capsule button that is the only filled control and is gated (disabled, with a one-line reason) until
+both ear calibrations load. Built on real semantic HTML (native `<select>`, `<button>`, `<label>`,
+`role="meter"`), with light + dark appearances, animations (respecting Reduce Motion), and the
+macOS 26/27 system tokens. The exploration that led here — three direction studies (Panel / Studio /
+Clean) and a static HIG scaffold — is preserved in git history.
 
 ## Same design on Windows and macOS
 

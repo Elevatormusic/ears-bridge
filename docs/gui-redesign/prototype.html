@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EARS Bridge — interactive prototype</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css">
+<style> html{ color-scheme:light dark; } body{ margin:0; background:#0c0c0d; display:flex; justify-content:center; padding:32px 16px; } @media (prefers-color-scheme: light){ body{ background:#c7c7cc; } } </style>
+</head>
+<body>
+<div class="eb-stage">
+<style>
+.eb-stage{
+  --bg:#1E1E1E; --surface:#2A2A2A; --rail:#232323; --ctrl:#38383A; --ctrl-h:#414146; --bar:#262626; --plot:#202020;
+  --track:#161616; --grid:rgba(255,255,255,.08); --chip-bg:rgba(255,255,255,.10); --info-tx:#5AB7FF; --info-bg:rgba(0,145,255,.16);
+  --sep:rgba(255,255,255,.12); --sep2:rgba(255,255,255,.16);
+  --tx:#FFFFFF; --tx2:rgba(255,255,255,.62); --tx3:rgba(255,255,255,.3); --axis:#98989D;
+  --accent:#0091FF; --accent-h:#1F9DFF; --ok:#30D158; --warn:#FF9230; --err:#FF4245;
+  --sans:-apple-system,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,Roboto,sans-serif;
+  --mono:"SF Mono","Cascadia Code","Consolas",ui-monospace,monospace; width:100%; max-width:760px; margin:0 auto;
+}
+@media (prefers-color-scheme: light){
+  .eb-stage{
+    --bg:#ECECEE; --surface:#FFFFFF; --rail:#F6F6F8; --ctrl:#FFFFFF; --ctrl-h:#F0F0F2; --bar:#F6F6F8; --plot:#F3F3F5;
+    --track:#E3E3E6; --grid:rgba(0,0,0,.09); --chip-bg:rgba(0,0,0,.06); --info-tx:#0067D6; --info-bg:rgba(0,136,255,.12);
+    --sep:rgba(0,0,0,.12); --sep2:rgba(0,0,0,.18);
+    --tx:rgba(0,0,0,.85); --tx2:rgba(0,0,0,.6); --tx3:rgba(0,0,0,.35); --axis:#5C5C61;
+    --accent:#0088FF; --accent-h:#0A7BEA; --ok:#34C759; --warn:#C2630A; --err:#D6322F;
+  }
+}
+.eb{ background:var(--bg); color:var(--tx); font-family:var(--sans); font-size:13px; line-height:1.4; border:1px solid var(--sep); border-radius:12px; overflow:hidden; }
+.eb *{ box-sizing:border-box; margin:0; }
+.eb [hidden]{ display:none !important; }
+.eb-sr{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
+.eb :focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:8px; }
+.eb-bar{ display:flex; align-items:center; gap:10px; padding:12px 16px; background:var(--bar); border-bottom:1px solid var(--sep); }
+.eb-dots{ display:flex; gap:8px; } .eb-dots i{ width:11px; height:11px; border-radius:50%; }
+.eb-brand{ display:flex; align-items:center; gap:8px; font-size:15px; font-weight:600; margin-left:4px; } .eb-brand .ti{ color:var(--accent); font-size:18px; }
+.eb-spacer{ flex:1; }
+.eb-xport{ display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
+.eb-primary{ display:inline-flex; align-items:center; gap:8px; font:600 13px var(--sans); color:#fff; background:var(--accent); border:none; border-radius:999px; padding:9px 20px; cursor:pointer; transition:background .15s, transform .08s; }
+.eb-primary:hover{ background:var(--accent-h); } .eb-primary:active{ transform:scale(.97); } .eb-primary .ti{ font-size:16px; }
+.eb-primary:disabled{ background:var(--ctrl); color:var(--tx2); border:1px solid var(--sep2); cursor:not-allowed; transform:none; }
+.eb-xport-note{ display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--tx2); } .eb-xport-note .ti{ font-size:13px; }
+.eb-xport-note.ok{ color:var(--ok); }
+.eb-two{ display:grid; grid-template-columns:262px 1fr; }
+.eb-rail{ padding:16px; border-right:1px solid var(--sep); display:flex; flex-direction:column; gap:16px; background:var(--rail); }
+.eb-pane{ padding:16px; display:flex; flex-direction:column; gap:14px; }
+.eb-eyebrow{ font-size:11px; font-weight:600; letter-spacing:.04em; color:var(--tx2); text-transform:uppercase; }
+.eb-field-l{ display:block; font-size:11px; font-weight:600; letter-spacing:.03em; color:var(--tx2); text-transform:uppercase; margin:0 0 6px 2px; }
+.eb-selwrap{ position:relative; }
+.eb select{ appearance:none; -webkit-appearance:none; width:100%; height:40px; padding:0 32px 0 12px; background:var(--ctrl); border:1px solid var(--sep2); border-radius:8px; color:var(--tx); font:13px var(--sans); cursor:pointer; transition:background .15s, border-color .15s; }
+.eb select:hover{ background:var(--ctrl-h); }
+.eb-selwrap .chev{ position:absolute; right:11px; top:50%; transform:translateY(-50%); pointer-events:none; color:var(--tx2); font-size:16px; }
+.eb-rec{ display:inline-flex; align-items:center; gap:3px; font-size:11px; font-weight:600; color:var(--tx2); background:var(--chip-bg); padding:2px 8px; border-radius:6px; } .eb-rec .ti{ font-size:12px; }
+.eb-info{ font-size:11px; font-weight:600; color:var(--info-tx); background:var(--info-bg); padding:2px 8px; border-radius:6px; }
+.eb-req{ font-size:11px; font-weight:600; color:var(--warn); background:rgba(194,99,10,.14); padding:2px 8px; border-radius:6px; }
+.eb-help{ font-size:11px; color:var(--tx2); margin:6px 2px 0; line-height:1.45; } .eb-help .ti{ font-size:12px; vertical-align:-2px; margin-right:3px; }
+.eb-row2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.eb-disc{ display:flex; align-items:center; gap:8px; width:100%; font:600 13px var(--sans); color:var(--tx2); background:none; border:none; border-top:1px solid var(--sep); padding:14px 2px 4px; text-align:left; cursor:pointer; } .eb-disc .ti{ font-size:16px; transition:transform .2s; }
+.eb-disc[aria-expanded="true"] .ti{ transform:rotate(90deg); }
+.eb-adv{ overflow:hidden; max-height:0; opacity:0; transition:max-height .25s ease, opacity .2s ease; }
+.eb-adv.open{ max-height:200px; opacity:1; }
+.eb-check{ display:flex; align-items:center; gap:9px; font-size:13px; color:var(--tx); cursor:pointer; padding:6px 0; }
+.eb-box{ width:18px; height:18px; border-radius:5px; border:1px solid var(--sep2); background:var(--ctrl); display:flex; align-items:center; justify-content:center; transition:background .15s; }
+.eb-check input{ position:absolute; opacity:0; } .eb-check input:checked + .eb-box{ background:var(--accent); border-color:var(--accent); } .eb-box .ti{ font-size:14px; color:#fff; opacity:0; } .eb-check input:checked + .eb-box .ti{ opacity:1; }
+.eb-slider{ display:flex; align-items:center; gap:10px; } .eb-slider input{ flex:1; accent-color:var(--accent); } .eb-num{ font-family:var(--mono); font-size:11px; color:var(--tx2); width:54px; text-align:right; }
+.eb-card{ background:var(--surface); border-radius:10px; padding:12px 16px; }
+.eb-card-h{ display:flex; align-items:center; gap:8px; margin-bottom:12px; } .eb-card-h .name{ font-size:15px; font-weight:600; } .eb-card-h .ti{ color:var(--tx2); font-size:17px; } .eb-card-h .eb-spacer{ flex:1; }
+.eb-plot{ width:100%; height:148px; display:block; background:var(--plot); border-radius:8px; }
+.eb-plot path.curve{ stroke-dasharray:1000; stroke-dashoffset:0; }
+.eb-plot.draw path.curve{ animation:draw .7s ease forwards; } @keyframes draw{ from{ stroke-dashoffset:1000; } to{ stroke-dashoffset:0; } }
+.eb-meta{ display:flex; align-items:center; gap:8px; margin-top:12px; } .eb-fname{ flex:1; font-family:var(--mono); font-size:11px; color:var(--tx2); }
+.eb-btn{ display:inline-flex; align-items:center; gap:6px; font:12px var(--sans); color:var(--tx); background:var(--ctrl); border:1px solid var(--sep2); border-radius:999px; padding:8px 14px; cursor:pointer; transition:background .15s; } .eb-btn:hover{ background:var(--ctrl-h); } .eb-btn .ti{ font-size:15px; color:var(--tx2); }
+.eb-drop{ width:100%; height:148px; border:1.5px dashed var(--sep2); border-radius:8px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--tx2); background:var(--chip-bg); font:13px var(--sans); cursor:pointer; transition:border-color .15s, background .15s; }
+.eb-drop:hover{ border-color:var(--accent); } .eb-drop .ti{ font-size:26px; color:var(--tx2); } .eb-drop .d2{ font-size:11px; color:var(--tx2); }
+.eb-monitor{ background:var(--surface); border-radius:10px; padding:12px 16px; }
+.eb-mhead{ display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; letter-spacing:.04em; color:var(--tx2); text-transform:uppercase; margin-bottom:10px; }
+.eb-meter{ display:flex; align-items:center; gap:8px; margin-bottom:8px; } .eb-meter:last-child{ margin-bottom:0; } .eb-meter .ml{ font-size:11px; font-weight:600; color:var(--tx2); width:28px; }
+.eb-mtrack{ flex:1; height:8px; border-radius:4px; background:var(--track); position:relative; overflow:hidden; }
+.eb-zamber{ position:absolute; right:1.6%; top:0; height:100%; width:3.4%; background:rgba(255,146,48,.65); }
+.eb-zred{ position:absolute; right:0; top:0; height:100%; width:1.6%; background:rgba(255,66,69,.8); }
+.eb-mfill{ position:absolute; left:0; top:0; height:100%; border-radius:4px; background:var(--ok); transition:width .12s linear; }
+.eb-mdb{ font-family:var(--mono); font-size:11px; color:var(--tx2); width:48px; text-align:right; }
+.eb-axis{ font-family:var(--mono); font-size:10px; fill:var(--axis); }
+@media (prefers-reduced-motion: reduce){ .eb *{ animation:none !important; transition:none !important; } .eb-adv{ transition:none; } }
+</style>
+<h2 class="eb-sr">EARS Bridge interactive prototype: a configuration rail, per-ear calibration cards, a signal-level monitor, and a top-right Start control gated until both ear calibrations are loaded.</h2>
+<div class="eb">
+  <header class="eb-bar">
+    <span class="eb-dots" aria-hidden="true"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+    <span class="eb-brand"><i class="ti ti-headphones" aria-hidden="true"></i>EARS Bridge</span>
+    <span class="eb-spacer"></span>
+    <div class="eb-xport">
+      <button class="eb-primary" id="start" type="button" disabled aria-describedby="startNote"><i class="ti ti-player-play" aria-hidden="true"></i><span id="startLabel">Start</span></button>
+      <span class="eb-xport-note" id="startNote"><i class="ti ti-info-circle" aria-hidden="true"></i><span id="startNoteText">Load a right-ear calibration to start</span></span>
+    </div>
+  </header>
+  <div class="eb-two">
+    <div class="eb-rail">
+      <div class="eb-field"><label class="eb-field-l" for="f-input">Input</label><div class="eb-selwrap"><select id="f-input"><option>miniDSP EARS</option><option>miniDSP EARS Pro</option></select><i class="ti ti-chevron-down chev" aria-hidden="true"></i></div></div>
+      <div class="eb-field">
+        <label class="eb-field-l" for="f-combine">Combine mode</label>
+        <div class="eb-selwrap"><select id="f-combine"><option>Average (L+R)/2</option><option>Sum L+R</option><option>Two-pass: Left only</option><option>Two-pass: Right only</option></select><i class="ti ti-chevron-down chev" aria-hidden="true"></i></div>
+        <p class="eb-help" id="combineHelp"><span class="eb-rec"><i class="ti ti-check" aria-hidden="true"></i>Recommended</span> averages both ears to one mono signal.</p>
+      </div>
+      <div class="eb-field">
+        <label class="eb-field-l" for="f-output">Output (virtual cable)</label>
+        <div class="eb-selwrap"><select id="f-output"><option>CABLE Input (VB-Audio)</option><option>BlackHole 2ch</option></select><i class="ti ti-chevron-down chev" aria-hidden="true"></i></div>
+        <p class="eb-help"><i class="ti ti-info-circle" aria-hidden="true"></i>In Dirac Live, choose this device's capture side as the recording input.</p>
+      </div>
+      <div class="eb-row2">
+        <div class="eb-field"><label class="eb-field-l" for="f-rate">Rate</label><div class="eb-selwrap"><select id="f-rate"><option>48 kHz</option><option>96 kHz</option><option>192 kHz</option></select><i class="ti ti-chevron-down chev" aria-hidden="true"></i></div></div>
+        <div class="eb-field"><label class="eb-field-l" for="f-depth">Depth</label><div class="eb-selwrap"><select id="f-depth"><option>24-bit</option><option>16-bit</option><option>32-bit</option></select><i class="ti ti-chevron-down chev" aria-hidden="true"></i></div></div>
+      </div>
+      <button class="eb-disc" id="advBtn" type="button" aria-expanded="false" aria-controls="adv"><i class="ti ti-chevron-right" aria-hidden="true"></i>Advanced</button>
+      <div class="eb-adv" id="adv">
+        <label class="eb-check"><input type="checkbox"><span class="eb-box"><i class="ti ti-check" aria-hidden="true"></i></span>Complex (with-phase) FIR</label>
+        <div class="eb-field" style="margin-top:8px"><label class="eb-field-l" for="f-fir">FIR length</label><div class="eb-selwrap"><select id="f-fir"><option>Auto (scales with rate)</option><option>8192</option><option>16384</option><option>32768</option></select><i class="ti ti-chevron-down chev" aria-hidden="true"></i></div></div>
+        <div class="eb-field" style="margin-top:10px"><label class="eb-field-l" for="f-trim">Output trim</label><div class="eb-slider"><input type="range" id="f-trim" min="-24" max="0" step="0.5" value="-3"><span class="eb-num" id="trimVal">−3.0 dB</span></div></div>
+      </div>
+    </div>
+    <div class="eb-pane">
+      <h2 class="eb-eyebrow">Calibration</h2>
+      <section class="eb-card">
+        <div class="eb-card-h"><i class="ti ti-ear" aria-hidden="true"></i><h3 class="name">Left ear</h3><span class="eb-spacer"></span><span class="eb-info">HPN</span></div>
+        <svg class="eb-plot" viewBox="0 0 420 148" preserveAspectRatio="none" role="img" aria-label="Left ear response in decibels versus frequency in hertz, roughly flat with a cut near 4 kHz">
+          <line x1="44" y1="38" x2="408" y2="38" stroke="var(--grid)"/><line x1="44" y1="72" x2="408" y2="72" stroke="var(--grid)"/><line x1="44" y1="106" x2="408" y2="106" stroke="var(--grid)"/>
+          <line x1="120" y1="20" x2="120" y2="124" stroke="var(--grid)"/><line x1="236" y1="20" x2="236" y2="124" stroke="var(--grid)"/><line x1="344" y1="20" x2="344" y2="124" stroke="var(--grid)"/>
+          <path class="curve" d="M44 70 C 100 66, 156 68, 196 78 C 226 86, 242 120, 262 113 C 282 106, 304 73, 338 65 C 372 58, 396 57, 408 55" fill="none" stroke="var(--accent)" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+          <text class="eb-axis" x="44" y="16">dB</text><text class="eb-axis" x="40" y="42" text-anchor="end">+6</text><text class="eb-axis" x="40" y="76" text-anchor="end">0</text><text class="eb-axis" x="40" y="110" text-anchor="end">−6</text>
+          <text class="eb-axis" x="120" y="140" text-anchor="middle">100</text><text class="eb-axis" x="236" y="140" text-anchor="middle">1k</text><text class="eb-axis" x="344" y="140" text-anchor="middle">10k</text><text class="eb-axis" x="404" y="140" text-anchor="end">Hz</text>
+        </svg>
+        <div class="eb-meta"><span class="eb-fname">L_HPN.txt · serial 000-0000</span><button class="eb-btn" type="button" aria-label="Replace left-ear calibration file"><i class="ti ti-folder-open" aria-hidden="true"></i>Replace…</button></div>
+      </section>
+      <section class="eb-card">
+        <div class="eb-card-h"><i class="ti ti-ear" aria-hidden="true"></i><h3 class="name">Right ear</h3><span class="eb-spacer"></span><span class="eb-req" id="rightTag">Required to start</span></div>
+        <button class="eb-drop" id="drop" type="button"><i class="ti ti-file-upload" aria-hidden="true"></i><span>Drop a calibration file</span><span class="d2">FRD text file, or click to browse</span></button>
+        <div id="rightLoaded" hidden>
+          <svg class="eb-plot" viewBox="0 0 420 148" preserveAspectRatio="none" role="img" aria-label="Right ear response in decibels versus frequency in hertz">
+            <line x1="44" y1="38" x2="408" y2="38" stroke="var(--grid)"/><line x1="44" y1="72" x2="408" y2="72" stroke="var(--grid)"/><line x1="44" y1="106" x2="408" y2="106" stroke="var(--grid)"/>
+            <line x1="120" y1="20" x2="120" y2="124" stroke="var(--grid)"/><line x1="236" y1="20" x2="236" y2="124" stroke="var(--grid)"/><line x1="344" y1="20" x2="344" y2="124" stroke="var(--grid)"/>
+            <path class="curve" d="M44 68 C 100 64, 156 67, 196 76 C 226 84, 244 116, 264 110 C 284 104, 306 72, 338 66 C 372 60, 396 58, 408 57" fill="none" stroke="var(--accent)" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+            <text class="eb-axis" x="44" y="16">dB</text><text class="eb-axis" x="40" y="76" text-anchor="end">0</text>
+            <text class="eb-axis" x="120" y="140" text-anchor="middle">100</text><text class="eb-axis" x="236" y="140" text-anchor="middle">1k</text><text class="eb-axis" x="344" y="140" text-anchor="middle">10k</text><text class="eb-axis" x="404" y="140" text-anchor="end">Hz</text>
+          </svg>
+          <div class="eb-meta"><span class="eb-fname">R_HPN.txt · serial 000-0000</span><button class="eb-btn" type="button" aria-label="Replace right-ear calibration file"><i class="ti ti-folder-open" aria-hidden="true"></i>Replace…</button></div>
+        </div>
+      </section>
+      <section class="eb-monitor">
+        <h3 class="eb-mhead"><i class="ti ti-activity" style="font-size:13px" aria-hidden="true"></i>Levels</h3>
+        <div class="eb-meter"><span class="ml" aria-hidden="true">L</span><div class="eb-mtrack" role="meter" aria-label="Left input level" aria-valuemin="-60" aria-valuemax="0" aria-valuenow="-20"><div class="eb-zamber"></div><div class="eb-zred"></div><div class="eb-mfill" data-base="66"></div></div><span class="eb-mdb">−20 dB</span></div>
+        <div class="eb-meter"><span class="ml" aria-hidden="true">R</span><div class="eb-mtrack" role="meter" aria-label="Right input level" aria-valuemin="-60" aria-valuemax="0" aria-valuenow="-22"><div class="eb-zamber"></div><div class="eb-zred"></div><div class="eb-mfill" data-base="63"></div></div><span class="eb-mdb">−22 dB</span></div>
+        <div class="eb-meter"><span class="ml" aria-hidden="true">Out</span><div class="eb-mtrack" role="meter" aria-label="Output level" aria-valuemin="-60" aria-valuemax="0" aria-valuenow="-60"><div class="eb-zamber"></div><div class="eb-zred"></div><div class="eb-mfill" data-base="0" style="width:0"></div></div><span class="eb-mdb">— idle</span></div>
+      </section>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var rightLoaded = false, running = false;
+  var start = document.getElementById('start'), startLabel = document.getElementById('startLabel'),
+      startIcon = start.querySelector('.ti'), note = document.getElementById('startNote'), noteText = document.getElementById('startNoteText');
+
+  function setNote(t, ok){ noteText.textContent = t; note.classList.toggle('ok', !!ok); note.querySelector('.ti').className = 'ti ' + (ok ? 'ti-circle-check' : 'ti-info-circle'); }
+  function refresh(){
+    start.disabled = !rightLoaded;
+    startLabel.textContent = running ? 'Stop' : 'Start';
+    startIcon.className = 'ti ' + (running ? 'ti-player-stop' : 'ti-player-play');
+    if(running) setNote('Running · clean', true);
+    else if(rightLoaded) setNote('Ready', false);
+    else setNote('Load a right-ear calibration to start', false);
+  }
+  document.getElementById('drop').addEventListener('click', function(){
+    rightLoaded = true;
+    this.hidden = true;
+    var loaded = document.getElementById('rightLoaded'); loaded.hidden = false;
+    var svg = loaded.querySelector('.eb-plot'); if(!reduce){ svg.classList.add('draw'); }
+    var tag = document.getElementById('rightTag'); tag.className = 'eb-info'; tag.textContent = 'HPN';
+    refresh();
+  });
+  start.addEventListener('click', function(){ if(start.disabled) return; running = !running; refresh(); });
+  var advBtn = document.getElementById('advBtn'), adv = document.getElementById('adv');
+  advBtn.addEventListener('click', function(){ var open = advBtn.getAttribute('aria-expanded') === 'true'; advBtn.setAttribute('aria-expanded', String(!open)); adv.classList.toggle('open', !open); });
+  var trim = document.getElementById('f-trim'), trimVal = document.getElementById('trimVal');
+  trim.addEventListener('input', function(){ trimVal.textContent = (Number(this.value) < 0 ? '−' : '') + Math.abs(Number(this.value)).toFixed(1) + ' dB'; });
+  var combine = document.getElementById('f-combine'), help = document.getElementById('combineHelp');
+  combine.addEventListener('change', function(){
+    var rec = '<span class="eb-rec"><i class="ti ti-check"></i>Recommended</span> ';
+    var msg = this.selectedIndex === 0 ? rec + 'averages both ears to one mono signal.'
+            : this.value === 'Sum L+R' ? 'Sums both ears (+6 dB). Watch for clipping.'
+            : 'Two-pass mirrors miniDSP’s official single-ear method.';
+    help.innerHTML = msg;
+  });
+  // animated meters (respect reduce-motion)
+  var fills = [].slice.call(document.querySelectorAll('.eb-mfill'));
+  var dbs = [].slice.call(document.querySelectorAll('.eb-mdb'));
+  function tick(){
+    fills.forEach(function(f, i){
+      var base = Number(f.getAttribute('data-base'));
+      if(i === 2 && !running){ f.style.width = '0'; dbs[i].textContent = '— idle'; return; }
+      var b = (i === 2 && running) ? 88 : base;
+      var w = Math.max(0, Math.min(95, b + (Math.random()*8 - 4)));
+      f.style.width = w + '%';
+      var db = Math.round((w/100)*60 - 60);
+      f.style.background = w > 95 ? 'var(--err)' : w > 92 ? 'var(--warn)' : 'var(--ok)';
+      dbs[i].textContent = '−' + Math.abs(db) + ' dB';
+    });
+  }
+  if(reduce){ tick(); } else { tick(); setInterval(tick, 140); }
+  refresh();
+})();
+</script>
+</div>
+</body>
+</html>
