@@ -2,43 +2,124 @@
 
 namespace eb {
 
+bool Theme::s_dark = true;
+
+bool Theme::dark() { return s_dark; }
+
+// pick(darkARGB, lightARGB) — return the active-mode colour.
+static inline juce::Colour pick (juce::uint32 d, juce::uint32 l) {
+    return juce::Colour (Theme::dark() ? d : l);
+}
+
+juce::Colour Theme::bg()        { return pick (0xff1E1E1E, 0xffECECEE); }
+juce::Colour Theme::surface()   { return pick (0xff2A2A2A, 0xffFFFFFF); }
+juce::Colour Theme::rail()      { return pick (0xff232323, 0xffF6F6F8); }
+juce::Colour Theme::barBg()     { return pick (0xff262626, 0xffF6F6F8); }
+juce::Colour Theme::ctrl()      { return pick (0xff38383A, 0xffFFFFFF); }
+juce::Colour Theme::ctrlHover() { return pick (0xff414146, 0xffF0F0F2); }
+juce::Colour Theme::track()     { return pick (0xff161616, 0xffE3E3E6); }
+juce::Colour Theme::plot()      { return pick (0xff202020, 0xffF3F3F5); }
+juce::Colour Theme::grid()      { return pick (0x14ffffff, 0x17000000); }
+juce::Colour Theme::sep()       { return pick (0x1fffffff, 0x1f000000); }
+juce::Colour Theme::sep2()      { return pick (0x29ffffff, 0x2e000000); }
+juce::Colour Theme::text()      { return pick (0xffffffff, 0xd9000000); }
+juce::Colour Theme::textDim()   { return pick (0x9effffff, 0x99000000); }
+juce::Colour Theme::textFaint() { return pick (0x4dffffff, 0x59000000); }
+juce::Colour Theme::axis()      { return pick (0xff98989D, 0xff5C5C61); }
+juce::Colour Theme::accent()    { return pick (0xff0091FF, 0xff0088FF); }
+juce::Colour Theme::accentHover(){ return pick (0xff1F9DFF, 0xff0A7BEA); }
+juce::Colour Theme::ok()        { return pick (0xff30D158, 0xff34C759); }
+juce::Colour Theme::warn()      { return pick (0xffFF9230, 0xffC2630A); }
+juce::Colour Theme::danger()    { return pick (0xffFF4245, 0xffD6322F); }
+juce::Colour Theme::chipBg()    { return pick (0x1affffff, 0x0f000000); }
+juce::Colour Theme::infoText()  { return pick (0xff5AB7FF, 0xff0067D6); }
+juce::Colour Theme::infoBg()    { return pick (0x290091FF, 0x1f0088FF); }
+
 Theme::Theme() {
-    // ColourScheme is a NESTED type of LookAndFeel_V4 — there is no juce::ColourScheme at
-    // namespace scope, so name it via the base class (the 9-colour braced init then invokes
-    // the variadic ColourScheme ctor which static_asserts exactly 9 colours).
+    s_dark = juce::Desktop::getInstance().isDarkModeActive();
+    applyColours();
+}
+
+void Theme::applyColours() {
     LookAndFeel_V4::ColourScheme scheme = {
-        bg(),          // windowBackground
-        panel(),       // widgetBackground
-        outline(),     // menuBackground
-        outline(),     // outline
-        text(),        // defaultText
-        accent(),      // defaultFill
-        text(),        // highlightedText
-        accent(),      // highlightedFill
-        text()         // menuText
+        bg(), surface(), rail(), sep2(), text(), accent(), text(), accent(), text()
     };
     setColourScheme (scheme);
 
-    // Direct component-colour overrides for the controls the GUI uses.
     setColour (juce::ResizableWindow::backgroundColourId,    bg());
     setColour (juce::Label::textColourId,                    text());
-    setColour (juce::ComboBox::backgroundColourId,           panel());
+    setColour (juce::ComboBox::backgroundColourId,           ctrl());
     setColour (juce::ComboBox::textColourId,                 text());
-    setColour (juce::ComboBox::outlineColourId,              outline());
-    setColour (juce::ComboBox::arrowColourId,                accent());
-    setColour (juce::PopupMenu::backgroundColourId,          panel());
-    setColour (juce::PopupMenu::highlightedBackgroundColourId, accent().withAlpha (0.35f));
-    setColour (juce::TextButton::buttonColourId,             panel());
+    setColour (juce::ComboBox::outlineColourId,              sep2());
+    setColour (juce::ComboBox::arrowColourId,                textDim());
+    setColour (juce::PopupMenu::backgroundColourId,          surface());
+    setColour (juce::PopupMenu::textColourId,                text());
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, accent().withAlpha (0.30f));
+    setColour (juce::PopupMenu::highlightedTextColourId,     text());
+    setColour (juce::TextButton::buttonColourId,             ctrl());
     setColour (juce::TextButton::buttonOnColourId,           accent());
-    setColour (juce::TextButton::textColourOnId,             juce::Colours::black);
+    setColour (juce::TextButton::textColourOnId,             juce::Colours::white);
     setColour (juce::TextButton::textColourOffId,            text());
     setColour (juce::Slider::thumbColourId,                  accent());
-    setColour (juce::Slider::trackColourId,                  accent().withAlpha (0.6f));
-    setColour (juce::Slider::backgroundColourId,             outline());
+    setColour (juce::Slider::trackColourId,                  accent());
+    setColour (juce::Slider::backgroundColourId,             track());
+    setColour (juce::Slider::textBoxTextColourId,            textDim());
+    setColour (juce::Slider::textBoxOutlineColourId,         juce::Colours::transparentBlack);
     setColour (juce::ToggleButton::textColourId,             text());
     setColour (juce::ToggleButton::tickColourId,             accent());
-    setColour (juce::TooltipWindow::backgroundColourId,      panel());
+    setColour (juce::ToggleButton::tickDisabledColourId,     sep2());
+    setColour (juce::TooltipWindow::backgroundColourId,      surface());
     setColour (juce::TooltipWindow::textColourId,            text());
+}
+
+void Theme::drawButtonBackground (juce::Graphics& g, juce::Button& b,
+                                  const juce::Colour& /*backgroundColour*/,
+                                  bool over, bool down) {
+    auto r = b.getLocalBounds().toFloat();
+    const float radius = r.getHeight() * 0.5f;   // capsule
+    const bool primary = (bool) b.getProperties().getWithDefault ("primary", false);
+
+    juce::Colour fill;
+    if (! b.isEnabled())   fill = primary ? ctrl() : ctrl();
+    else if (primary)      fill = over ? accentHover() : accent();
+    else                   fill = over ? ctrlHover()  : ctrl();
+    if (down && b.isEnabled()) fill = fill.darker (0.08f);
+
+    g.setColour (fill);
+    g.fillRoundedRectangle (r, radius);
+    if (! primary || ! b.isEnabled()) {
+        g.setColour (sep2());
+        g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.0f);
+    }
+}
+
+void Theme::drawComboBox (juce::Graphics& g, int w, int h, bool /*isDown*/,
+                          int /*bx*/, int /*by*/, int /*bw*/, int /*bh*/, juce::ComboBox& box) {
+    auto r = juce::Rectangle<float> (0, 0, (float) w, (float) h).reduced (0.5f);
+    const float radius = 8.0f;
+    g.setColour (box.findColour (juce::ComboBox::backgroundColourId));
+    g.fillRoundedRectangle (r, radius);
+    g.setColour (box.findColour (juce::ComboBox::outlineColourId));
+    g.drawRoundedRectangle (r, radius, 1.0f);
+
+    // Trailing chevron.
+    juce::Path chev;
+    const float cx = (float) w - 18.0f, cy = (float) h * 0.5f, s = 4.0f;
+    chev.startNewSubPath (cx - s, cy - s * 0.5f);
+    chev.lineTo (cx, cy + s * 0.6f);
+    chev.lineTo (cx + s, cy - s * 0.5f);
+    g.setColour (box.findColour (juce::ComboBox::arrowColourId));
+    g.strokePath (chev, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved,
+                                              juce::PathStrokeType::rounded));
+}
+
+juce::Font Theme::getComboBoxFont (juce::ComboBox&) {
+    return juce::Font (juce::FontOptions (13.0f));
+}
+
+void Theme::positionComboBoxText (juce::ComboBox& box, juce::Label& label) {
+    label.setBounds (12, 0, box.getWidth() - 34, box.getHeight());
+    label.setFont (getComboBoxFont (box));
 }
 
 } // namespace eb

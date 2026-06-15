@@ -39,14 +39,22 @@ private:
     void onRightCalLoaded (const juce::File&);
     void onStartStop();
     void updateStatusLine();
+    void updateStartGate();          // enable Start only when both ear cals are loaded
     double activeRate() const;
 
     Theme theme;
     AudioEngine engine;
     Settings settings;
 
+    // Title bar brand.
+    juce::Label brandLabel;
+    // Right-pane section eyebrows.
+    juce::Label calEyebrow;
+    juce::Label levelsEyebrow;
+    juce::Rectangle<int> levelsBounds;   // Levels card backdrop (drawn in paint)
+
     // Input row.
-    DevicePicker inputPicker { "INPUT (EARS)" };
+    DevicePicker inputPicker { "INPUT" };
     // Cal slots.
     CalSlotComponent leftCal  { "LEFT EAR CAL" };
     CalSlotComponent rightCal { "RIGHT EAR CAL" };
@@ -55,15 +63,14 @@ private:
     juce::ComboBox combineBox;
     juce::Label    combineHint;
     // Output row.
-    DevicePicker outputPicker { "OUTPUT (VIRTUAL SINK)" };
+    DevicePicker outputPicker { "OUTPUT (VIRTUAL CABLE)" };
     juce::Label  outputHint;     // "set this device's capture side as Dirac's Recording device"
     juce::Label  preflightLabel; // warnings (yellow)
     // Rate + bit depth.
     juce::Label    rateLabel;    juce::ComboBox rateBox;    juce::Label rateWarn;
     juce::Label    bitLabel;     juce::ComboBox bitBox;
     // Meters.
-    LevelMeter meterL { "L" }, meterR { "R" }, meterOut { "OUT" };
-    juce::Label cleanLight;      // "clean capture" status dot text
+    LevelMeter meterL { "L" }, meterR { "R" }, meterOut { "Out" };
     // Transport.
     juce::TextButton startStop { "Start" };
     juce::Label statusLine;

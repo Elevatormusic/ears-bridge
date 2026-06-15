@@ -9,55 +9,60 @@ LevelMeter::LevelMeter (juce::String caption) : label (std::move (caption)) {
 }
 
 float LevelMeter::linearToFrac (float linear) {
-    // Display window: -60 dBFS (bottom) .. 0 dBFS (top).
+    // Display window: -60 dBFS (left) .. 0 dBFS (right).
     constexpr float floorDb = -60.0f;
     const float db = (linear <= 1.0e-6f) ? floorDb : 20.0f * std::log10 (linear);
-    const float t  = juce::jlimit (0.0f, 1.0f, (db - floorDb) / (0.0f - floorDb));
-    return t;
+    return juce::jlimit (0.0f, 1.0f, (db - floorDb) / (0.0f - floorDb));
 }
 
 void LevelMeter::setLevel (float peakLinear, bool clip) {
     // Fast attack, slow release for a readable bar.
     level = juce::jmax (peakLinear, level * 0.80f);
-    peakHold = juce::jmax (peakLinear, peakHold * 0.95f);
-    if (clip) clipLatched = true;        // latches until a manual repaint cycle clears it
+    if (clip) clipLatched = true;
+    if (level <= 1.0e-6f) clipLatched = false;   // clears once the signal is gone (stopped)
     repaint();
 }
 
 void LevelMeter::paint (juce::Graphics& g) {
-    auto r = getLocalBounds().toFloat().reduced (2.0f);
+    auto r = getLocalBounds().toFloat();
 
-    // Caption + clip LED strip at the top.
-    auto ledArea = r.removeFromTop (10.0f);
-    g.setColour (clipLatched ? Theme::danger() : Theme::outline());
-    g.fillRoundedRectangle (ledArea.removeFromRight (10.0f), 2.0f);
-    if (label.isNotEmpty()) {
-        g.setColour (Theme::textDim());
-        g.setFont (juce::Font (juce::FontOptions (11.0f)));
-        g.drawText (label, ledArea, juce::Justification::centredLeft);
+    auto lab = r.removeFromLeft (26.0f);
+    g.setColour (Theme::textDim());
+    g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+    g.drawText (label, lab, juce::Justification::centredLeft);
+
+    auto dbBox = r.removeFromRight (52.0f);
+    r.removeFromRight (8.0f);
+
+    auto track = r.withSizeKeepingCentre (r.getWidth(), 8.0f);
+    const float W = track.getWidth();
+    g.setColour (Theme::track());
+    g.fillRoundedRectangle (track, 4.0f);
+
+    // Zones near full scale: amber from -1.0 dB-ish, red at the very top.
+    g.setColour (Theme::warn().withAlpha (0.65f));
+    g.fillRect (juce::Rectangle<float> (track.getRight() - W * 0.050f, track.getY(),
+                                        W * 0.034f, track.getHeight()));
+    g.setColour (Theme::danger().withAlpha (0.85f));
+    g.fillRect (juce::Rectangle<float> (track.getRight() - W * 0.016f, track.getY(),
+                                        W * 0.016f, track.getHeight()));
+
+    const float frac = linearToFrac (level);
+    if (frac > 0.002f) {
+        auto fill = track.withWidth (juce::jmax (4.0f, frac * W));
+        juce::Colour c = (clipLatched || frac > 0.95f) ? Theme::danger()
+                       : (frac > 0.92f)                ? Theme::warn()
+                                                       : Theme::ok();
+        g.setColour (c);
+        g.fillRoundedRectangle (fill, 4.0f);
     }
 
-    r.removeFromTop (2.0f);
-    // Track.
-    g.setColour (Theme::panel());
-    g.fillRoundedRectangle (r, 3.0f);
-
-    // Filled portion (bottom-up).
-    const float frac = linearToFrac (level);
-    auto fill = r.withTop (r.getBottom() - frac * r.getHeight());
-    juce::ColourGradient grad (Theme::meterLo(), fill.getX(), fill.getBottom(),
-                               Theme::meterHi(), fill.getX(), r.getY(), false);
-    grad.addColour (0.7, Theme::meterMid());
-    g.setGradientFill (grad);
-    g.fillRoundedRectangle (fill, 3.0f);
-
-    // Peak-hold tick.
-    const float py = r.getBottom() - linearToFrac (peakHold) * r.getHeight();
-    g.setColour (Theme::text());
-    g.fillRect (r.getX(), py - 1.0f, r.getWidth(), 2.0f);
-
-    g.setColour (Theme::outline());
-    g.drawRoundedRectangle (r, 3.0f, 1.0f);
+    g.setColour (Theme::textDim());
+    g.setFont (juce::Font (juce::FontOptions (11.0f)));
+    const float db = (level <= 1.0e-5f) ? -120.0f : 20.0f * std::log10 (level);
+    juce::String txt = (db <= -60.0f) ? juce::String ("-")
+                                      : "-" + juce::String ((int) std::round (-db)) + " dB";
+    g.drawText (txt, dbBox, juce::Justification::centredRight);
 }
 
 } // namespace eb

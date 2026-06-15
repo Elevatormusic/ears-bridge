@@ -2,141 +2,134 @@
 
 namespace eb {
 
+static void styleEyebrow (juce::Label& l, const juce::String& t) {
+    l.setText (t, juce::dontSendNotification);
+    l.setColour (juce::Label::textColourId, Theme::textDim());
+    l.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+}
+
 MainComponent::MainComponent() {
     setLookAndFeel (&theme);
     firPool = std::make_unique<juce::ThreadPool> (1);
+
+    // --- Title bar brand ---
+    brandLabel.setText ("EARS Bridge", juce::dontSendNotification);
+    brandLabel.setColour (juce::Label::textColourId, Theme::text());
+    brandLabel.setFont (juce::Font (juce::FontOptions (15.0f).withStyle ("Bold")));
+    addAndMakeVisible (brandLabel);
+
+    // --- Transport (gated Start + status note) ---
+    startStop.getProperties().set ("primary", true);
+    startStop.onClick = [this] { onStartStop(); };
+    addAndMakeVisible (startStop);
+    statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+    statusLine.setFont (juce::Font (juce::FontOptions (11.0f)));
+    statusLine.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (statusLine);
 
     // --- Input picker ---
     inputPicker.onDeviceChosen = [this] (const DeviceId& d) { onInputChosen (d); };
     addAndMakeVisible (inputPicker);
 
-    // --- Cal slots ---
-    leftCal.onCalLoaded  = [this] (const juce::File& f) { onLeftCalLoaded (f); };
-    rightCal.onCalLoaded = [this] (const juce::File& f) { onRightCalLoaded (f); };
-    addAndMakeVisible (leftCal);
-    addAndMakeVisible (rightCal);
-
-    // --- Combine selector (ordered by rigor) ---
-    combineLabel.setText ("COMBINE MODE", juce::dontSendNotification);
-    combineLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    combineLabel.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+    // --- Combine selector ---
+    styleEyebrow (combineLabel, "COMBINE MODE");
     addAndMakeVisible (combineLabel);
-
     combineModel = combineModeOrder();
     for (size_t i = 0; i < combineModel.size(); ++i) {
         auto& m = combineModel[i];
         juce::String label;
         switch (m.mode) {
-            case CombineMode::TwoPassLeft:  label = "Two-pass: Left ear only";  break;
-            case CombineMode::TwoPassRight: label = "Two-pass: Right ear only"; break;
-            case CombineMode::Average:      label = "Average (L+R)/2";          break;
-            case CombineMode::Sum:          label = "Sum L+R";                  break;
+            case CombineMode::TwoPassLeft:  label = "Two-pass: Left only";   break;
+            case CombineMode::TwoPassRight: label = "Two-pass: Right only";  break;
+            case CombineMode::Average:      label = "Average (L+R)/2";       break;
+            case CombineMode::Sum:          label = "Sum L+R";               break;
         }
-        if (m.recommended)     label += "   [Recommended]";
-        if (m.clipRiskWarning) label += "   (+6 dB clip risk)";
+        if (m.recommended)     label += "   (recommended)";
+        if (m.clipRiskWarning) label += "   (+6 dB)";
         combineBox.addItem (label, (int) i + 1);
     }
     combineBox.onChange = [this] { onCombineChosen(); };
     addAndMakeVisible (combineBox);
-
-    combineHint.setText ("Two-pass single-ear mirrors miniDSP's official method: "
-                         "route Dirac playback to one earcup per pass.",
-                         juce::dontSendNotification);
     combineHint.setColour (juce::Label::textColourId, Theme::textDim());
-    combineHint.setFont (juce::Font (juce::FontOptions (10.5f)));
+    combineHint.setFont (juce::Font (juce::FontOptions (11.0f)));
     combineHint.setJustificationType (juce::Justification::topLeft);
+    combineHint.setMinimumHorizontalScale (1.0f);
     addAndMakeVisible (combineHint);
 
-    // --- Output picker + hint + preflight ---
+    // --- Output picker + Dirac hint + preflight ---
     outputPicker.onDeviceChosen = [this] (const DeviceId& d) { onOutputChosen (d); };
     addAndMakeVisible (outputPicker);
-
-    outputHint.setText ("In Dirac Live, pick this device's CAPTURE side as the Recording device.",
+    outputHint.setText ("In Dirac Live, choose this device's capture side as the recording input.",
                         juce::dontSendNotification);
     outputHint.setColour (juce::Label::textColourId, Theme::textDim());
-    outputHint.setFont (juce::Font (juce::FontOptions (10.5f)));
+    outputHint.setFont (juce::Font (juce::FontOptions (11.0f)));
+    outputHint.setJustificationType (juce::Justification::topLeft);
     addAndMakeVisible (outputHint);
-
     preflightLabel.setColour (juce::Label::textColourId, Theme::warn());
-    preflightLabel.setFont (juce::Font (juce::FontOptions (10.5f)));
+    preflightLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
     addAndMakeVisible (preflightLabel);
 
-    // --- Rate + bit depth ---
-    rateLabel.setText ("SAMPLE RATE", juce::dontSendNotification);
-    rateLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    rateLabel.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+    // --- Rate + depth ---
+    styleEyebrow (rateLabel, "RATE");
     addAndMakeVisible (rateLabel);
     rateBox.onChange = [this] { onRateChosen(); };
     addAndMakeVisible (rateBox);
     rateWarn.setColour (juce::Label::textColourId, Theme::warn());
     rateWarn.setFont (juce::Font (juce::FontOptions (10.5f)));
     addAndMakeVisible (rateWarn);
-
-    bitLabel.setText ("OUTPUT BIT DEPTH", juce::dontSendNotification);
-    bitLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    bitLabel.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+    styleEyebrow (bitLabel, "DEPTH");
     addAndMakeVisible (bitLabel);
     bitBox.onChange = [this] { onBitDepthChosen(); };
     addAndMakeVisible (bitBox);
 
-    // --- Meters ---
-    addAndMakeVisible (meterL);
-    addAndMakeVisible (meterR);
-    addAndMakeVisible (meterOut);
-    cleanLight.setColour (juce::Label::textColourId, Theme::ok());
-    cleanLight.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
-    cleanLight.setText ("clean", juce::dontSendNotification);
-    addAndMakeVisible (cleanLight);
-
-    // --- Transport ---
-    startStop.onClick = [this] { onStartStop(); };
-    addAndMakeVisible (startStop);
-    statusLine.setColour (juce::Label::textColourId, Theme::textDim());
-    statusLine.setFont (juce::Font (juce::FontOptions (11.0f)));
-    statusLine.setText ("Stopped", juce::dontSendNotification);
-    addAndMakeVisible (statusLine);
-
-    // --- Advanced ---
-    addAndMakeVisible (advancedToggle);
+    // --- Advanced disclosure ---
+    advancedToggle.setButtonText ("Advanced");
     advancedToggle.onClick = [this] { resized(); };
-
+    addAndMakeVisible (advancedToggle);
+    complexPhaseToggle.setButtonText ("Complex (with-phase) FIR");
     complexPhaseToggle.onClick = [this] {
         settings.setComplexPhase (complexPhaseToggle.getToggleState());
         rebuildFirsAsync();
     };
     addChildComponent (complexPhaseToggle);
-
-    firLenLabel.setText ("FIR LENGTH", juce::dontSendNotification);
-    firLenLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    firLenLabel.setFont (juce::Font (juce::FontOptions (10.5f).withStyle ("Bold")));
+    styleEyebrow (firLenLabel, "FIR LENGTH");
     addChildComponent (firLenLabel);
-    // "Auto" (item id kFirLenAutoId) means taps scale with the rate via numTapsForRate();
-    // the explicit overrides keep item id == tap count. 32768 stays valid for 192 kHz.
     firLenBox.addItem ("Auto (scales with rate)", kFirLenAutoId);
     for (int n : { 4096, 8192, 16384, 32768 }) firLenBox.addItem (juce::String (n), n);
     firLenBox.onChange = [this] {
         const int id = firLenBox.getSelectedId();
-        settings.setFirLength (id == kFirLenAutoId ? 0 : id);   // 0 = Auto sentinel in Settings
+        settings.setFirLength (id == kFirLenAutoId ? 0 : id);
         rebuildFirsAsync();
     };
     addChildComponent (firLenBox);
-
-    trimLabel.setText ("OUTPUT TRIM (dB)", juce::dontSendNotification);
-    trimLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    trimLabel.setFont (juce::Font (juce::FontOptions (10.5f).withStyle ("Bold")));
+    styleEyebrow (trimLabel, "OUTPUT TRIM (dB)");
     addChildComponent (trimLabel);
     trimSlider.setRange (-24.0, 0.0, 0.1);
     trimSlider.setSliderStyle (juce::Slider::LinearHorizontal);
-    trimSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 20);
+    trimSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 22);
     trimSlider.onValueChange = [this] { settings.setOutputTrimDb (trimSlider.getValue()); };
     addChildComponent (trimSlider);
+
+    // --- Right pane: cal cards + Levels ---
+    styleEyebrow (calEyebrow, "CALIBRATION");
+    addAndMakeVisible (calEyebrow);
+    leftCal.onCalLoaded  = [this] (const juce::File& f) { onLeftCalLoaded (f);  updateStartGate(); };
+    rightCal.onCalLoaded = [this] (const juce::File& f) { onRightCalLoaded (f); updateStartGate(); };
+    addAndMakeVisible (leftCal);
+    addAndMakeVisible (rightCal);
+    styleEyebrow (levelsEyebrow, "LEVELS");
+    addAndMakeVisible (levelsEyebrow);
+    addAndMakeVisible (meterL);
+    addAndMakeVisible (meterR);
+    addAndMakeVisible (meterOut);
 
     // --- Restore persisted state ---
     combineBox.setSelectedId ((int) settings.combineMode() + 1, juce::dontSendNotification);
     complexPhaseToggle.setToggleState (settings.complexPhase(), juce::dontSendNotification);
     firLenBox.setSelectedId (settings.firLength() > 0 ? settings.firLength() : kFirLenAutoId,
-                             juce::dontSendNotification);   // 0 (Auto) -> the Auto item
+                             juce::dontSendNotification);
     trimSlider.setValue (settings.outputTrimDb(), juce::dontSendNotification);
+    onCombineChosen();   // seed the combine helper text
 
     refreshDeviceLists();
     rebuildRateMenu();
@@ -147,8 +140,9 @@ MainComponent::MainComponent() {
     if (settings.rightCalPath().isNotEmpty())
         rightCal.loadFromFile (juce::File (settings.rightCalPath()));
 
-    setSize (980, 720);
-    startTimerHz (30);   // poll levels()/health()
+    updateStartGate();
+    setSize (900, 700);
+    startTimerHz (30);
 }
 
 MainComponent::~MainComponent() {
@@ -166,12 +160,10 @@ void MainComponent::refreshDeviceLists() {
 }
 
 void MainComponent::onInputChosen (const DeviceId& d) {
-    if (engine.status() == EngineStatus::Running) return;   // configure only while Stopped
+    if (engine.status() == EngineStatus::Running) return;
     engine.setInput (d);
     settings.setInputKey (d.key());
     settings.setInputModel (d.model);
-
-    // Snap the selected rate to a native rate if the new device can't do the old one.
     auto rates = engine.supportedSampleRates (d);
     if (! rates.empty()) {
         bool ok = false;
@@ -180,7 +172,7 @@ void MainComponent::onInputChosen (const DeviceId& d) {
     }
     rebuildRateMenu();
     rebuildBitDepthMenu();
-    rebuildFirsAsync();   // taps depend on the rate, which may have just changed
+    rebuildFirsAsync();
     updateStatusLine();
 }
 
@@ -188,9 +180,8 @@ void MainComponent::onOutputChosen (const DeviceId& d) {
     if (engine.status() == EngineStatus::Running) return;
     engine.setOutput (d);
     settings.setOutputKey (d.key());
-    // Preflight note for the recommended Dirac flow.
     preflightLabel.setText (d.isVirtualSink ? juce::String()
-                                            : "Selected output is not a known virtual sink.",
+                                            : "Selected output is not a known virtual cable.",
                             juce::dontSendNotification);
     rebuildBitDepthMenu();
     updateStatusLine();
@@ -201,7 +192,6 @@ void MainComponent::rebuildRateMenu() {
     std::vector<double> native = sel ? engine.supportedSampleRates (*sel)
                                      : std::vector<double> { 48000.0 };
     rateModel = buildRateMenu (native, settings.sampleRate());
-
     rateBox.clear (juce::dontSendNotification);
     int selectId = 0;
     bool warn = false;
@@ -213,22 +203,17 @@ void MainComponent::rebuildRateMenu() {
         if (it.selected) { selectId = (int) i + 1; warn = it.resampleWarning; }
     }
     if (selectId != 0) rateBox.setSelectedId (selectId, juce::dontSendNotification);
-    rateWarn.setText (warn ? "This rate is not native to the selected input - it will be resampled."
-                           : juce::String(),
+    rateWarn.setText (warn ? "Not native - will be resampled." : juce::String(),
                       juce::dontSendNotification);
 }
 
 void MainComponent::rebuildBitDepthMenu() {
     auto sel = outputPicker.selectedDevice();
-    // Offer the device's full supported output depths: EARS Pro -> {16,24,32}, EARS -> {24}.
-    // 24-bit is the default; 32-bit is offered only where the sink accepts it (e.g. BlackHole)
-    // and carries no measurement benefit beyond 24-bit. No clamp to {16,24}.
     bitModel = sel ? engine.supportedBitDepths (*sel) : std::vector<int> { 16, 24, 32 };
     std::vector<int> allowed;
     for (int b : bitModel) if (b == 16 || b == 24 || b == 32) allowed.push_back (b);
     if (allowed.empty()) allowed = { 24 };
     bitModel = allowed;
-
     bitBox.clear (juce::dontSendNotification);
     int selectId = 0;
     for (size_t i = 0; i < bitModel.size(); ++i) {
@@ -236,8 +221,6 @@ void MainComponent::rebuildBitDepthMenu() {
         if (bitModel[i] == settings.outputBitDepth()) selectId = (int) i + 1;
     }
     if (selectId == 0 && ! bitModel.empty()) {
-        // Persisted depth not offered by this device: default to 24-bit when available
-        // (ample for measurement), else fall back to the first supported depth.
         int defaultIdx = 0;
         for (size_t i = 0; i < bitModel.size(); ++i) if (bitModel[i] == 24) { defaultIdx = (int) i; break; }
         selectId = defaultIdx + 1;
@@ -253,11 +236,10 @@ void MainComponent::onRateChosen() {
     const double sr = rateModel[(size_t) idx].rate;
     settings.setSampleRate (sr);
     engine.setSampleRate (sr);
-    rateWarn.setText (rateModel[(size_t) idx].resampleWarning
-                          ? "This rate is not native to the selected input - it will be resampled."
-                          : juce::String(),
+    rateWarn.setText (rateModel[(size_t) idx].resampleWarning ? "Not native - will be resampled."
+                                                              : juce::String(),
                       juce::dontSendNotification);
-    rebuildFirsAsync();   // taps scale with rate
+    rebuildFirsAsync();
     updateStatusLine();
 }
 
@@ -274,6 +256,16 @@ void MainComponent::onCombineChosen() {
     const auto mode = combineModel[(size_t) idx].mode;
     settings.setCombineMode (mode);
     engine.setCombineMode (mode);
+    juce::String h;
+    switch (mode) {
+        case CombineMode::Average: h = "Recommended. Averages both ears to one mono signal."; break;
+        case CombineMode::Sum:     h = "Sums both ears (+6 dB). Watch for clipping.";          break;
+        case CombineMode::TwoPassLeft:
+        case CombineMode::TwoPassRight:
+            h = "Mirrors miniDSP's official single-ear method: route Dirac playback to one earcup per pass.";
+            break;
+    }
+    combineHint.setText (h, juce::dontSendNotification);
 }
 
 void MainComponent::onLeftCalLoaded (const juce::File& f) {
@@ -286,25 +278,15 @@ void MainComponent::onRightCalLoaded (const juce::File& f) {
 }
 
 void MainComponent::rebuildFirsAsync() {
-    // Snapshot the inputs needed to design the FIRs, then run the (heavy) design off
-    // the message thread and hand the result to the engine via setLeft/RightCalFir
-    // (hot-swappable). A single-thread pool serialises rebuilds so a rapid rate change
-    // can't race two designs onto the engine out of order.
     const double sr = activeRate();
     const int taps = (settings.firLength() > 0) ? settings.firLength() : numTapsForRate (sr);
     const auto mode = settings.complexPhase() ? FirMode::ComplexWithPhase
                                               : FirMode::MinPhaseMagnitude;
     auto left  = leftCal.calFile();
     auto right = rightCal.calFile();
-
-    // Component::SafePointer (created HERE on the message thread) lets the result-marshalling
-    // detect a destroyed MainComponent. The destructor's firPool->removeAllJobs(true, ...) waits
-    // for a RUNNING design, but a callAsync already posted by a just-finished job would otherwise
-    // fire on a dead `this` -> use-after-free on engine. Capture `safe` (not `this`) into the job
-    // and each callAsync, and null-check before touching engine.
     juce::Component::SafePointer<MainComponent> safe (this);
 
-    firPool->removeAllJobs (false, 0);   // drop a stale pending rebuild; let a running one finish
+    firPool->removeAllJobs (false, 0);
     firPool->addJob ([safe, sr, taps, mode, left, right] {
         FirDesignParams p;
         p.sampleRate = sr;
@@ -338,116 +320,159 @@ void MainComponent::onStartStop() {
             preflightLabel.setText ("Start failed: " + err, juce::dontSendNotification);
         }
     }
+    updateStartGate();
+}
+
+void MainComponent::updateStartGate() {
+    const bool running = engine.status() == EngineStatus::Running;
+    const bool ready   = leftCal.hasCal() && rightCal.hasCal();
+    startStop.setEnabled (running || ready);
     updateStatusLine();
 }
 
 void MainComponent::updateStatusLine() {
-    switch (engine.status()) {
-        case EngineStatus::Running:
-            statusLine.setText ("Running  -  " + juce::String (activeRate() / 1000.0, 1)
-                                + " kHz  -  " + juce::String (settings.outputBitDepth()) + "-bit",
-                                juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::ok());
-            break;
-        case EngineStatus::Error:
-            statusLine.setText ("Error", juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::danger());
-            break;
-        default:
-            statusLine.setText ("Stopped", juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::textDim());
-            break;
+    const auto st = engine.status();
+    if (st == EngineStatus::Running) {
+        const auto h = engine.health();
+        statusLine.setText (h.cleanCapture ? "Running - clean" : "Dropouts detected",
+                            juce::dontSendNotification);
+        statusLine.setColour (juce::Label::textColourId, h.cleanCapture ? Theme::ok() : Theme::danger());
+    } else if (st == EngineStatus::Error) {
+        statusLine.setText ("Error", juce::dontSendNotification);
+        statusLine.setColour (juce::Label::textColourId, Theme::danger());
+    } else if (leftCal.hasCal() && rightCal.hasCal()) {
+        statusLine.setText ("Ready", juce::dontSendNotification);
+        statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+    } else {
+        statusLine.setText ("Load both ear calibrations to start", juce::dontSendNotification);
+        statusLine.setColour (juce::Label::textColourId, Theme::textDim());
     }
 }
 
 void MainComponent::timerCallback() {
     const auto lv = engine.levels();
-    meterL.setLevel  (lv.inL,    lv.clipL);
-    meterR.setLevel  (lv.inR,    lv.clipR);
+    meterL.setLevel  (lv.inL,     lv.clipL);
+    meterR.setLevel  (lv.inR,     lv.clipR);
     meterOut.setLevel (lv.outMono, lv.clipOut);
+    if (engine.status() == EngineStatus::Running) updateStatusLine();
+}
 
-    const auto h = engine.health();
-    cleanLight.setText (h.cleanCapture ? "clean" : "DROPOUTS", juce::dontSendNotification);
-    cleanLight.setColour (juce::Label::textColourId, h.cleanCapture ? Theme::ok() : Theme::danger());
+void MainComponent::paint (juce::Graphics& g) {
+    g.fillAll (Theme::bg());
+    const int barH = 56, railW = 262;
+    auto bar = getLocalBounds().removeFromTop (barH);
 
-    if (engine.status() == EngineStatus::Running) {
-        statusLine.setText ("Running  -  " + juce::String (activeRate() / 1000.0, 1)
-                            + " kHz  -  " + juce::String (settings.outputBitDepth())
-                            + "-bit  -  xruns " + juce::String (h.xruns),
-                            juce::dontSendNotification);
+    // Title bar + left rail backdrops.
+    g.setColour (Theme::barBg());
+    g.fillRect (bar);
+    g.setColour (Theme::rail());
+    g.fillRect (juce::Rectangle<int> (0, barH, railW, getHeight() - barH));
+
+    // Separators.
+    g.setColour (Theme::sep());
+    g.fillRect (0, barH - 1, getWidth(), 1);
+    g.fillRect (railW - 1, barH, 1, getHeight() - barH);
+
+    // Brand headphones glyph (accent).
+    const float cx = 24.0f, cy = (float) bar.getCentreY(), rad = 8.0f;
+    g.setColour (Theme::accent());
+    juce::Path band;
+    band.addCentredArc (cx, cy, rad, rad, 0.0f,
+                        -juce::MathConstants<float>::halfPi,
+                         juce::MathConstants<float>::halfPi, true);
+    g.strokePath (band, juce::PathStrokeType (3.0f, juce::PathStrokeType::curved,
+                                              juce::PathStrokeType::rounded));
+    g.fillRoundedRectangle (cx - rad - 1.5f, cy, 3.0f, 8.0f, 1.5f);
+    g.fillRoundedRectangle (cx + rad - 1.5f, cy, 3.0f, 8.0f, 1.5f);
+
+    // Levels card backdrop.
+    if (! levelsBounds.isEmpty()) {
+        g.setColour (Theme::surface());
+        g.fillRoundedRectangle (levelsBounds.toFloat(), 10.0f);
     }
 }
 
-void MainComponent::paint (juce::Graphics& g) { g.fillAll (Theme::bg()); }
-
 void MainComponent::resized() {
-    auto r = getLocalBounds().reduced (16);
+    auto area = getLocalBounds();
 
-    // Row 1: input picker.
-    inputPicker.setBounds (r.removeFromTop (48));
-    r.removeFromTop (10);
+    // --- Title bar ---
+    auto bar = area.removeFromTop (56);
+    {
+        auto x = bar.reduced (16, 0);
+        brandLabel.setBounds (x.removeFromLeft (200).withTrimmedLeft (24));
+        auto col = x.removeFromRight (240);
+        col.removeFromTop (8);
+        startStop.setBounds (col.removeFromTop (32).removeFromRight (120));
+        col.removeFromTop (1);
+        statusLine.setBounds (col.removeFromTop (15));
+    }
 
-    // Row 2: two cal slots side by side.
-    auto calRow = r.removeFromTop (170);
-    auto leftHalf = calRow.removeFromLeft (calRow.getWidth() / 2 - 6);
-    calRow.removeFromLeft (12);
-    leftCal.setBounds  (leftHalf);
-    rightCal.setBounds (calRow);
-    r.removeFromTop (10);
+    // --- Left configuration rail ---
+    auto rail = area.removeFromLeft (262);
+    auto pane = area;
+    {
+        auto rr = rail.reduced (16);
+        inputPicker.setBounds (rr.removeFromTop (62));
+        rr.removeFromTop (16);
 
-    // Row 3: combine selector + hint.
-    combineLabel.setBounds (r.removeFromTop (16));
-    combineBox.setBounds (r.removeFromTop (28));
-    combineHint.setBounds (r.removeFromTop (28));
-    r.removeFromTop (10);
+        combineLabel.setBounds (rr.removeFromTop (16));
+        rr.removeFromTop (6);
+        combineBox.setBounds (rr.removeFromTop (40));
+        rr.removeFromTop (6);
+        combineHint.setBounds (rr.removeFromTop (32));
+        rr.removeFromTop (14);
 
-    // Row 4: output picker + hint + preflight.
-    outputPicker.setBounds (r.removeFromTop (48));
-    outputHint.setBounds (r.removeFromTop (16));
-    preflightLabel.setBounds (r.removeFromTop (16));
-    r.removeFromTop (10);
+        outputPicker.setBounds (rr.removeFromTop (62));
+        rr.removeFromTop (4);
+        outputHint.setBounds (rr.removeFromTop (30));
+        preflightLabel.setBounds (rr.removeFromTop (14));
+        rr.removeFromTop (12);
 
-    // Row 5: rate + bit depth side by side.
-    auto rbRow = r.removeFromTop (60);
-    auto rateCol = rbRow.removeFromLeft (rbRow.getWidth() / 2 - 6);
-    rbRow.removeFromLeft (12);
-    rateLabel.setBounds (rateCol.removeFromTop (16));
-    rateBox.setBounds (rateCol.removeFromTop (28));
-    rateWarn.setBounds (rateCol.removeFromTop (16));
-    bitLabel.setBounds (rbRow.removeFromTop (16));
-    bitBox.setBounds (rbRow.removeFromTop (28));
-    r.removeFromTop (10);
+        auto rb = rr.removeFromTop (62);
+        auto rcol = rb.removeFromLeft (rb.getWidth() / 2 - 6);
+        rb.removeFromLeft (12);
+        rateLabel.setBounds (rcol.removeFromTop (16)); rcol.removeFromTop (6);
+        rateBox.setBounds (rcol.removeFromTop (40));
+        bitLabel.setBounds (rb.removeFromTop (16)); rb.removeFromTop (6);
+        bitBox.setBounds (rb.removeFromTop (40));
+        rateWarn.setBounds (rr.removeFromTop (14));
+        rr.removeFromTop (8);
 
-    // Row 6: meters (fixed-width vertical bars) + clean light.
-    auto meterRow = r.removeFromTop (120);
-    auto mL = meterRow.removeFromLeft (60); meterRow.removeFromLeft (8);
-    auto mR = meterRow.removeFromLeft (60); meterRow.removeFromLeft (8);
-    auto mO = meterRow.removeFromLeft (60);
-    meterL.setBounds   (mL);
-    meterR.setBounds   (mR);
-    meterOut.setBounds (mO);
-    cleanLight.setBounds (meterRow.removeFromTop (20).reduced (8, 0));
-    r.removeFromTop (10);
+        advancedToggle.setBounds (rr.removeFromTop (26));
+        const bool adv = advancedToggle.getToggleState();
+        complexPhaseToggle.setVisible (adv);
+        firLenLabel.setVisible (adv); firLenBox.setVisible (adv);
+        trimLabel.setVisible (adv);   trimSlider.setVisible (adv);
+        if (adv) {
+            rr.removeFromTop (4);
+            complexPhaseToggle.setBounds (rr.removeFromTop (26));
+            rr.removeFromTop (6);
+            firLenLabel.setBounds (rr.removeFromTop (16)); rr.removeFromTop (4);
+            firLenBox.setBounds (rr.removeFromTop (36));
+            rr.removeFromTop (8);
+            trimLabel.setBounds (rr.removeFromTop (16)); rr.removeFromTop (4);
+            trimSlider.setBounds (rr.removeFromTop (28));
+        }
+    }
 
-    // Row 7: transport.
-    auto transport = r.removeFromTop (36);
-    startStop.setBounds (transport.removeFromLeft (120));
-    transport.removeFromLeft (12);
-    statusLine.setBounds (transport);
-    r.removeFromTop (8);
+    // --- Right content pane ---
+    {
+        auto pp = pane.reduced (16);
+        calEyebrow.setBounds (pp.removeFromTop (16));
+        pp.removeFromTop (10);
+        leftCal.setBounds (pp.removeFromTop (208));
+        pp.removeFromTop (12);
+        rightCal.setBounds (pp.removeFromTop (208));
+        pp.removeFromTop (14);
 
-    // Row 8: advanced disclosure.
-    advancedToggle.setBounds (r.removeFromTop (24));
-    const bool adv = advancedToggle.getToggleState();
-    complexPhaseToggle.setVisible (adv);
-    firLenLabel.setVisible (adv); firLenBox.setVisible (adv);
-    trimLabel.setVisible (adv);   trimSlider.setVisible (adv);
-    if (adv) {
-        complexPhaseToggle.setBounds (r.removeFromTop (24));
-        firLenLabel.setBounds (r.removeFromTop (16));
-        firLenBox.setBounds (r.removeFromTop (26).removeFromLeft (140));
-        trimLabel.setBounds (r.removeFromTop (16));
-        trimSlider.setBounds (r.removeFromTop (28));
+        levelsBounds = pp.removeFromTop (106);
+        auto lv = levelsBounds.reduced (16, 12);
+        levelsEyebrow.setBounds (lv.removeFromTop (14));
+        lv.removeFromTop (8);
+        const int mh = lv.getHeight() / 3;
+        meterL.setBounds   (lv.removeFromTop (mh));
+        meterR.setBounds   (lv.removeFromTop (mh));
+        meterOut.setBounds (lv.removeFromTop (mh));
     }
 }
 

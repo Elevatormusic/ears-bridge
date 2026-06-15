@@ -27,13 +27,13 @@ void CurveThumbnail::setCalFile (const eb::CalFile& cal) {
 
 void CurveThumbnail::paint (juce::Graphics& g) {
     auto r = getLocalBounds().toFloat().reduced (1.0f);
-    g.setColour (Theme::panel());
-    g.fillRoundedRectangle (r, 4.0f);
+    g.setColour (Theme::plot());
+    g.fillRoundedRectangle (r, 8.0f);
 
     const float W = r.getWidth(), H = r.getHeight();
 
     // Grid: decade verticals (100, 1k, 10k) + 0 dB horizontal.
-    g.setColour (Theme::outline());
+    g.setColour (Theme::grid());
     for (float f : { 100.0f, 1000.0f, 10000.0f }) {
         const float x = r.getX() + freqToX (f, W);
         g.drawVerticalLine ((int) x, r.getY(), r.getBottom());

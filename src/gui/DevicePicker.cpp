@@ -56,7 +56,8 @@ std::optional<DeviceId> DevicePicker::selectedDevice() const {
 void DevicePicker::resized() {
     auto r = getLocalBounds();
     label.setBounds (r.removeFromTop (16));
-    combo.setBounds (r.removeFromTop (28));
+    r.removeFromTop (6);
+    combo.setBounds (r.removeFromTop (40));
 }
 
 } // namespace eb
