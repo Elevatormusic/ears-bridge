@@ -10,6 +10,10 @@ Use a two-channel **miniDSP EARS** or **EARS Pro** headphone-measurement jig wit
 
 **Website and downloads:** [elevatormusic.github.io/ears-bridge](https://elevatormusic.github.io/ears-bridge/)
 
+<p align="center">
+  <img src="site/assets/app-dark.png" alt="EARS Bridge: per-ear calibration plots, routing controls, and live level meters" width="720">
+</p>
+
 Dirac Live expects one microphone with one calibration curve, but the EARS has two capsules, each with its own factory calibration. EARS Bridge sits between the jig and Dirac: it captures both ear channels, applies each ear's calibration as an inverse-correction FIR, combines them into a single mono signal, and presents that to Dirac. Dirac sees exactly what it expects while both capsules are accounted for.
 
 ## How it works
