@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EARS Bridge — use a miniDSP EARS with Dirac Live</title>
 <meta name="description" content="EARS Bridge lets you measure and correct headphones with Dirac Live using a two-channel miniDSP EARS or EARS Pro jig — per-ear calibration, combined to mono, through a virtual audio device. Windows and macOS.">
+<link rel="icon" type="image/svg+xml" href="assets/icon.svg">
 <link rel="icon" href="assets/icon.png">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css">
 <style>
@@ -107,7 +108,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
 </head>
 <body>
 <nav><div class="wrap">
-  <a class="brand" href="#top"><img src="assets/icon.png" alt="">EARS Bridge</a>
+  <a class="brand" href="#top"><img src="assets/icon.svg" alt="">EARS Bridge</a>
   <span class="grow"></span>
   <a class="navlink" href="#how">How it works</a>
   <a class="navlink" href="#features">Features</a>
@@ -117,7 +118,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
 
 <a id="top"></a>
 <header class="hero"><div class="wrap">
-  <img class="appicon" src="assets/icon.png" alt="EARS Bridge app icon">
+  <img class="appicon" src="assets/icon.svg" alt="EARS Bridge app icon">
   <h1>EARS Bridge</h1>
   <p class="tag">Measure your headphones with Dirac Live.</p>
   <p class="lede">Dirac Live takes one calibrated microphone. A miniDSP EARS has two — one per ear. EARS Bridge sits between them: it applies each ear's calibration, combines the two channels to mono, and feeds that to a virtual audio device Dirac records from.</p>
@@ -133,6 +134,196 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
     </picture>
   </div>
 </div></header>
+
+<section id="correction" class="alt"><div class="wrap">
+  <p class="eyebrow">See the difference</p>
+  <h2>From uneven to corrected.</h2>
+  <p class="sub">Headphones never measure flat. Per-ear calibration lets Dirac Live correct the response yours actually produce — here is a raw measurement and the EARS&nbsp;Bridge–corrected result.</p>
+  <div style="margin-top:40px">
+<div class="ba-ears" role="img" aria-label="Headphone frequency-response correction. The Before curve shows an uneven raw response with a bass lift, a lower-midrange dip, and two peaks between 3 and 8 kilohertz. The After curve, produced by EARS Bridge, is smooth and essentially flat with a gentle Harman-style downward tilt. A divider sweeps left to right revealing the corrected After response over the raw Before response.">
+  <div class="ba-head">
+    <div class="ba-title">Headphone correction</div>
+    <div class="ba-legend">
+      <span class="ba-chip ba-chip-before"><span class="ba-swatch ba-sw-before"></span>Before <span class="ba-sub">raw</span></span>
+      <span class="ba-chip ba-chip-after"><span class="ba-swatch ba-sw-after"></span>After <span class="ba-sub">corrected</span></span>
+    </div>
+  </div>
+
+  <div class="ba-stage">
+    <svg class="ba-svg" viewBox="0 0 720 360" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+      <defs>
+        <clipPath id="baClipAfter"><rect class="ba-reveal-rect" x="0" y="0" width="0" height="360"></rect></clipPath>
+        <clipPath id="baPlotClip"><rect x="56" y="16" width="624" height="276" rx="6"></rect></clipPath>
+      </defs>
+
+      <!-- plot frame -->
+      <rect class="ba-plot-bg" x="56" y="16" width="624" height="276" rx="6"></rect>
+
+      <!-- grid: vertical (frequency decades) -->
+      <g class="ba-grid">
+        <line x1="56"  y1="16" x2="56"  y2="292"></line>
+        <line x1="195" y1="16" x2="195" y2="292"></line>
+        <line x1="368" y1="16" x2="368" y2="292"></line>
+        <line x1="541" y1="16" x2="541" y2="292"></line>
+        <line x1="680" y1="16" x2="680" y2="292"></line>
+      </g>
+      <!-- grid: horizontal (dB) -->
+      <g class="ba-grid">
+        <line x1="56" y1="62"  x2="680" y2="62"></line>
+        <line x1="56" y1="108" x2="680" y2="108"></line>
+        <line x1="56" y1="200" x2="680" y2="200"></line>
+        <line x1="56" y1="246" x2="680" y2="246"></line>
+      </g>
+      <!-- 0 dB reference -->
+      <line class="ba-zero" x1="56" y1="154" x2="680" y2="154"></line>
+
+      <!-- y axis dB labels -->
+      <g class="ba-axislbl">
+        <text x="50" y="66"  text-anchor="end">+9</text>
+        <text x="50" y="112" text-anchor="end">+5</text>
+        <text x="50" y="158" text-anchor="end">0</text>
+        <text x="50" y="204" text-anchor="end">−5</text>
+        <text x="50" y="250" text-anchor="end">−9</text>
+      </g>
+      <!-- x axis Hz labels -->
+      <g class="ba-axislbl">
+        <text x="56"  y="308" text-anchor="middle">20</text>
+        <text x="195" y="308" text-anchor="middle">100</text>
+        <text x="368" y="308" text-anchor="middle">1k</text>
+        <text x="541" y="308" text-anchor="middle">10k</text>
+        <text x="680" y="308" text-anchor="middle">20k</text>
+      </g>
+
+      <!-- axis titles -->
+      <text class="ba-axistitle" x="368" y="334" text-anchor="middle">Frequency (Hz, log)</text>
+      <text class="ba-axistitle" x="16" y="154" text-anchor="middle" transform="rotate(-90 16 154)">Level (dB)</text>
+
+      <g clip-path="url(#baPlotClip)">
+        <!-- BEFORE: raw uneven response: bass lift, lower-mid dip, 3k + 6.5k peaks, HF rolloff -->
+        <path class="ba-before" d="M56,118 C100,104 140,108 195,120 C240,131 300,176 368,170 C405,166 430,120 460,110 C485,103 505,150 525,150 C548,150 560,118 575,112 C600,103 625,150 650,176 C665,191 675,204 680,212"></path>
+
+        <!-- delta shading between before and after (revealed with after) -->
+        <path class="ba-delta" clip-path="url(#baClipAfter)" d="M56,118 C100,104 140,108 195,120 C240,131 300,176 368,170 C405,166 430,120 460,110 C485,103 505,150 525,150 C548,150 560,118 575,112 C600,103 625,150 650,176 C665,191 675,204 680,212 L680,166 C655,168 600,170 525,172 C450,174 300,177 195,178 C140,179 100,178 56,177 Z"></path>
+
+        <!-- AFTER: smooth gentle Harman-style downward tilt -->
+        <path class="ba-after" clip-path="url(#baClipAfter)" d="M56,150 C140,148 300,152 368,154 C460,157 600,162 680,168"></path>
+      </g>
+
+      <!-- divider + handle -->
+      <g class="ba-divider">
+        <line class="ba-divline" x1="0" y1="16" x2="0" y2="292"></line>
+        <circle class="ba-handle" cx="0" cy="154" r="13"></circle>
+        <path class="ba-handle-arrow" d="M-5,150 l-4,4 l4,4 M5,150 l4,4 l-4,4"></path>
+      </g>
+
+      <!-- side labels that follow the reveal -->
+      <g class="ba-sidelabel ba-sidelabel-after">
+        <rect x="64" y="24" width="86" height="22" rx="11"></rect>
+        <text x="107" y="39" text-anchor="middle">After ✓</text>
+      </g>
+      <g class="ba-sidelabel ba-sidelabel-before">
+        <rect class="ba-before-pill" x="586" y="24" width="86" height="22" rx="11"></rect>
+        <text class="ba-before-pilltext" x="629" y="39" text-anchor="middle">Before</text>
+      </g>
+    </svg>
+  </div>
+
+  <div class="ba-caption">EARS Bridge measures each ear and applies an inverse-FIR correction — the raw response flattens to a smooth target.</div>
+
+  <style>
+    .ba-ears{
+      --bg:#FFFFFF; --bg2:#F5F5F7; --card:#FFFFFF; --sep:rgba(0,0,0,.10);
+      --tx:#1D1D1F; --tx2:#636366; --accent:#0071E3; --ok:#1E8E3E;
+      --before:#8E8E93; --before-soft:rgba(142,142,147,.18); --btn:#0071E3; --plot:#FFFFFF;
+      font-family:-apple-system,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+      color:var(--tx); background:var(--card);
+      border:1px solid var(--sep); border-radius:18px;
+      padding:16px 16px 12px; margin:0 auto; max-width:760px;
+      box-sizing:border-box;
+    }
+    @media (prefers-color-scheme:dark){
+      .ba-ears{
+        --bg:#000000; --bg2:#161617; --card:#1C1C1E; --sep:rgba(255,255,255,.12);
+        --tx:#F5F5F7; --tx2:#A1A1A6; --accent:#2997FF; --ok:#30D158;
+        --before:#8A8A90; --before-soft:rgba(170,170,176,.16); --btn:#0A66D6; --plot:#101012;
+      }
+    }
+    .ba-ears *{box-sizing:border-box;}
+    .ba-head{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px;}
+    .ba-title{font-size:15px; font-weight:600; letter-spacing:-.01em; color:var(--tx);}
+    .ba-legend{display:flex; gap:8px; flex-wrap:wrap;}
+    .ba-chip{display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:500;
+      padding:4px 10px; border-radius:999px; background:var(--bg2); color:var(--tx);}
+    .ba-chip .ba-sub{color:var(--tx2); font-weight:400;}
+    .ba-swatch{width:18px; height:3px; border-radius:2px; display:inline-block;}
+    .ba-sw-before{background:var(--before); border-top:0; box-shadow:none;
+      background-image:repeating-linear-gradient(90deg,var(--before) 0 4px,transparent 4px 8px); height:3px;}
+    .ba-sw-after{background:var(--accent);}
+    .ba-stage{position:relative; width:100%; background:var(--bg2); border-radius:14px; padding:6px; overflow:hidden;}
+    .ba-svg{display:block; width:100%; height:auto;}
+
+    .ba-plot-bg{fill:var(--plot);}
+    .ba-grid line{stroke:var(--sep); stroke-width:1;}
+    .ba-zero{stroke:var(--tx2); stroke-width:1; stroke-dasharray:2 4; opacity:.7;}
+    .ba-axislbl text{fill:var(--tx2); font-size:11px;}
+    .ba-axistitle{fill:var(--tx2); font-size:11.5px; font-weight:500;}
+
+    .ba-before{fill:none; stroke:var(--before); stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round;
+      stroke-dasharray:5 4; opacity:.95;}
+    .ba-after{fill:none; stroke:var(--accent); stroke-width:3; stroke-linecap:round; stroke-linejoin:round;}
+    .ba-delta{fill:var(--accent); opacity:.12;}
+
+    .ba-divider{transform:translateX(0);}
+    .ba-divline{stroke:var(--accent); stroke-width:2; opacity:.85;}
+    .ba-handle{fill:var(--card); stroke:var(--accent); stroke-width:2.5;}
+    .ba-handle-arrow{fill:none; stroke:var(--accent); stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round;}
+
+    .ba-sidelabel rect{fill:var(--btn);}
+    .ba-sidelabel text{fill:#fff; font-size:11.5px; font-weight:600;}
+    .ba-sidelabel-after rect{fill:var(--btn);}
+    .ba-sidelabel-before rect{fill:var(--bg2); stroke:var(--before); stroke-width:1;}
+    .ba-sidelabel-before text{fill:var(--tx);}
+
+    .ba-caption{margin-top:11px; font-size:12.5px; line-height:1.45; color:var(--tx2);}
+
+    /* ---- reveal scrubber animation ---- */
+    .ba-reveal-rect{ animation:ba-reveal 7s ease-in-out infinite; }
+    .ba-divider{ animation:ba-slide 7s ease-in-out infinite; }
+    .ba-sidelabel-after{ animation:ba-fade-after 7s ease-in-out infinite; }
+    .ba-sidelabel-before{ animation:ba-fade-before 7s ease-in-out infinite; }
+
+    /* width of reveal clip rect: 0 -> 624 (full plot) -> 0 */
+    @keyframes ba-reveal{
+      0%   { width:0; }
+      45%  { width:680px; }
+      55%  { width:680px; }
+      100% { width:0; }
+    }
+    /* divider x: 56 (left edge) -> 680 (right edge) -> 56 */
+    @keyframes ba-slide{
+      0%   { transform:translateX(56px); }
+      45%  { transform:translateX(680px); }
+      55%  { transform:translateX(680px); }
+      100% { transform:translateX(56px); }
+    }
+    @keyframes ba-fade-after{
+      0%{opacity:0;} 12%{opacity:0;} 25%{opacity:1;} 80%{opacity:1;} 92%{opacity:0;} 100%{opacity:0;}
+    }
+    @keyframes ba-fade-before{
+      0%{opacity:1;} 70%{opacity:1;} 85%{opacity:0;} 100%{opacity:0;}
+    }
+
+    @media (prefers-reduced-motion:reduce){
+      .ba-reveal-rect{ animation:none; width:680px; }
+      .ba-divider{ animation:none; display:none; }
+      .ba-sidelabel-after{ animation:none; opacity:1; }
+      .ba-sidelabel-before{ animation:none; opacity:1; }
+      .ba-before{ opacity:.85; }
+    }
+  </style>
+</div>
+  </div>
+</div></section>
 
 <section id="how"><div class="wrap">
   <p class="eyebrow">How it works</p>
@@ -189,7 +380,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
 </div></section>
 
 <footer><div class="wrap">
-  <a class="fbrand" href="#top"><img src="assets/icon.png" alt="">EARS Bridge</a>
+  <a class="fbrand" href="#top"><img src="assets/icon.svg" alt="">EARS Bridge</a>
   <span class="grow"></span>
   <a href="https://github.com/Elevatormusic/ears-bridge">GitHub</a>
   <a href="https://github.com/Elevatormusic/ears-bridge/releases">Releases</a>
