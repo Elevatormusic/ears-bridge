@@ -2,12 +2,24 @@
 #include <algorithm>
 #include <cmath>
 
+#if JUCE_WINDOWS
+ #ifndef NOMINMAX
+  #define NOMINMAX   // keep <windows.h> from defining min/max macros that break std::min/std::max
+ #endif
+ #include <windows.h>
+ #include <dwmapi.h>
+ #pragma comment(lib, "dwmapi.lib")
+ #undef min
+ #undef max
+#endif
+
 namespace eb {
 
 static void styleEyebrow (juce::Label& l, const juce::String& t) {
     l.setText (t, juce::dontSendNotification);
     l.setColour (juce::Label::textColourId, Theme::textDim());
-    l.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+    // All-caps eyebrows get a little tracking so the caps don't read as cramped/heavy.
+    l.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")).withExtraKerningFactor (0.07f));
 }
 
 // Symmetric dB range that comfortably contains a cal curve (snapped to a 6 dB multiple).
@@ -129,6 +141,9 @@ MainComponent::MainComponent() {
     addAndMakeVisible (rightCal);
     styleEyebrow (levelsEyebrow, "LEVELS");
     addAndMakeVisible (levelsEyebrow);
+    meterL.setTitle ("Left input level");
+    meterR.setTitle ("Right input level");
+    meterOut.setTitle ("Output level");
     addAndMakeVisible (meterL);
     addAndMakeVisible (meterR);
     addAndMakeVisible (meterOut);
@@ -350,6 +365,38 @@ void MainComponent::syncPlotScales() {
     rightCal.setPlotRange (top);
 }
 
+void MainComponent::applyTextColours() {
+    // Re-set every theme-dependent label colour (the Theme statics return the active mode);
+    // paint-based components (meters, cards, plots) pick the mode up on repaint.
+    brandLabel.setColour (juce::Label::textColourId, Theme::text());
+    styleEyebrow (combineLabel,  "COMBINE MODE");
+    styleEyebrow (rateLabel,     "RATE");
+    styleEyebrow (bitLabel,      "DEPTH");
+    styleEyebrow (firLenLabel,   "FIR LENGTH");
+    styleEyebrow (trimLabel,     "OUTPUT TRIM (dB)");
+    styleEyebrow (calEyebrow,    "CALIBRATION");
+    styleEyebrow (levelsEyebrow, "LEVELS");
+    combineHint.setColour    (juce::Label::textColourId, Theme::textDim());
+    outputHint.setColour     (juce::Label::textColourId, Theme::textDim());
+    preflightLabel.setColour (juce::Label::textColourId, Theme::warn());
+    rateWarn.setColour       (juce::Label::textColourId, Theme::warn());
+    inputPicker.applyTheme();
+    outputPicker.applyTheme();
+    leftCal.applyTheme();
+    rightCal.applyTheme();
+    updateStatusLine();
+}
+
+void MainComponent::applyTitleBarTheme() {
+   #if JUCE_WINDOWS
+    if (auto* peer = getPeer())
+        if (auto* hwnd = (HWND) peer->getNativeHandle()) {
+            BOOL dark = Theme::dark() ? TRUE : FALSE;
+            ::DwmSetWindowAttribute (hwnd, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof (dark));
+        }
+   #endif
+}
+
 void MainComponent::updateStatusLine() {
     const auto st = engine.status();
     if (st == EngineStatus::Running) {
@@ -375,6 +422,16 @@ void MainComponent::timerCallback() {
     meterR.setLevel  (lv.inR,     lv.clipR);
     meterOut.setLevel (lv.outMono, lv.clipOut);
     if (engine.status() == EngineStatus::Running) updateStatusLine();
+
+    // Follow live system light/dark changes (~2 s cadence; cheap, no allocation on the hot path).
+    if (++themeTick >= 60) {
+        themeTick = 0;
+        if (theme.syncMode()) {
+            applyTextColours();
+            applyTitleBarTheme();
+            if (auto* top = getTopLevelComponent()) top->repaint(); else repaint();
+        }
+    }
 }
 
 void MainComponent::paint (juce::Graphics& g) {
@@ -393,9 +450,9 @@ void MainComponent::paint (juce::Graphics& g) {
     g.fillRect (0, barH - 1, getWidth(), 1);
     g.fillRect (railW - 1, barH, 1, getHeight() - barH);
 
-    // Brand headphones glyph (accent).
+    // Brand headphones glyph (monochrome — accent is reserved for the action/selection).
     const float cx = 24.0f, cy = (float) bar.getCentreY(), rad = 8.0f;
-    g.setColour (Theme::accent());
+    g.setColour (Theme::text());
     juce::Path band;
     band.addCentredArc (cx, cy, rad, rad, 0.0f,
                         -juce::MathConstants<float>::halfPi,

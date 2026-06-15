@@ -19,6 +19,7 @@ public:
     void setDevices (const std::vector<DeviceId>& devices, const juce::String& selectedKey = {});
 
     std::optional<DeviceId> selectedDevice() const;
+    void applyTheme();   // re-apply theme-dependent colours (live light/dark switch)
 
     std::function<void (const DeviceId&)> onDeviceChosen;
 

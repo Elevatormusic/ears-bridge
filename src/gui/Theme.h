@@ -12,7 +12,8 @@ class Theme : public juce::LookAndFeel_V4 {
 public:
     Theme();
 
-    static bool dark();                 // active mode (system-derived at construction)
+    static bool dark();                 // active mode (system-derived)
+    bool syncMode();                    // re-read the system appearance; reapply + return true if it changed
 
     // Palette (mode-aware) — matches the prototype's CSS custom properties.
     static juce::Colour bg();           // window background

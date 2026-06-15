@@ -30,6 +30,7 @@ static void drawChip (juce::Graphics& g, juce::Rectangle<int> area, juce::Justif
 }
 
 CalSlotComponent::CalSlotComponent (juce::String name) : earName (std::move (name)) {
+    setTitle (earName + " calibration");   // accessible name (VoiceOver)
     addAndMakeVisible (thumbnail);
     thumbnail.setVisible (false);
 
@@ -117,6 +118,13 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
 }
 
 void CalSlotComponent::setPlotRange (float topDb) { thumbnail.setRange (topDb); }
+
+void CalSlotComponent::applyTheme() {
+    fileLabel.setColour (juce::Label::textColourId, Theme::textDim());
+    errorLabel.setColour (juce::Label::textColourId, Theme::danger());
+    thumbnail.repaint();
+    repaint();
+}
 
 void CalSlotComponent::resized() {
     auto r = getLocalBounds().reduced (14, 12);

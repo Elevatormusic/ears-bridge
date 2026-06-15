@@ -40,6 +40,14 @@ Theme::Theme() {
     applyColours();
 }
 
+bool Theme::syncMode() {
+    const bool now = juce::Desktop::getInstance().isDarkModeActive();
+    if (now == s_dark) return false;
+    s_dark = now;
+    applyColours();
+    return true;
+}
+
 void Theme::applyColours() {
     LookAndFeel_V4::ColourScheme scheme = {
         bg(), surface(), rail(), sep2(), text(), accent(), text(), accent(), text()

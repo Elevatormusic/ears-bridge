@@ -14,7 +14,7 @@ static juce::String modelTag (EarsModel m) {
 DevicePicker::DevicePicker (juce::String caption) {
     label.setText (caption, juce::dontSendNotification);
     label.setColour (juce::Label::textColourId, Theme::textDim());
-    label.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+    label.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")).withExtraKerningFactor (0.07f));
     addAndMakeVisible (label);
 
     combo.setTextWhenNoChoicesAvailable ("no devices found");
@@ -51,6 +51,11 @@ std::optional<DeviceId> DevicePicker::selectedDevice() const {
     const int idx = combo.getSelectedId() - 1;
     if (idx >= 0 && idx < (int) items.size()) return items[(size_t) idx];
     return std::nullopt;
+}
+
+void DevicePicker::applyTheme() {
+    label.setColour (juce::Label::textColourId, Theme::textDim());
+    repaint();
 }
 
 void DevicePicker::resized() {

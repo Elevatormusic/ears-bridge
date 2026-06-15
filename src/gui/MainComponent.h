@@ -41,6 +41,8 @@ private:
     void updateStatusLine();
     void updateStartGate();          // enable Start only when both ear cals are loaded
     void syncPlotScales();           // lock both ear plots to one shared dB scale
+    void applyTextColours();         // (re)apply theme-dependent label colours (live light/dark)
+    void applyTitleBarTheme();       // match the OS title bar to the active mode (Windows)
     double activeRate() const;
 
     Theme theme;
@@ -90,6 +92,7 @@ private:
     std::vector<CombineMenuItem> combineModel; // index -> combo id (i+1)
 
     std::unique_ptr<juce::ThreadPool> firPool;  // off-thread FIR design
+    int themeTick = 0;                          // throttles the live light/dark poll
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

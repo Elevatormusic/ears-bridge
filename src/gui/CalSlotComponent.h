@@ -22,6 +22,7 @@ public:
     std::optional<eb::CalFile> calFile() const { return cal; }
     bool hasCal() const { return cal.has_value(); }
     void setPlotRange (float topDb);   // lock the FR plot to a shared dB scale
+    void applyTheme();                 // re-apply theme-dependent colours (live light/dark switch)
 
     std::function<void (const juce::File&)> onCalLoaded;
 
