@@ -9,20 +9,20 @@
 </head>
 <body>
 <!--
-  HIG-compliance legend (apple-hig:hig-scaffold). Platform: macOS (primary) + Windows native chrome.
+  HIG-compliance legend (apple-hig:hig-scaffold; reviewed twice). Platform: macOS (primary) + Windows chrome.
   Stack: HTML/CSS using REAL semantic controls so keyboard, focus and VoiceOver are correct by construction.
-  - Standard components (Consistency / "prefer standard components"): native <select> pop-up buttons,
-    <button> for transport / Replace / Advanced (real `disabled`, `aria-expanded`), <label for> bound to
-    each control, role="meter" + aria-valuetext on level meters.
-  - Color (Color foundation + Dark Mode): every colour is a semantic token with a prefers-color-scheme
-    light + dark value; no meaning by colour alone (meters carry a dB readout + a clip-threshold tick;
-    the gate is explained in text). System blue accent #0091FF/#0088FF; label opacities white @1.0/0.62.
-  - Typography: SF Pro / Segoe UI system stack (no bundled Apple font); macOS type ramp (15/13/11/10).
-  - Layout: 8-pt spacing rhythm; capsule push-buttons + 8-pt control radii (macOS 26/27 "Liquid Glass").
+  - Standard components (Consistency): native <select> pop-ups, <button> for transport/Replace/Advanced
+    (real `disabled`, `aria-expanded`), <label for> bound to each control, role="meter" + aria-valuetext.
+  - Color (Color + Dark Mode): semantic tokens with light + dark values; no meaning by colour alone
+    (meters carry a dB readout + clip-threshold tick; the gate is explained in text). System blue accent
+    #0091FF/#0088FF; label opacities white @1.0/0.62 dark, black @0.85/0.60 light; axis text on a
+    dedicated --axis token that clears 4.5:1 in both appearances.
+  - Typography: SF Pro / Segoe UI system stack (no bundled Apple font); macOS ramp (15/13/11/10).
+  - Layout: 4/8-pt spacing; capsule push-buttons + 8-pt control radii (macOS 26/27 "Liquid Glass").
   - Accessibility: visible :focus-visible ring on every control; aria-labels on icon-only affordances;
-    role="img" + label on the plot; an SR-only screen summary; prefers-reduced-motion alternative.
-  - One primary action (Buttons): a single filled capsule Start/Stop; it is the only filled control and
-    is disabled (with aria-describedby reason) until both ears are loaded.
+    role="img" + label on the plot; SR-only screen summary; prefers-reduced-motion alternative.
+  - One primary action (Buttons): a single filled capsule Start/Stop; the only filled control, disabled
+    (with aria-describedby reason) until both ears are loaded.
 -->
 <div class="eb-stage">
 <style>
@@ -30,7 +30,7 @@
   --bg:#1E1E1E; --surface:#2A2A2A; --rail:#232323; --ctrl:#38383A; --bar:#262626; --plot:#202020;
   --track:#161616; --grid:rgba(255,255,255,.08); --chip-bg:rgba(255,255,255,.10); --info-tx:#5AB7FF; --info-bg:rgba(0,145,255,.16);
   --sep:rgba(255,255,255,.12); --sep2:rgba(255,255,255,.16);
-  --tx:#FFFFFF; --tx2:rgba(255,255,255,.62); --tx3:rgba(255,255,255,.4); --gray:#98989D;
+  --tx:#FFFFFF; --tx2:rgba(255,255,255,.62); --tx3:rgba(255,255,255,.4); --gray:#98989D; --axis:#98989D;
   --accent:#0091FF; --ok:#30D158; --warn:#FF9230; --err:#FF4245;
   --sans:-apple-system,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,Roboto,sans-serif;
   --mono:"SF Mono","Cascadia Code","Consolas",ui-monospace,monospace; width:100%; max-width:760px; margin:0 auto;
@@ -40,7 +40,7 @@
     --bg:#ECECEE; --surface:#FFFFFF; --rail:#F6F6F8; --ctrl:#FFFFFF; --bar:#F6F6F8; --plot:#F3F3F5;
     --track:#E3E3E6; --grid:rgba(0,0,0,.09); --chip-bg:rgba(0,0,0,.06); --info-tx:#0067D6; --info-bg:rgba(0,136,255,.12);
     --sep:rgba(0,0,0,.12); --sep2:rgba(0,0,0,.18);
-    --tx:rgba(0,0,0,.85); --tx2:rgba(0,0,0,.55); --tx3:rgba(0,0,0,.42); --gray:#8E8E93;
+    --tx:rgba(0,0,0,.85); --tx2:rgba(0,0,0,.6); --tx3:rgba(0,0,0,.42); --gray:#8E8E93; --axis:#5C5C61;
     --accent:#0088FF; --ok:#34C759; --warn:#C2630A; --err:#D6322F;
   }
 }
@@ -53,41 +53,41 @@
 .eb-brand{ display:flex; align-items:center; gap:8px; font-size:15px; font-weight:600; margin-left:4px; } .eb-brand .ti{ color:var(--accent); font-size:18px; }
 .eb-spacer{ flex:1; }
 .eb-xport{ display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
-.eb-primary{ display:inline-flex; align-items:center; gap:8px; font:600 13px var(--sans); color:#fff; background:var(--accent); border:none; border-radius:999px; padding:9px 20px; cursor:pointer; }
+.eb-primary{ display:inline-flex; align-items:center; gap:8px; font:600 13px var(--sans); color:#fff; background:var(--accent); border:none; border-radius:999px; padding:8px 20px; cursor:pointer; }
 .eb-primary .ti{ font-size:16px; }
 .eb-primary:disabled{ background:var(--ctrl); color:var(--tx2); border:1px solid var(--sep2); cursor:not-allowed; }
 .eb-xport-note{ display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--tx2); } .eb-xport-note .ti{ font-size:13px; }
 .eb-two{ display:grid; grid-template-columns:262px 1fr; }
-.eb-rail{ padding:18px 16px; border-right:1px solid var(--sep); display:flex; flex-direction:column; gap:16px; background:var(--rail); }
-.eb-pane{ padding:18px 18px 16px; display:flex; flex-direction:column; gap:14px; }
+.eb-rail{ padding:16px; border-right:1px solid var(--sep); display:flex; flex-direction:column; gap:16px; background:var(--rail); }
+.eb-pane{ padding:16px; display:flex; flex-direction:column; gap:14px; }
 .eb-eyebrow{ font-size:11px; font-weight:600; letter-spacing:.04em; color:var(--tx2); text-transform:uppercase; }
 .eb-field-l{ display:block; font-size:11px; font-weight:600; letter-spacing:.03em; color:var(--tx2); text-transform:uppercase; margin:0 0 6px 2px; }
 .eb-selwrap{ position:relative; }
 .eb select{ appearance:none; -webkit-appearance:none; width:100%; height:40px; padding:0 32px 0 12px; background:var(--ctrl); border:1px solid var(--sep2); border-radius:8px; color:var(--tx); font:13px var(--sans); cursor:pointer; }
 .eb-selwrap .chev{ position:absolute; right:11px; top:50%; transform:translateY(-50%); pointer-events:none; color:var(--tx2); font-size:16px; }
-.eb-rec{ display:inline-flex; align-items:center; gap:3px; font-size:11px; font-weight:600; color:var(--tx2); background:var(--chip-bg); padding:2px 7px; border-radius:5px; margin-left:6px; vertical-align:1px; } .eb-rec .ti{ font-size:12px; }
-.eb-info{ font-size:11px; font-weight:600; color:var(--info-tx); background:var(--info-bg); padding:2px 7px; border-radius:5px; }
-.eb-req{ font-size:11px; font-weight:600; color:var(--warn); background:rgba(194,99,10,.14); padding:2px 7px; border-radius:5px; }
+.eb-rec{ display:inline-flex; align-items:center; gap:3px; font-size:11px; font-weight:600; color:var(--tx2); background:var(--chip-bg); padding:2px 8px; border-radius:6px; margin-left:6px; vertical-align:1px; } .eb-rec .ti{ font-size:12px; }
+.eb-info{ font-size:11px; font-weight:600; color:var(--info-tx); background:var(--info-bg); padding:2px 8px; border-radius:6px; }
+.eb-req{ font-size:11px; font-weight:600; color:var(--warn); background:rgba(194,99,10,.14); padding:2px 8px; border-radius:6px; }
 .eb-help{ font-size:11px; color:var(--tx2); margin:6px 2px 0; line-height:1.45; } .eb-help .ti{ font-size:12px; vertical-align:-2px; margin-right:3px; }
 .eb-row2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-.eb-disc{ display:flex; align-items:center; gap:7px; width:100%; font:600 13px var(--sans); color:var(--tx2); background:none; border:none; border-top:1px solid var(--sep); padding:14px 2px 4px; text-align:left; cursor:pointer; } .eb-disc .ti{ font-size:16px; }
-.eb-card{ background:var(--surface); border-radius:10px; padding:12px 14px; }
+.eb-disc{ display:flex; align-items:center; gap:8px; width:100%; font:600 13px var(--sans); color:var(--tx2); background:none; border:none; border-top:1px solid var(--sep); padding:14px 2px 4px; text-align:left; cursor:pointer; } .eb-disc .ti{ font-size:16px; }
+.eb-card{ background:var(--surface); border-radius:10px; padding:12px 16px; }
 .eb-card-h{ display:flex; align-items:center; gap:8px; margin-bottom:12px; } .eb-card-h .name{ font-size:15px; font-weight:600; } .eb-card-h .ti{ color:var(--tx2); font-size:17px; } .eb-card-h .eb-spacer{ flex:1; }
 .eb-plot{ width:100%; height:150px; display:block; background:var(--plot); border-radius:8px; }
 .eb-meta{ display:flex; align-items:center; gap:8px; margin-top:12px; } .eb-fname{ flex:1; font-family:var(--mono); font-size:11px; color:var(--tx2); }
-.eb-btn{ display:inline-flex; align-items:center; gap:6px; font:12px var(--sans); color:var(--tx); background:var(--ctrl); border:1px solid var(--sep2); border-radius:999px; padding:7px 14px; cursor:pointer; } .eb-btn .ti{ font-size:15px; color:var(--tx2); }
+.eb-btn{ display:inline-flex; align-items:center; gap:6px; font:12px var(--sans); color:var(--tx); background:var(--ctrl); border:1px solid var(--sep2); border-radius:999px; padding:8px 14px; cursor:pointer; } .eb-btn .ti{ font-size:15px; color:var(--tx2); }
 .eb-drop{ width:100%; height:150px; border:1.5px dashed var(--sep2); border-radius:8px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--tx2); background:var(--chip-bg); font:13px var(--sans); cursor:pointer; }
 .eb-drop .ti{ font-size:26px; color:var(--tx2); } .eb-drop .d2{ font-size:11px; color:var(--tx2); }
-.eb-monitor{ background:var(--surface); border-radius:10px; padding:12px 14px; }
+.eb-monitor{ background:var(--surface); border-radius:10px; padding:12px 16px; }
 .eb-mhead{ display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; letter-spacing:.04em; color:var(--tx2); text-transform:uppercase; margin-bottom:10px; }
 .eb-meter{ display:flex; align-items:center; gap:8px; margin-bottom:8px; } .eb-meter:last-child{ margin-bottom:0; } .eb-meter .ml{ font-size:11px; font-weight:600; color:var(--tx2); width:28px; }
-.eb-mtrack{ flex:1; height:8px; border-radius:3px; background:var(--track); position:relative; overflow:hidden; }
-.eb-zamber{ position:absolute; right:0; top:0; height:100%; width:5%; background:rgba(255,146,48,.55); }
-.eb-zred{ position:absolute; right:0; top:0; height:100%; width:1.6%; background:rgba(255,66,69,.75); }
+.eb-mtrack{ flex:1; height:8px; border-radius:4px; background:var(--track); position:relative; overflow:hidden; }
+.eb-zamber{ position:absolute; right:0; top:0; height:100%; width:5%; background:rgba(255,146,48,.70); }
+.eb-zred{ position:absolute; right:0; top:0; height:100%; width:1.6%; background:rgba(255,66,69,.78); }
 .eb-ztick{ position:absolute; right:5%; top:-1px; height:calc(100% + 2px); width:2px; background:var(--err); }
-.eb-mfill{ position:absolute; left:0; top:0; height:100%; border-radius:3px; background:var(--ok); }
+.eb-mfill{ position:absolute; left:0; top:0; height:100%; border-radius:4px; background:var(--ok); }
 .eb-mdb{ font-family:var(--mono); font-size:11px; color:var(--tx2); width:48px; text-align:right; }
-.eb-axis{ font-family:var(--mono); font-size:10px; fill:var(--gray); }
+.eb-axis{ font-family:var(--mono); font-size:10px; fill:var(--axis); }
 @media (prefers-reduced-motion: reduce){ .eb *{ animation:none !important; transition:none !important; } }
 </style>
 <h2 class="eb-sr">EARS Bridge main window: a configuration rail (input, combine mode, output, format), per-ear calibration cards, an input level monitor, and a top-right Start control that is disabled until both ear calibrations are loaded.</h2>
