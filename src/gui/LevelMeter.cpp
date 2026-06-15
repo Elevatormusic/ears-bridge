@@ -20,6 +20,15 @@ void LevelMeter::setLevel (float peakLinear, bool clip) {
     level = juce::jmax (peakLinear, level * 0.80f);
     if (clip) clipLatched = true;
     if (level <= 1.0e-6f) clipLatched = false;   // clears once the signal is gone (stopped)
+
+    // Expose the readout to assistive tech (VoiceOver), so the dB / clip state isn't
+    // visual-only. Only refresh the accessible description when the announced value changes.
+    const int db = (level <= 1.0e-5f) ? -120 : juce::roundToInt (20.0f * std::log10 (level));
+    const juce::String desc = clipLatched ? "Clipping"
+                            : (db <= -60)  ? "below -60 decibels"
+                                           : juce::String (db) + " decibels";
+    if (desc != lastDesc) { lastDesc = desc; setDescription (desc); }
+
     repaint();
 }
 
@@ -57,11 +66,13 @@ void LevelMeter::paint (juce::Graphics& g) {
         g.fillRoundedRectangle (fill, 4.0f);
     }
 
-    g.setColour (Theme::textDim());
-    g.setFont (juce::Font (juce::FontOptions (12.5f)));
+    // Readout: a literal "CLIP" tag (not colour alone) latches on overload, else the dB level.
     const float db = (level <= 1.0e-5f) ? -120.0f : 20.0f * std::log10 (level);
-    juce::String txt = (db <= -60.0f) ? juce::String ("-")
-                                      : "-" + juce::String ((int) std::round (-db)) + " dB";
+    g.setColour (clipLatched ? Theme::danger() : Theme::textDim());
+    g.setFont (juce::Font (juce::FontOptions (12.5f).withStyle (clipLatched ? "Bold" : "Regular")));
+    juce::String txt = clipLatched     ? juce::String ("CLIP")
+                     : (db <= -60.0f)  ? juce::String ("-")
+                                       : "-" + juce::String ((int) std::round (-db)) + " dB";
     g.drawText (txt, dbBox, juce::Justification::centredRight);
 }
 

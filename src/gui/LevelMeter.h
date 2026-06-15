@@ -20,6 +20,7 @@ private:
     juce::String label;
     float level = 0.0f;          // smoothed display level (linear)
     bool  clipLatched = false;
+    juce::String lastDesc;       // last accessible description set (avoids per-frame churn)
 
     static float linearToFrac (float linear);   // map linear amp -> 0..1 via dBFS window
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LevelMeter)
