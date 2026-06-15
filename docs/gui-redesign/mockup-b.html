@@ -3,66 +3,76 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EARS Bridge — GUI redesign mockup B (Studio, macOS tokens)</title>
+<title>EARS Bridge — GUI redesign mockup B (Studio, HIG-reviewed)</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css">
-<style> body{ margin:0; background:#0c0c0d; display:flex; justify-content:center; padding:32px 16px; } </style>
+<style> body{ margin:0; background:#0c0c0d; display:flex; justify-content:center; padding:32px 16px; } @media (prefers-color-scheme: light){ body{ background:#c7c7cc; } } </style>
 </head>
 <body>
 <div class="eb-stage">
 <style>
 .eb-stage{
-  --bg:#1E1E1E; --surface:#2A2A2A; --rail:#232323; --ctrl:#38383A;
+  --bg:#1E1E1E; --surface:#2A2A2A; --rail:#232323; --ctrl:#38383A; --bar:#262626; --plot:#202020;
+  --track:#161616; --grid:rgba(255,255,255,.08); --chip-bg:rgba(255,255,255,.10); --info-tx:#5AB7FF; --info-bg:rgba(0,145,255,.16);
   --sep:rgba(255,255,255,.12); --sep2:rgba(255,255,255,.16);
-  --tx:#FFFFFF; --tx2:rgba(255,255,255,.55); --tx3:rgba(255,255,255,.25); --gray:#98989D;
-  --accent:#0091FF; --accent-soft:rgba(0,145,255,.22);
-  --ok:#30D158; --warn:#FF9230; --err:#FF4245;
+  --tx:#FFFFFF; --tx2:rgba(255,255,255,.62); --tx3:rgba(255,255,255,.4); --gray:#98989D;
+  --accent:#0091FF; --ok:#30D158; --warn:#FF9230; --err:#FF4245;
   --sans:-apple-system,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,Roboto,sans-serif;
   --mono:"SF Mono","Cascadia Code","Consolas",ui-monospace,monospace; width:100%; max-width:760px; margin:0 auto;
+}
+@media (prefers-color-scheme: light){
+  .eb-stage{
+    --bg:#ECECEE; --surface:#FFFFFF; --rail:#F6F6F8; --ctrl:#FFFFFF; --bar:#F6F6F8; --plot:#F3F3F5;
+    --track:#E3E3E6; --grid:rgba(0,0,0,.09); --chip-bg:rgba(0,0,0,.06); --info-tx:#0067D6; --info-bg:rgba(0,136,255,.12);
+    --sep:rgba(0,0,0,.12); --sep2:rgba(0,0,0,.18);
+    --tx:rgba(0,0,0,.85); --tx2:rgba(0,0,0,.55); --tx3:rgba(0,0,0,.42); --gray:#8E8E93;
+    --accent:#0088FF; --ok:#34C759; --warn:#C2630A; --err:#D6322F;
+  }
 }
 .eb{ background:var(--bg); color:var(--tx); font-family:var(--sans); font-size:13px; line-height:1.4; border:1px solid var(--sep); border-radius:12px; overflow:hidden; }
 .eb *{ box-sizing:border-box; }
 .eb-sr{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
-.eb-bar{ display:flex; align-items:center; gap:10px; padding:11px 16px; background:#262626; border-bottom:1px solid var(--sep); }
-.eb-dots{ display:flex; gap:7px; } .eb-dots i{ width:11px; height:11px; border-radius:50%; }
+.eb-bar{ display:flex; align-items:center; gap:10px; padding:12px 16px; background:var(--bar); border-bottom:1px solid var(--sep); }
+.eb-dots{ display:flex; gap:8px; } .eb-dots i{ width:11px; height:11px; border-radius:50%; }
 .eb-brand{ display:flex; align-items:center; gap:8px; font-size:15px; font-weight:600; margin-left:4px; } .eb-brand .ti{ color:var(--accent); font-size:18px; }
 .eb-spacer{ flex:1; }
 .eb-xport{ display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
-.eb-primary{ display:inline-flex; align-items:center; gap:7px; font-family:var(--sans); font-size:13px; font-weight:600; color:#fff; background:var(--accent); border:none; border-radius:999px; padding:8px 20px; cursor:pointer; }
+.eb-primary{ display:inline-flex; align-items:center; gap:8px; font-family:var(--sans); font-size:13px; font-weight:600; color:#fff; background:var(--accent); border:none; border-radius:999px; padding:8px 20px; cursor:pointer; }
 .eb-primary .ti{ font-size:16px; }
-.eb-primary.is-disabled{ opacity:.4; box-shadow:none; cursor:not-allowed; }
+.eb-primary.is-disabled{ background:var(--ctrl); color:var(--tx2); border:1px solid var(--sep2); cursor:not-allowed; }
 .eb-xport-note{ display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--tx2); } .eb-xport-note .ti{ font-size:13px; }
 .eb-two{ display:grid; grid-template-columns:262px 1fr; }
 .eb-rail{ padding:18px 16px; border-right:1px solid var(--sep); display:flex; flex-direction:column; gap:16px; background:var(--rail); }
 .eb-pane{ padding:18px 18px 16px; display:flex; flex-direction:column; gap:14px; }
-.eb-eyebrow{ font-size:11px; font-weight:600; letter-spacing:.04em; color:var(--tx2); text-transform:uppercase; margin:0 0 2px 2px; }
+.eb-eyebrow{ font-size:11px; font-weight:600; letter-spacing:.04em; color:var(--tx2); text-transform:uppercase; margin:0 0 4px 2px; }
 .eb-field-l{ font-size:11px; font-weight:600; letter-spacing:.03em; color:var(--tx2); text-transform:uppercase; margin:0 0 6px 2px; }
-.eb-select{ display:flex; align-items:center; min-height:36px; padding:0 11px; background:var(--ctrl); border:1px solid var(--sep2); border-radius:7px; color:var(--tx); font-size:13px; }
+.eb-select{ display:flex; align-items:center; min-height:40px; padding:0 12px; background:var(--ctrl); border:1px solid var(--sep2); border-radius:8px; color:var(--tx); font-size:13px; }
 .eb-select .val{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .eb-select .ti-chevron-down{ color:var(--tx2); font-size:16px; }
-.eb-rec{ display:inline-flex; align-items:center; gap:3px; font-size:11px; font-weight:600; color:var(--tx2); background:rgba(255,255,255,.09); padding:2px 7px; border-radius:5px; margin-left:7px; } .eb-rec .ti{ font-size:12px; }
-.eb-info{ font-size:11px; font-weight:600; color:#5AB7FF; background:rgba(0,145,255,.16); padding:2px 7px; border-radius:5px; }
-.eb-req{ font-size:11px; font-weight:600; color:var(--warn); background:rgba(255,146,48,.15); padding:2px 7px; border-radius:5px; }
-.eb-help{ font-size:11px; color:var(--tx2); margin:6px 2px 0; line-height:1.4; } .eb-help .ti{ font-size:12px; vertical-align:-2px; margin-right:3px; }
-.eb-row2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-.eb-disc{ display:flex; align-items:center; gap:7px; font-size:13px; font-weight:600; color:var(--tx2); padding-top:14px; border-top:1px solid var(--sep); } .eb-disc .ti{ font-size:16px; }
-.eb-card{ background:var(--surface); border-radius:10px; padding:13px 14px; }
-.eb-card-h{ display:flex; align-items:center; gap:8px; margin-bottom:11px; } .eb-card-h .name{ font-size:15px; font-weight:600; } .eb-card-h .ti{ color:var(--tx2); font-size:17px; } .eb-card-h .eb-spacer{ flex:1; }
-.eb-plot{ width:100%; height:150px; display:block; background:#202020; border-radius:7px; }
-.eb-meta{ display:flex; align-items:center; gap:8px; margin-top:11px; } .eb-fname{ flex:1; font-family:var(--mono); font-size:11px; color:var(--tx2); }
-.eb-btn{ display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--tx); background:var(--ctrl); border:none; border-radius:999px; padding:6px 13px; cursor:pointer; } .eb-btn .ti{ font-size:15px; color:var(--tx2); }
-.eb-drop{ height:150px; border:1.5px dashed var(--sep2); border-radius:7px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--tx2); background:rgba(255,255,255,.02); cursor:pointer; }
-.eb-drop .ti{ font-size:26px; color:var(--tx3); } .eb-drop .d1{ font-size:13px; } .eb-drop .d2{ font-size:11px; color:var(--tx2); }
+.eb-rec{ display:inline-flex; align-items:center; gap:3px; font-size:11px; font-weight:600; color:var(--tx2); background:var(--chip-bg); padding:2px 7px; border-radius:5px; margin-left:7px; } .eb-rec .ti{ font-size:12px; }
+.eb-info{ font-size:11px; font-weight:600; color:var(--info-tx); background:var(--info-bg); padding:2px 7px; border-radius:5px; }
+.eb-req{ font-size:11px; font-weight:600; color:var(--warn); background:rgba(194,99,10,.14); padding:2px 7px; border-radius:5px; }
+.eb-help{ font-size:11px; color:var(--tx2); margin:6px 2px 0; line-height:1.45; } .eb-help .ti{ font-size:12px; vertical-align:-2px; margin-right:3px; }
+.eb-row2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.eb-disc{ display:flex; align-items:center; gap:7px; width:100%; font-family:var(--sans); font-size:13px; font-weight:600; color:var(--tx2); background:none; border:none; border-top:1px solid var(--sep); padding:14px 2px 4px; text-align:left; cursor:pointer; } .eb-disc .ti{ font-size:16px; }
+.eb-card{ background:var(--surface); border-radius:10px; padding:12px 14px; }
+.eb-card-h{ display:flex; align-items:center; gap:8px; margin-bottom:12px; } .eb-card-h .name{ font-size:15px; font-weight:600; } .eb-card-h .ti{ color:var(--tx2); font-size:17px; } .eb-card-h .eb-spacer{ flex:1; }
+.eb-plot{ width:100%; height:150px; display:block; background:var(--plot); border-radius:8px; }
+.eb-meta{ display:flex; align-items:center; gap:8px; margin-top:12px; } .eb-fname{ flex:1; font-family:var(--mono); font-size:11px; color:var(--tx2); }
+.eb-btn{ display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--tx); background:var(--ctrl); border:1px solid var(--sep2); border-radius:999px; padding:6px 13px; cursor:pointer; } .eb-btn .ti{ font-size:15px; color:var(--tx2); }
+.eb-drop{ height:150px; border:1.5px dashed var(--sep2); border-radius:8px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--tx2); background:var(--chip-bg); cursor:pointer; }
+.eb-drop .ti{ font-size:26px; color:var(--tx2); } .eb-drop .d1{ font-size:13px; } .eb-drop .d2{ font-size:11px; color:var(--tx2); }
 .eb-monitor{ background:var(--surface); border-radius:10px; padding:12px 14px; }
-.eb-mhead{ display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; letter-spacing:.04em; color:var(--tx2); text-transform:uppercase; margin-bottom:9px; }
-.eb-meter{ display:flex; align-items:center; gap:9px; margin-bottom:6px; } .eb-meter:last-child{ margin-bottom:0; } .eb-meter .ml{ font-size:11px; font-weight:600; color:var(--tx2); width:28px; }
-.eb-mtrack{ flex:1; height:9px; border-radius:3px; background:rgba(0,0,0,.35); position:relative; overflow:hidden; }
-.eb-zamber{ position:absolute; right:0; top:0; height:100%; width:5%; background:rgba(255,146,48,.30); }
-.eb-zred{ position:absolute; right:0; top:0; height:100%; width:1.6%; background:rgba(255,66,69,.42); }
+.eb-mhead{ display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; letter-spacing:.04em; color:var(--tx2); text-transform:uppercase; margin-bottom:10px; }
+.eb-meter{ display:flex; align-items:center; gap:8px; margin-bottom:8px; } .eb-meter:last-child{ margin-bottom:0; } .eb-meter .ml{ font-size:11px; font-weight:600; color:var(--tx2); width:28px; }
+.eb-mtrack{ flex:1; height:8px; border-radius:3px; background:var(--track); position:relative; overflow:hidden; }
+.eb-zamber{ position:absolute; right:0; top:0; height:100%; width:5%; background:rgba(255,146,48,.55); }
+.eb-zred{ position:absolute; right:0; top:0; height:100%; width:1.6%; background:rgba(255,66,69,.75); }
+.eb-ztick{ position:absolute; right:5%; top:-1px; height:calc(100% + 2px); width:2px; background:var(--err); }
 .eb-mfill{ position:absolute; left:0; top:0; height:100%; border-radius:3px; }
 .eb-mdb{ font-family:var(--mono); font-size:11px; color:var(--tx2); width:48px; text-align:right; }
-.eb-mdb.idle{ color:var(--tx3); }
 .eb-axis{ font-family:var(--mono); font-size:10px; fill:var(--gray); }
+@media (prefers-reduced-motion: reduce){ .eb *{ animation:none !important; transition:none !important; } }
 </style>
-<h2 class="eb-sr">Mockup B (Studio) restyled with the macOS 26 system tokens: base 1E1E1E window, system blue accent, exact label opacities and SF Pro type ramp; transport consolidated top-right; Start gated until the right-ear calibration loads.</h2>
+<h2 class="eb-sr">Mockup B (Studio), HIG-reviewed: macOS 26/27 tokens, light and dark appearances, transport consolidated top-right, Start gated until the right-ear calibration loads.</h2>
 <div class="eb">
   <div class="eb-bar">
     <div class="eb-dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
@@ -90,20 +100,20 @@
         <div><div class="eb-field-l">Rate</div><div class="eb-select"><span class="val">48 kHz</span><i class="ti ti-chevron-down" aria-hidden="true"></i></div></div>
         <div><div class="eb-field-l">Depth</div><div class="eb-select"><span class="val">24-bit</span><i class="ti ti-chevron-down" aria-hidden="true"></i></div></div>
       </div>
-      <div class="eb-disc"><i class="ti ti-chevron-right" aria-hidden="true"></i>Advanced</div>
+      <button class="eb-disc" aria-expanded="false"><i class="ti ti-chevron-right" aria-hidden="true"></i>Advanced</button>
     </div>
     <div class="eb-pane">
       <div class="eb-eyebrow">Calibration</div>
       <div class="eb-card">
         <div class="eb-card-h"><i class="ti ti-ear" aria-hidden="true"></i><span class="name">Left ear</span><span class="eb-spacer"></span><span class="eb-info">HPN</span></div>
         <svg class="eb-plot" viewBox="0 0 420 150" preserveAspectRatio="none" role="img" aria-label="Left ear response in decibels versus frequency in hertz, roughly flat with a cut near 4 kHz">
-          <line x1="44" y1="38" x2="408" y2="38" stroke="rgba(255,255,255,.06)"/>
-          <line x1="44" y1="72" x2="408" y2="72" stroke="rgba(255,255,255,.10)"/>
-          <line x1="44" y1="106" x2="408" y2="106" stroke="rgba(255,255,255,.06)"/>
-          <line x1="120" y1="20" x2="120" y2="124" stroke="rgba(255,255,255,.05)"/>
-          <line x1="236" y1="20" x2="236" y2="124" stroke="rgba(255,255,255,.05)"/>
-          <line x1="344" y1="20" x2="344" y2="124" stroke="rgba(255,255,255,.05)"/>
-          <path d="M44 70 C 100 66, 156 68, 196 78 C 226 86, 242 120, 262 113 C 282 106, 304 73, 338 65 C 372 58, 396 57, 408 55" fill="none" stroke="#0091FF" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+          <line x1="44" y1="38" x2="408" y2="38" stroke="var(--grid)"/>
+          <line x1="44" y1="72" x2="408" y2="72" stroke="var(--grid)"/>
+          <line x1="44" y1="106" x2="408" y2="106" stroke="var(--grid)"/>
+          <line x1="120" y1="20" x2="120" y2="124" stroke="var(--grid)"/>
+          <line x1="236" y1="20" x2="236" y2="124" stroke="var(--grid)"/>
+          <line x1="344" y1="20" x2="344" y2="124" stroke="var(--grid)"/>
+          <path d="M44 70 C 100 66, 156 68, 196 78 C 226 86, 242 120, 262 113 C 282 106, 304 73, 338 65 C 372 58, 396 57, 408 55" fill="none" stroke="var(--accent)" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
           <text class="eb-axis" x="44" y="16">dB</text>
           <text class="eb-axis" x="40" y="42" text-anchor="end">+6</text>
           <text class="eb-axis" x="40" y="76" text-anchor="end">0</text>
@@ -113,7 +123,7 @@
           <text class="eb-axis" x="344" y="140" text-anchor="middle">10k</text>
           <text class="eb-axis" x="404" y="140" text-anchor="end">Hz</text>
         </svg>
-        <div class="eb-meta"><span class="eb-fname">L_HPN.txt · serial 000-0000</span><button class="eb-btn"><i class="ti ti-folder-open" aria-hidden="true"></i>Replace…</button></div>
+        <div class="eb-meta"><span class="eb-fname">L_HPN.txt · serial 000-0000</span><button class="eb-btn" aria-label="Replace left-ear calibration file"><i class="ti ti-folder-open" aria-hidden="true"></i>Replace…</button></div>
       </div>
       <div class="eb-card">
         <div class="eb-card-h"><i class="ti ti-ear" aria-hidden="true"></i><span class="name">Right ear</span><span class="eb-spacer"></span><span class="eb-req">Required to start</span></div>
@@ -121,9 +131,9 @@
       </div>
       <div class="eb-monitor">
         <div class="eb-mhead"><i class="ti ti-activity" style="font-size:13px" aria-hidden="true"></i>Input monitor</div>
-        <div class="eb-meter"><span class="ml">L</span><div class="eb-mtrack"><div class="eb-zamber"></div><div class="eb-zred"></div><div class="eb-mfill" style="width:66%;background:var(--ok)"></div></div><span class="eb-mdb">−20 dB</span></div>
-        <div class="eb-meter"><span class="ml">R</span><div class="eb-mtrack"><div class="eb-zamber"></div><div class="eb-zred"></div><div class="eb-mfill" style="width:63%;background:var(--ok)"></div></div><span class="eb-mdb">−22 dB</span></div>
-        <div class="eb-meter"><span class="ml">Out</span><div class="eb-mtrack"><div class="eb-zamber"></div><div class="eb-zred"></div></div><span class="eb-mdb idle">— idle</span></div>
+        <div class="eb-meter"><span class="ml">L</span><div class="eb-mtrack"><div class="eb-zamber"></div><div class="eb-zred"></div><div class="eb-ztick"></div><div class="eb-mfill" style="width:66%;background:var(--ok)"></div></div><span class="eb-mdb">−20 dB</span></div>
+        <div class="eb-meter"><span class="ml">R</span><div class="eb-mtrack"><div class="eb-zamber"></div><div class="eb-zred"></div><div class="eb-ztick"></div><div class="eb-mfill" style="width:63%;background:var(--ok)"></div></div><span class="eb-mdb">−22 dB</span></div>
+        <div class="eb-meter"><span class="ml">Out</span><div class="eb-mtrack"><div class="eb-zamber"></div><div class="eb-zred"></div><div class="eb-ztick"></div></div><span class="eb-mdb">— idle</span></div>
       </div>
     </div>
   </div>

@@ -94,6 +94,26 @@ the exact label opacities (white @1.0 / 0.55 / 0.25), white-fill control/elevati
 SF Pro type ramp (15 px card titles, 13 px body, 11 px labels). These are the values to encode in the
 JUCE `Theme`.
 
+## HIG review (applied to mockup-b)
+
+Audited with the `apple-hig:design-reviewer` agent and fixed the mockup-level findings:
+
+- **Contrast.** Raised secondary text to white @0.62 (clears 4.5:1 on cards), promoted the idle-meter
+  and drop-zone glyphs off the @0.25 tertiary level, and replaced the disabled-Start `opacity:.4`
+  (illegible) with a neutral filled, outlined, legible disabled style.
+- **Meters.** Strengthened the amber/red zone fills and added a clip-threshold tick so clip is shown
+  by position, not hue alone (the numeric dB readout remains the non-colour level cue).
+- **Advanced disclosure** is now a real `<button aria-expanded>` (was a non-interactive `<div>`).
+- **Light + dark.** Added a `prefers-color-scheme: light` token set (window `#FFFFFF`/`#ECECEE`,
+  accent `#0088FF`, label opacities black @0.85/0.55, etc.), with the bar/plot/track/grid tokenised
+  so both appearances are coherent; added a `prefers-reduced-motion` hook.
+- **Polish.** Control height 36 → 40 px; radii normalised to 8 px (off the 7 px outlier); a few
+  off-grid gaps snapped to 8; explicit `aria-label` on the icon+text Replace button.
+
+Left as **JUCE-port guidance** (not applicable to a static HTML preview): bind colours to system
+semantic roles (`controlAccentColor`, `labelColor`, `windowBackgroundColor`), drive font sizes from a
+single Theme ramp, and use logical (RTL-safe) layout. Recorded in [`apple-tokens.md`](apple-tokens.md).
+
 ## Status
 
 Mockup only. If the direction is approved, the next step is to implement it in the JUCE GUI
