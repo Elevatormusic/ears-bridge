@@ -9,7 +9,7 @@
 class EarsBridgeApp : public juce::JUCEApplication {
 public:
     const juce::String getApplicationName() override    { return "EARS Bridge"; }
-    const juce::String getApplicationVersion() override { return "0.2.8"; }
+    const juce::String getApplicationVersion() override { return "0.2.9"; }
     bool moreThanOneInstanceAllowed() override          { return false; }
 
     void initialise (const juce::String&) override {

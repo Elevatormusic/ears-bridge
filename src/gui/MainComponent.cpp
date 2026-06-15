@@ -290,8 +290,22 @@ void MainComponent::onOutputChosen (const DeviceId& d) {
 void MainComponent::updateDiracCableHint() {
     auto out = outputPicker.selectedDevice();
     // The standard VB-Audio "Virtual Cable" capture side can't be opened in WASAPI exclusive mode,
-    // which is how Dirac records by default -> error 600007. (Hi-Fi Cable / other cables are fine.)
+    // which is how Dirac records by default -> error 600007; the one-click fix puts Dirac in shared
+    // mode. The VB-Audio Hi-Fi Cable dodges 600007 but is bit-perfect with NO sample-rate converter,
+    // so it does NOT carry our mono shared-mode stream to Dirac (Dirac connects, mic stays dead) --
+    // warn against it rather than letting a user pick it and get a silent measurement.
     const bool isStdVbCable = out && out->name.containsIgnoreCase ("VB-Audio Virtual Cable");
+    const bool isHiFiCable  = out && out->name.containsIgnoreCase ("Hi-Fi Cable");
+    if (isHiFiCable) {
+        diracCableHint.setColour (juce::Label::textColourId, Theme::warn());
+        diracCableHint.setText ("The Hi-Fi Cable connects to Dirac but won't carry audio through it "
+                                "(no sample-rate converter). Use the standard CABLE Input instead.",
+                                juce::dontSendNotification);
+        diracFixButton.setVisible (false);
+        diracCableHint.setVisible (true);
+        resized();
+        return;
+    }
     if (! isStdVbCable) {
         diracCableHint.setVisible (false);
         diracFixButton.setVisible (false);
@@ -306,7 +320,7 @@ void MainComponent::updateDiracCableHint() {
     } else {
         diracCableHint.setColour (juce::Label::textColourId, Theme::warn());
         diracCableHint.setText ("Dirac records this standard cable in exclusive mode, which it can't do "
-                                "(error 600007). Use the VB-Audio Hi-Fi Cable, or:",
+                                "(error 600007). Click below to set Dirac to shared mode:",
                                 juce::dontSendNotification);
         diracFixButton.setVisible (true);
     }
