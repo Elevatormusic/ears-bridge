@@ -41,6 +41,8 @@ jobs:
           $ver = if ($ref -like 'refs/tags/v*') { $ref.Substring('refs/tags/v'.Length) } else { '0.1.0' }
           Write-Host "Building installer version $ver"
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" "installer\ears-bridge.iss"
+          # Stable, version-less alias so the website's /releases/latest/download/<name> link never breaks.
+          Copy-Item "dist\EARS-Bridge-$ver-Setup.exe" "dist\EARS-Bridge-Windows-Setup.exe"
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
@@ -71,6 +73,8 @@ jobs:
           echo "Building macOS DMG version $ver"
           chmod +x tools/build-installer-mac.sh
           tools/build-installer-mac.sh "$ver"
+          # Stable, version-less alias for the website's always-latest download link.
+          cp "dist/EARS-Bridge-$ver-macOS.dmg" "dist/EARS-Bridge-macOS.dmg"
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
