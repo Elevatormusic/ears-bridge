@@ -129,8 +129,36 @@ MainComponent::MainComponent() {
     trimSlider.setRange (-24.0, 0.0, 0.1);
     trimSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     trimSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 22);
-    trimSlider.onValueChange = [this] { settings.setOutputTrimDb (trimSlider.getValue()); };
+    trimSlider.onValueChange = [this] {
+        settings.setOutputTrimDb (trimSlider.getValue());
+        engine.setOutputTrimDb (trimSlider.getValue());   // apply live (the graph reads it lock-free)
+    };
     addChildComponent (trimSlider);
+
+    // L/R wiring check: play a tone into the LEFT earcup, then the engine reports which mic responded.
+    verifyButton.onClick = [this] {
+        if (engine.lrVerifyActive()) {   // toggle off
+            engine.endLrVerify();
+            verifyTicks = 0;
+            verifyButton.setButtonText ("Check L/R wiring");
+            verifyResultLabel.setText ({}, juce::dontSendNotification);
+            return;
+        }
+        juce::String err;
+        if (engine.beginLrVerify (Ear::Left, err)) {
+            verifyTicks = 1;   // running; timerCallback polls the verdict and times out
+            verifyButton.setButtonText ("Stop check");
+            verifyResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
+            verifyResultLabel.setText ("Listening - play a tone in the LEFT earcup...", juce::dontSendNotification);
+        } else {
+            verifyResultLabel.setColour (juce::Label::textColourId, Theme::warn());
+            verifyResultLabel.setText (err, juce::dontSendNotification);
+        }
+    };
+    addChildComponent (verifyButton);
+    verifyResultLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
+    verifyResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
+    addChildComponent (verifyResultLabel);
 
     // --- Right pane: cal cards + Levels ---
     styleEyebrow (calEyebrow, "CALIBRATION");
@@ -177,6 +205,7 @@ MainComponent::MainComponent() {
     // launch + Start opens an unset input and fails with "could not create input device". Push the
     // restored sample rate + input/output selections to the engine here.
     engine.setSampleRate (settings.sampleRate());
+    engine.setOutputTrimDb (settings.outputTrimDb());   // apply the restored Output-trim to the graph
     if (auto in  = inputPicker.selectedDevice())  engine.setInput  (*in);
     if (auto out = outputPicker.selectedDevice()) engine.setOutput (*out);
     rebuildRateMenu();
@@ -361,6 +390,11 @@ void MainComponent::onStartStop() {
         engine.stop();
         startStop.setButtonText ("Start");
     } else {
+        if (verifyTicks > 0) {   // a pending L/R check holds the capture device; clear its GUI state
+            verifyTicks = 0;
+            verifyButton.setButtonText ("Check L/R wiring");
+            verifyResultLabel.setText ({}, juce::dontSendNotification);
+        }
         juce::String err;
         if (engine.start (err)) {
             startStop.setButtonText ("Stop");
@@ -377,6 +411,7 @@ void MainComponent::updateStartGate() {
                        && outputPicker.selectedDevice().has_value();
     const bool ready    = haveDevs && leftCal.hasCal() && rightCal.hasCal();
     startStop.setEnabled (running || ready);
+    verifyButton.setEnabled (! running && inputPicker.selectedDevice().has_value());   // needs the EARS, while stopped
     updateStatusLine();
 }
 
@@ -450,6 +485,30 @@ void MainComponent::timerCallback() {
     meterR.setLevel  (lv.inR,     lv.clipR);
     meterOut.setLevel (lv.outMono, lv.clipOut);
     if (engine.status() == EngineStatus::Running) updateStatusLine();
+
+    // L/R wiring check: show the verdict once it lands, or time out after ~5 s of no tone.
+    if (verifyTicks > 0) {
+        if (engine.lrVerifyComplete()) {
+            const auto res = engine.lrVerifyResult();
+            engine.endLrVerify();
+            verifyTicks = 0;
+            verifyButton.setButtonText ("Check L/R wiring");
+            const bool ok = (res == LrResult::Pass);
+            verifyResultLabel.setColour (juce::Label::textColourId, ok ? Theme::ok() : Theme::warn());
+            verifyResultLabel.setText (
+                res == LrResult::Pass      ? juce::String ("L/R wiring OK (left earcup drives the left mic)")
+              : res == LrResult::Swapped   ? juce::String ("Channels SWAPPED (left earcup drives the right mic)")
+              : res == LrResult::Ambiguous ? juce::String ("Ambiguous - both mics responded (acoustic leak?)")
+                                           : juce::String ("No signal - play a tone into the LEFT earcup"),
+                juce::dontSendNotification);
+        } else if (++verifyTicks > 150) {   // ~5 s at 30 Hz
+            engine.endLrVerify();
+            verifyTicks = 0;
+            verifyButton.setButtonText ("Check L/R wiring");
+            verifyResultLabel.setColour (juce::Label::textColourId, Theme::warn());
+            verifyResultLabel.setText ("No signal detected - play a tone into the LEFT earcup", juce::dontSendNotification);
+        }
+    }
 
     // Follow live system light/dark changes (~2 s cadence; cheap, no allocation on the hot path).
     if (++themeTick >= 60) {
@@ -548,6 +607,7 @@ void MainComponent::resized() {
         complexPhaseToggle.setVisible (adv);
         firLenLabel.setVisible (adv); firLenBox.setVisible (adv);
         trimLabel.setVisible (adv);   trimSlider.setVisible (adv);
+        verifyButton.setVisible (adv); verifyResultLabel.setVisible (adv);
         if (adv) {
             rr.removeFromTop (4);
             complexPhaseToggle.setBounds (rr.removeFromTop (26));
@@ -557,6 +617,10 @@ void MainComponent::resized() {
             rr.removeFromTop (8);
             trimLabel.setBounds (rr.removeFromTop (16)); rr.removeFromTop (4);
             trimSlider.setBounds (rr.removeFromTop (28));
+            rr.removeFromTop (10);
+            verifyButton.setBounds (rr.removeFromTop (30));
+            rr.removeFromTop (4);
+            verifyResultLabel.setBounds (rr.removeFromTop (16));
         }
     }
 

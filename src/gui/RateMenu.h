@@ -1,5 +1,6 @@
 #pragma once
 #include "audio/CombineMode.h"
+#include "audio/FirTaps.h"   // firTapsForRate() — single source of truth for tap count
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -49,16 +50,9 @@ inline std::vector<CombineMenuItem> combineModeOrder() {
     };
 }
 
-// Tap count for the FIR at a given rate: N ~ 8192 * (rate / 48000), rounded to the
-// nearest power of two (design-spec §7 / SPINE). 8192@48k, 16384@96k, 32768@192k.
-inline int numTapsForRate (double rate) {
-    const double ideal = 8192.0 * (rate / 48000.0);
-    int n = 1;
-    while (n < (int) std::lround (ideal)) n <<= 1;
-    // n is now the smallest pow2 >= ideal; pick whichever pow2 (n or n/2) is nearer.
-    const int lower = n >> 1;
-    if (lower >= 1 && (ideal - lower) < (n - ideal)) n = lower;
-    return n;
-}
+// Tap count for the FIR at a given rate. Back-compat GUI name; delegates to the single source of
+// truth in audio/FirTaps.h (round-UP to the next power of two), so the displayed/derived length
+// always matches the FIR the engine actually builds. 8192@48k, 16384@96k, 32768@192k.
+inline int numTapsForRate (double rate) { return firTapsForRate (rate); }
 
 } // namespace eb

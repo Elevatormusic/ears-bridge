@@ -21,6 +21,10 @@ void ProcessingGraph::setCombineMode (CombineMode mode) {
     combine.store ((int) mode);
 }
 
+void ProcessingGraph::setOutputGain (float linear) {
+    outGain.store (juce::jlimit (0.0f, 4.0f, linear));   // clamp; 0 = mute, 1 = unity
+}
+
 void ProcessingGraph::process (const float* inL, const float* inR,
                                float* outMono, int numSamples) {
     auto* l = scratch.getWritePointer (0);
@@ -44,6 +48,11 @@ void ProcessingGraph::process (const float* inL, const float* inR,
         case CombineMode::Average:
             for (int i = 0; i < numSamples; ++i) outMono[i] = 0.5f * (l[i] + r[i]); break;
     }
+
+    // Post-combine output trim (the GUI's "Output trim (dB)" slider). Unity by default; skip the
+    // multiply at unity to keep the common path free of a needless pass.
+    const float g = outGain.load();
+    if (g != 1.0f) juce::FloatVectorOperations::multiply (outMono, g, numSamples);
 }
 
 void ProcessingGraph::reset() { convL.reset(); convR.reset(); }

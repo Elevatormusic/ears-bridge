@@ -18,8 +18,13 @@ float LevelMeter::linearToFrac (float linear) {
 void LevelMeter::setLevel (float peakLinear, bool clip) {
     // Bar: fast attack, slow release (the visual bar should still show peaks).
     level = juce::jmax (peakLinear, level * 0.80f);
-    if (clip) clipLatched = true;
-    if (level <= 1.0e-6f) clipLatched = false;   // clears once the signal is gone (stopped)
+    // Clip latch with a timed auto-release: a clip arms the latch and (re)starts a ~1.5 s hold so
+    // the user sees it; once no further clip arrives for the hold window it clears on its own.
+    // Without this it only cleared on full silence, so a single transient clip left the readout
+    // stuck on "CLIP" and the bar stuck red for the whole session. Silence still clears instantly.
+    if (clip) { clipLatched = true; clipHold = kClipHoldTicks; }
+    else if (clipHold > 0 && --clipHold == 0) clipLatched = false;
+    if (level <= 1.0e-6f) { clipLatched = false; clipHold = 0; }   // instant clear on stop / silence
 
     // Readout: a SEPARATE, slowly-smoothed dB so the printed number doesn't chase peaks and
     // flicker — roughly a 0.3 s time constant at the 30 Hz GUI tick. The bar stays responsive.

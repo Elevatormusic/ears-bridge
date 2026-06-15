@@ -6,11 +6,7 @@ int AudioEngine::nextPow2 (int v) {
     int p = 1; while (p < v) p <<= 1; return p;
 }
 
-int firTapsForRate (double sampleRate) {
-    const double scaled = 8192.0 * (sampleRate / 48000.0);
-    int v = (int) std::ceil (scaled);
-    int p = 1; while (p < v) p <<= 1; return p;
-}
+// firTapsForRate() now lives in audio/FirTaps.h (shared with the GUI's numTapsForRate).
 
 // ---- Audio callback adapters ----------------------------------------------------------
 // Capture: 2ch in -> ProcessingGraph -> mono -> bridge.pushCapture. No alloc/lock/syscall.
@@ -90,14 +86,36 @@ struct AudioEngine::RenderCallback : juce::AudioIODeviceCallback {
     }
 };
 
+// Verify (capture-only): feed per-block L/R peaks to the LrVerify state machine and publish the
+// verdict to an atomic the GUI polls. lrVerify_ is touched ONLY here (begin() happens-before the
+// stream starts; the GUI reads the atomic, never lrVerify_ directly), so there is no data race.
+struct AudioEngine::VerifyCallback : juce::AudioIODeviceCallback {
+    AudioEngine& e;
+    explicit VerifyCallback (AudioEngine& o) : e (o) {}
+    void audioDeviceAboutToStart (juce::AudioIODevice*) override {}
+    void audioDeviceStopped() override {}
+    void audioDeviceIOCallbackWithContext (const float* const* in, int numIn,
+                                           float* const* /*out*/, int /*numOut*/,
+                                           int numSamples,
+                                           const juce::AudioIODeviceCallbackContext&) override {
+        if (numIn < 2) return;
+        const float* l = in[0]; const float* r = in[1];
+        float pkL = 0, pkR = 0;
+        for (int i = 0; i < numSamples; ++i) { pkL = juce::jmax (pkL, std::abs (l[i])); pkR = juce::jmax (pkR, std::abs (r[i])); }
+        e.lrVerify_.observe (pkL, pkR);
+        e.verifyResult_.store ((int) e.lrVerify_.result());   // publish the verdict snapshot
+    }
+};
+
 // ---- Lifecycle ------------------------------------------------------------------------
 AudioEngine::AudioEngine() {
     captureCb = std::make_unique<CaptureCallback> (*this);
     renderCb  = std::make_unique<RenderCallback>  (*this);
+    verifyCb  = std::make_unique<VerifyCallback>  (*this);
     devices.onListChanged = [this] { if (onDevicesChanged) onDevicesChanged(); };
     devices.rescan();
 }
-AudioEngine::~AudioEngine() { stop(); }
+AudioEngine::~AudioEngine() { endLrVerify(); stop(); }
 
 void AudioEngine::rescanDevices() { devices.rescan(); }
 
@@ -121,6 +139,10 @@ void AudioEngine::setOutputBitDepth (int bits) {   // 16/24/32; anything else ->
 void AudioEngine::setLeftCalFir  (juce::AudioBuffer<float> fir) { graph.setFir (0, std::move (fir)); }
 void AudioEngine::setRightCalFir (juce::AudioBuffer<float> fir) { graph.setFir (1, std::move (fir)); }
 void AudioEngine::setCombineMode (eb::CombineMode m) { graph.setCombineMode (m); }
+void AudioEngine::setOutputTrimDb (double db) {
+    // Slider is <= 0 dB; treat the bottom of the range as a hard mute, else convert dB -> linear.
+    graph.setOutputGain (db <= -60.0 ? 0.0f : juce::Decibels::decibelsToGain ((float) db));
+}
 
 void AudioEngine::loadLeftCal (const CalFile& cal) {
     FirDesignParams p; p.sampleRate = activeRate; p.numTaps = firTapsForRate (activeRate);
@@ -143,18 +165,29 @@ HealthFlag AudioEngine::healthFlags() const noexcept     { return hm.flags(); }
 bool       AudioEngine::cleanCapture() const noexcept    { return hm.cleanCapture(); }
 DipGainProfile AudioEngine::gainProfile() const noexcept { return hm.gainProfile(); }
 
-void AudioEngine::beginLrVerify (Ear earUnderTest) {
-    jassert (status() == EngineStatus::Stopped);   // verification runs only while stopped
-    lrVerify_.begin (earUnderTest);
-    // Engine opens a short capture-only stream and, per block, calls:
-    //   lrVerify_.observe (peakL, peakR);
-    // until lrVerify_.isComplete(); see the MANUAL VERIFICATION block for the wiring contract.
+bool AudioEngine::beginLrVerify (Ear earUnderTest, juce::String& errorOut) {
+    if (status() == EngineStatus::Running) { errorOut = "Stop the bridge before verifying L/R."; return false; }
+    endLrVerify();                                   // idempotent: tear down any prior verify stream
+    lrVerify_.begin (earUnderTest);                  // resets the state machine (happens-before start)
+    verifyResult_.store ((int) LrResult::Pending);
+    auto err = devices.openInput (inputId, activeRate, 512);   // capture-only
+    if (err.isNotEmpty()) { errorOut = err; return false; }
+    if (auto* d = devices.inputDevice()) d->start (verifyCb.get());
+    verifyActive_.store (true);
+    return true;
 }
-LrResult AudioEngine::lrVerifyResult() const noexcept   { return lrVerify_.result(); }
-bool     AudioEngine::lrVerifyComplete() const noexcept { return lrVerify_.isComplete(); }
+void AudioEngine::endLrVerify() {
+    if (! verifyActive_.exchange (false)) return;
+    if (auto* d = devices.inputDevice()) d->stop();
+    devices.closeAll();                              // only the capture device is open here
+}
+bool     AudioEngine::lrVerifyActive()   const noexcept { return verifyActive_.load(); }
+LrResult AudioEngine::lrVerifyResult()   const noexcept { return (LrResult) verifyResult_.load(); }
+bool     AudioEngine::lrVerifyComplete() const noexcept { return verifyResult_.load() != (int) LrResult::Pending; }
 
 bool AudioEngine::start (juce::String& errorOut) {
     if (status() == EngineStatus::Running) return true;
+    endLrVerify();   // a pending L/R-verify stream holds the capture device; release it first
 
     // ASIO-incapability guard: ASIO cannot pair an EARS capture with a different virtual render.
     // Build the decision from the DeviceManager's type capabilities and fall back if needed.
@@ -221,8 +254,12 @@ bool AudioEngine::start (juce::String& errorOut) {
                                        outD->getCurrentBufferSizeSamples());
 
     graph.prepare (capRate, maxBlk);
-    // Capacity: ~250 ms of capture-rate mono, power-of-two-ish, never below 4096.
-    const int cap = juce::jmax (4096, juce::nextPowerOfTwo ((int) (capRate * 0.25)));
+    // Capacity: ~0.5 s of capture-rate mono, power-of-two-ish, never below 8192. Sized so the
+    // half-full prime below (~0.25-0.34 s of headroom) comfortably exceeds the measured ~150 ms
+    // render-before-capture startup gap with margin for slower machines / larger WASAPI buffers.
+    // (The prime MUST stay at the 0.5 setpoint, so margin comes from a bigger FIFO, not a deeper
+    // prime -- priming above 0.5 would re-introduce the startup ExcessDrift this fix removed.)
+    const int cap = juce::jmax (8192, juce::nextPowerOfTwo ((int) (capRate * 0.5)));
     // Prepare the ClockBridge on BOTH paths. The capture and render IOProcs are always separate
     // callbacks (DeviceManager opens input-only + output-only devices), so the lock-free FIFO is the
     // REQUIRED conduit between them in every case. On the macOS aggregate path the two sub-devices
@@ -233,6 +270,15 @@ bool AudioEngine::start (juce::String& errorOut) {
     bridge.prepare (capRate, renRate, 1, cap);
     hm.prepare (inputId.model, cap, capRate / juce::jmax (1.0, renRate));   // reset + size + NOMINAL ratio (drift detection)
     bridge.reset();
+    // Pre-fill the FIFO to the PI controller's half-full target BEFORE the streams start. The two
+    // device callbacks begin asynchronously and the render callback can pull before capture has
+    // primed the FIFO; without this, that one-time startup gap zero-pads (FifoStarved) and the PI
+    // loop then drags the SRC ratio off-nominal for seconds (ExcessDrift) while it refills -- both
+    // latch cleanCapture=false permanently ("Dropouts detected") even though the audio is clean.
+    // primeToTarget() fills to ClockBridge::kTargetFill (the same 0.5 the PI loop steers to), so the
+    // prime depth and the setpoint can never drift apart. It absorbs the startup gap and starts fill
+    // AT target (no drift).
+    bridge.primeToTarget();
     // Reset the per-callback diff baselines: bridge.reset() zeroed the bridge's under/over/dropped
     // counters, so the callbacks' "last seen" baselines must also return to 0 or a stale-high value
     // from a prior run would suppress detection (underruns) / inject a spurious negative delta

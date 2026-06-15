@@ -12,9 +12,9 @@ void ClockBridge::prepare (double capRate, double renRate, int /*channels*/, int
     // Worst-case SRC needs ceil(ratio*numOut)+a few guard samples; size generously.
     srcInput.assign ((size_t) capacity, 0.0f);
     src.reset();
-    smoothedFill = 0.5; ratioTrim = 1.0; integ = 0.0;
+    smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0;
     underrunCount.store (0); overrunCount.store (0); droppedFrameCount.store (0);
-    publishedFill.store (0.5);
+    publishedFill.store (kTargetFill);
     publishedRatio.store (captureRate / juce::jmax (1.0, renderRate));
 }
 
@@ -24,10 +24,31 @@ void ClockBridge::reset() {
     fifo.reset();
     std::fill (ring.begin(), ring.end(), 0.0f);
     src.reset();
-    smoothedFill = 0.5; ratioTrim = 1.0; integ = 0.0;
+    smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0;
     underrunCount.store (0); overrunCount.store (0); droppedFrameCount.store (0);
-    publishedFill.store (0.5);
+    publishedFill.store (kTargetFill);
     publishedRatio.store (captureRate / juce::jmax (1.0, renderRate));
+}
+
+void ClockBridge::prime (int silentFrames) {
+    // Pre-fill with silence up to the requested frames, clamped to free space so it can never
+    // overflow (no overrun event, no dropped-frame accounting). Seed the smoothed-fill state to
+    // the actual primed fraction so the PI loop starts at equilibrium (errFill ~ 0 -> ratioTrim ~ 1
+    // -> ratio at nominal), rather than chasing a stale 0.5 while the FIFO is already there.
+    const int n = juce::jlimit (0, fifo.getFreeSpace(), silentFrames);
+    if (n > 0) {
+        int s1, sz1, s2, sz2;
+        fifo.prepareToWrite (n, s1, sz1, s2, sz2);
+        if (sz1 > 0) juce::FloatVectorOperations::clear (ring.data() + s1, sz1);
+        if (sz2 > 0) juce::FloatVectorOperations::clear (ring.data() + s2, sz2);
+        fifo.finishedWrite (sz1 + sz2);
+    }
+    smoothedFill = (double) fifo.getNumReady() / (double) juce::jmax (1, capacity);
+    publishedFill.store (smoothedFill);
+}
+
+void ClockBridge::primeToTarget() {
+    prime ((int) std::lround (kTargetFill * (double) capacity));
 }
 
 void ClockBridge::pushCapture (const float* mono, int numFrames) {
@@ -48,7 +69,7 @@ int ClockBridge::pullRender (float* out, int numFrames) {
     // --- PI fill-control: target half-full; trim the SRC ratio slowly. ---
     const double fillFrac = (double) fifo.getNumReady() / (double) capacity;
     smoothedFill += 0.01 * (fillFrac - smoothedFill);        // 1-pole smoother
-    const double errFill = smoothedFill - 0.5;               // want 0.5
+    const double errFill = smoothedFill - kTargetFill;       // steer fill toward the prime target
     integ = juce::jlimit (-0.02, 0.02, integ + 1.0e-4 * errFill);
     // If fill is high, consume faster (ratio up); if low, slower. Bound the trim tightly.
     ratioTrim = juce::jlimit (0.97, 1.03, 1.0 + (2.0e-2 * errFill + integ));

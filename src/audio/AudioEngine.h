@@ -12,13 +12,10 @@
 #include "platform/AggregateDevice_mac.h"   // portable header; macOS-gated .mm (Plan 4 Task 7)
 #include "cal/CalFile.h"
 #include "cal/FirDesigner.h"
+#include "audio/FirTaps.h"   // firTapsForRate() — single source of truth (also used by the GUI)
 #include <atomic>
 #include <memory>
 namespace eb {
-
-// Compute the FIR tap count for a given active sample rate: 8192 @ 48k, scaled by
-// rate/48000, rounded UP to the next power of two (8192@48k, 16384@96k, 32768@192k).
-int firTapsForRate (double sampleRate);
 
 class AudioEngine {
 public:
@@ -43,6 +40,7 @@ public:
     void setLeftCalFir  (juce::AudioBuffer<float> fir);   // hot-swappable while Running
     void setRightCalFir (juce::AudioBuffer<float> fir);
     void setCombineMode (eb::CombineMode);
+    void setOutputTrimDb (double db);   // output level trim (<= 0 dB), applied live to the mono output
 
     // Convenience: design + load the FIR from a parsed cal file at the active rate.
     void loadLeftCal  (const CalFile&);
@@ -64,10 +62,13 @@ public:
     DipGainProfile gainProfile() const noexcept;   // for the "lower/raise DIP gain" hint
 
     // Drive a short tone into ONE earcup (user routes playback to that earcup) and report which
-    // mic channel responded. Runs only while Stopped; uses a dedicated short capture-only open.
-    // Returns the verdict; the GUI presents it. Non-blocking variant: begin + poll.
-    void     beginLrVerify (Ear earUnderTest);
-    LrResult lrVerifyResult() const noexcept;
+    // mic channel responded. Runs only while Stopped; opens a dedicated capture-only stream that
+    // feeds the LrVerify state machine, then the GUI polls the verdict. begin -> poll complete ->
+    // read result -> end (closes the stream). begin returns false (with errorOut) if it can't open.
+    bool     beginLrVerify (Ear earUnderTest, juce::String& errorOut);
+    void     endLrVerify();                       // stop + close the verify capture stream
+    bool     lrVerifyActive() const noexcept;
+    LrResult lrVerifyResult() const noexcept;     // lock-free snapshot (atomic)
     bool     lrVerifyComplete() const noexcept;
 
     // Last ASIO->WASAPI/CoreAudio fallback message (empty when no fallback occurred).
@@ -89,7 +90,9 @@ private:
     ClockBridge        bridge;
     HealthMonitor      hm;
 
-    LrVerify      lrVerify_;        // Plan 4 (pure state machine)
+    LrVerify      lrVerify_;        // Plan 4 (pure state machine; touched only on the verify audio thread)
+    std::atomic<int>  verifyResult_ { (int) LrResult::Pending };  // lock-free verdict snapshot for the GUI
+    std::atomic<bool> verifyActive_ { false };
     CalBinder     calBinder_;       // Plan 4 (re-bind cal across re-enumeration)
     AggregateDevice aggregate_;     // Plan 4 Task 7: macOS CoreAudio aggregate (no-op on Windows)
     juce::String  lastFallbackMessage_;   // surfaced by the GUI after an ASIO fallback
@@ -107,10 +110,11 @@ private:
     std::atomic<int> engineStatus { (int) EngineStatus::Stopped };
 
     // Audio callback adapters (own no state beyond pointers back to this).
-    struct CaptureCallback;  struct RenderCallback;
+    struct CaptureCallback;  struct RenderCallback;  struct VerifyCallback;
     std::unique_ptr<CaptureCallback> captureCb;
     std::unique_ptr<RenderCallback>  renderCb;
-    friend struct CaptureCallback;   friend struct RenderCallback;
+    std::unique_ptr<VerifyCallback>  verifyCb;
+    friend struct CaptureCallback;   friend struct RenderCallback;   friend struct VerifyCallback;
 };
 
 } // namespace eb

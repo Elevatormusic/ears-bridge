@@ -94,6 +94,29 @@ TEST_CASE("ProcessingGraph combine modes with identity FIRs") {
     }
 }
 
+TEST_CASE("ProcessingGraph output gain scales the mono output (the Output-trim control)") {
+    const int N = 64;
+    eb::ProcessingGraph g; g.prepare (48000.0, N);
+    g.setFir (0, unitImpulse (8)); g.setFir (1, unitImpulse (8));
+    std::vector<float> inL (N, 0.5f), inR (N, 0.3f), out (N, 0.0f);
+    auto wu = warmUp (g, inL, inR, out, N, inL[0], inR[0]);
+    REQUIRE (wu.settled);
+
+    g.setCombineMode (eb::CombineMode::TwoPassLeft);   // pass inL (0.5) straight through
+
+    g.setOutputGain (1.0f);                             // unity -> 0.5
+    g.process (inL.data(), inR.data(), out.data(), N);
+    CHECK_THAT (out[N-1], WithinAbs (0.5f, 1e-3));
+
+    g.setOutputGain (0.5f);                             // -6 dB -> 0.25
+    g.process (inL.data(), inR.data(), out.data(), N);
+    CHECK_THAT (out[N-1], WithinAbs (0.25f, 1e-3));
+
+    g.setOutputGain (0.0f);                             // mute -> 0
+    g.process (inL.data(), inR.data(), out.data(), N);
+    CHECK_THAT (out[N-1], WithinAbs (0.0f, 1e-4));
+}
+
 TEST_CASE("Real R_HPN cal cuts the ~4 kHz EARS resonance after convolution") {
     auto f = juce::File (EB_TEST_DATA_DIR).getChildFile ("R_HPN_0000000.txt");
     REQUIRE(f.existsAsFile());

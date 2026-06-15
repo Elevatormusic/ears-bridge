@@ -4,7 +4,7 @@
 
 Use a two-channel **miniDSP EARS** or **EARS Pro** headphone-measurement jig with **Dirac Live**, which only accepts a single calibrated microphone. EARS Bridge applies each ear's calibration, combines the two channels to mono, and feeds that mono signal to a virtual audio device that Dirac records from.
 
-![Release](https://img.shields.io/badge/release-v0.2.6-informational?style=flat)
+![Release](https://img.shields.io/badge/release-v0.2.7-informational?style=flat)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgray?style=flat)
 [![Website](https://img.shields.io/badge/website-elevatormusic.github.io%2Fears--bridge-0071E3?style=flat)](https://elevatormusic.github.io/ears-bridge/)
 
@@ -85,7 +85,11 @@ miniDSP supplies two variants per capsule:
 
 - **Measure one ear at a time.** Dirac correlates a single microphone, so measuring left and right separately gives each earcup its own correction.
 - **Use WASAPI or CoreAudio, not ASIO.** Bridging a capture device to a different render device needs a driver model with separate inputs and outputs; ASIO does not provide one. The app uses WASAPI on Windows and CoreAudio on macOS, and falls back automatically if an ASIO device is selected.
-- **If Dirac fails to open the cable**, it is probably opening the device in WASAPI-exclusive mode at a different rate. Set the cable and the app to the same sample rate, or use Dirac's shared-mode option.
+- **If Dirac can't open the cable** (e.g. *"Failed to connect to the microphone … Recording device error", error code 600007*): Dirac Live 3.10.3+ opens the recording device in **WASAPI exclusive mode**, which the virtual cable can't grant while EARS Bridge is feeding it. This is not a sample-rate problem. Fix it on the Dirac/Windows side, easiest first:
+  1. **Make Dirac record in shared mode.** Add a *User* environment variable `DAUDIO_WASAPI_NON_EXCLUSIVE` = `ON` (Windows search → "Edit environment variables for your account"), then fully quit and relaunch Dirac and reselect the cable's output. This is Dirac's own switch.
+  2. **Or disable exclusive control on the cable.** `mmsys.cpl` → **Recording** → "CABLE Output (VB-Audio Virtual Cable)" → **Properties** → **Advanced** → untick *"Allow applications to take exclusive control of this device."*
+  3. **Check microphone privacy.** Settings → Privacy & security → Microphone → turn on *"Let desktop apps access your microphone."*
+  4. **Start EARS Bridge first, then open Dirac** so the cable's shared stream is already live.
 - **Let the filters settle.** Correction filters load on a background thread. Wait a moment after changing a calibration file or the sample rate before starting a sweep.
 
 ## Health indicators

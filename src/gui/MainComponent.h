@@ -82,6 +82,10 @@ private:
     juce::ToggleButton complexPhaseToggle { "Complex (with-phase) FIR" };
     juce::Label    firLenLabel; juce::ComboBox firLenBox;
     juce::Label    trimLabel;   juce::Slider trimSlider;
+    // L/R check: drive a tone into the LEFT earcup; the engine reports whether L/R are wired right.
+    juce::TextButton verifyButton { "Check L/R wiring" };
+    juce::Label      verifyResultLabel;
+    int verifyTicks = 0;        // GUI-tick timeout counter while a verify is running (0 = idle)
 
     // FIR-length combo item id for the "Auto (scales with rate)" choice. Distinct from every
     // real tap count (4096/8192/16384/32768) so it never collides with an explicit override.

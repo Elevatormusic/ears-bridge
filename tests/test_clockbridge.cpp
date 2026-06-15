@@ -122,6 +122,39 @@ TEST_CASE("ClockBridge: small clock drift is absorbed by the fill-control loop")
     CHECK (cb.fifoFill() < 0.95);
 }
 
+TEST_CASE("ClockBridge: priming the FIFO prevents the startup underrun (field repro)") {
+    // Field bug (eb_diag-confirmed): at startup the render callback pulls before the capture
+    // callback has primed the FIFO, so the first ~149 ms of pulls find an empty FIFO and the
+    // interpolator zero-pads -> underrun -> FifoStarved+Dropout latched for the whole session,
+    // and the slow PI fill-loop then drags the SRC ratio off-nominal (latching ExcessDrift) while
+    // it refills. eb_diag measured the startup gap at 7168 frames, which is < capacity/2. Priming
+    // the FIFO to the PI controller's half-full target absorbs the gap with no underrun, and the
+    // fill starting AT target keeps the ratio at nominal (no spurious drift).
+    const int cap = 16384;
+    std::vector<float> out (512, 0.0f);
+
+    eb::ClockBridge empty; empty.prepare (48000.0, 48000.0, 1, cap);
+    for (int i = 0; i < 14; ++i) empty.pullRender (out.data(), 512);    // 14*512 = 7168 frames, no capture yet
+    CHECK (empty.underruns() > 0);                                      // reproduces the starvation
+
+    eb::ClockBridge primed; primed.prepare (48000.0, 48000.0, 1, cap);
+    primed.prime (cap / 2);                                            // <- the fix: pre-fill to the 0.5 target
+    for (int i = 0; i < 14; ++i) primed.pullRender (out.data(), 512);   // same gap, still no capture
+    CHECK (primed.underruns() == 0);                                   // the primed buffer covers it
+    CHECK (primed.fifoFill()  > 0.0);                                  // and still has headroom left
+    // Fill starting at target keeps the trimmed ratio within the drift tolerance (no ExcessDrift).
+    CHECK (std::abs (primed.currentRatio() - 1.0) < eb::HealthMonitor::kDriftRatioTol);
+}
+
+TEST_CASE("ClockBridge: prime is bounded by free space and never overflows") {
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 4096);
+    cb.prime (1 << 20);                 // ask for far more than capacity
+    CHECK (cb.overruns() == 0);         // clamped to free space; no overflow event
+    CHECK (cb.droppedCaptureFrames() == 0);
+    CHECK (cb.fifoFill() > 0.0);
+    CHECK (cb.fifoFill() <= 1.0);
+}
+
 TEST_CASE("ClockBridge: reset clears stats and fill") {
     eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 4096);
     std::vector<float> z (256, 0.0f), out (256, 0.0f);
@@ -131,6 +164,15 @@ TEST_CASE("ClockBridge: reset clears stats and fill") {
     CHECK (cb.underruns() == 0);
     CHECK (cb.overruns()  == 0);
     CHECK (cb.droppedCaptureFrames() == 0);
+}
+
+TEST_CASE("ClockBridge: primeToTarget fills to the PI setpoint (prime depth == setpoint)") {
+    // Guards against the two prime-depth sites silently diverging: primeToTarget must land the FIFO
+    // exactly on kTargetFill, the same fraction pullRender steers toward, so the loop starts at
+    // equilibrium and the SRC ratio stays at nominal (no startup ExcessDrift).
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 16384);
+    cb.primeToTarget();
+    CHECK (std::abs (cb.fifoFill() - eb::ClockBridge::kTargetFill) < 0.02);
 }
 
 // Producer-side overrun: push far more than the FIFO can hold without draining. The bridge must

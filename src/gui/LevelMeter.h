@@ -16,11 +16,18 @@ public:
 
     void paint (juce::Graphics&) override;
 
+    bool isClipLatched() const noexcept { return clipLatched; }   // exposed for unit tests
+
+    // The clip indicator holds for ~1.5 s after the LAST clip, then auto-releases (re-armed on
+    // every new clip). At the 30 Hz GUI tick that is ~45 ticks.
+    static constexpr int kClipHoldTicks = 45;
+
 private:
     juce::String label;
     float level = 0.0f;          // bar level (linear, fast attack / slow release)
     float smoothDb = -120.0f;    // slowly-smoothed dB for the READOUT so the number is readable
     bool  clipLatched = false;
+    int   clipHold = 0;          // ticks remaining before the clip latch auto-releases
     juce::String lastDesc;       // last accessible description set (avoids per-frame churn)
 
     static float linearToFrac (float linear);   // map linear amp -> 0..1 via dBFS window

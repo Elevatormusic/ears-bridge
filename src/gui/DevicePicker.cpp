@@ -44,6 +44,17 @@ void DevicePicker::setDevices (const std::vector<DeviceId>& devices, const juce:
         combo.addItem (rowText (items[i]), id);
         if (selectedKey.isNotEmpty() && items[i].key() == selectedKey) selectId = id;
     }
+    // Model fallback: device keys are name-stable only (the EARS name carries its gain-DIP setting,
+    // e.g. "...Gain: 18dB", so moving the DIP changes the name and the saved key no longer matches).
+    // When there WAS a saved selection that didn't match, but exactly one recognised EARS is present,
+    // re-select it so the user's input survives a gain change. (Outputs carry no model, so this is a
+    // no-op for the output picker.) Full replug-stable endpoint UIDs remain a native-platform follow-up.
+    if (selectId == 0 && selectedKey.isNotEmpty()) {
+        int modelMatches = 0, modelId = 0;
+        for (size_t i = 0; i < items.size(); ++i)
+            if (items[i].model != EarsModel::Unknown) { ++modelMatches; modelId = (int) i + 1; }
+        if (modelMatches == 1) selectId = modelId;
+    }
     if (selectId != 0) combo.setSelectedId (selectId, juce::dontSendNotification);
 }
 
