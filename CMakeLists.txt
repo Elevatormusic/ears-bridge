@@ -114,6 +114,10 @@ target_compile_definitions(eb_gui PUBLIC
 juce_add_gui_app(EarsBridge
     PRODUCT_NAME "EARS Bridge"
     COMPANY_NAME "EARS Bridge"
+    # Explicit reverse-DNS bundle id: the default is derived from COMPANY_NAME and would be
+    # "com.EARS Bridge.EarsBridge" — spaces make it an invalid macOS bundle identifier
+    # (breaks code-signing / notarization).
+    BUNDLE_ID "com.elevatormusic.earsbridge"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/installer/assets/icon.png")
 target_sources(EarsBridge PRIVATE src/Main.cpp)
 # Set these on the app directly: juce_gui_extra (curl / WebBrowserComponent) links to the app,
