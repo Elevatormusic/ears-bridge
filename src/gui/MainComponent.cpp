@@ -137,6 +137,8 @@ MainComponent::MainComponent() {
     addAndMakeVisible (calEyebrow);
     leftCal.onCalLoaded  = [this] (const juce::File& f) { onLeftCalLoaded (f);  updateStartGate(); syncPlotScales(); };
     rightCal.onCalLoaded = [this] (const juce::File& f) { onRightCalLoaded (f); updateStartGate(); syncPlotScales(); };
+    leftCal.onCalCleared  = [this] { settings.setLeftCalPath  ({}); updateStartGate(); syncPlotScales(); };
+    rightCal.onCalCleared = [this] { settings.setRightCalPath ({}); updateStartGate(); syncPlotScales(); };
     addAndMakeVisible (leftCal);
     addAndMakeVisible (rightCal);
     styleEyebrow (levelsEyebrow, "LEVELS");

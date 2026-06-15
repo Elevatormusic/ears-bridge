@@ -23,8 +23,10 @@ public:
     bool hasCal() const { return cal.has_value(); }
     void setPlotRange (float topDb);   // lock the FR plot to a shared dB scale
     void applyTheme();                 // re-apply theme-dependent colours (live light/dark switch)
+    void clearCal();                   // empty the slot (back to the drop zone) + notify
 
     std::function<void (const juce::File&)> onCalLoaded;
+    std::function<void ()> onCalCleared;   // fired when the slot is emptied via Remove
 
     bool isInterestedInFileDrag (const juce::StringArray&) override;
     void filesDropped (const juce::StringArray&, int, int) override;
@@ -43,6 +45,7 @@ private:
     juce::Label  fileLabel;     // "L_HPN.txt - serial 000-0000"
     juce::Label  errorLabel;    // parse error (red), hidden unless set
     juce::TextButton replaceBtn { "Replace" };
+    juce::TextButton removeBtn  { "Remove" };
     CurveThumbnail thumbnail;
     std::optional<eb::CalFile> cal;
     juce::String typeTag;       // "HPN" / "HEQ" / ...

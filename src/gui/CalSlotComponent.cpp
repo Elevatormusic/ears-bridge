@@ -45,6 +45,9 @@ CalSlotComponent::CalSlotComponent (juce::String name) : earName (std::move (nam
 
     replaceBtn.onClick = [this] { browseForCal(); };
     addChildComponent (replaceBtn);
+
+    removeBtn.onClick = [this] { clearCal(); };
+    addChildComponent (removeBtn);
 }
 
 bool CalSlotComponent::isInterestedInFileDrag (const juce::StringArray& files) {
@@ -113,8 +116,26 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
     thumbnail.setVisible (true);
     fileLabel.setVisible (true);
     replaceBtn.setVisible (true);
+    removeBtn.setVisible (true);
     resized();
     repaint();
+}
+
+void CalSlotComponent::clearCal() {
+    cal = std::nullopt;
+    typeTag = {};
+    heqWarning = false;
+    fileLabel.setText ({}, juce::dontSendNotification);
+    errorLabel.setText ({}, juce::dontSendNotification);
+    thumbnail.clear();
+    thumbnail.setVisible (false);
+    fileLabel.setVisible (false);
+    errorLabel.setVisible (false);
+    replaceBtn.setVisible (false);
+    removeBtn.setVisible (false);
+    resized();
+    repaint();
+    if (onCalCleared) onCalCleared();
 }
 
 void CalSlotComponent::setPlotRange (float topDb) { thumbnail.setRange (topDb); }
@@ -133,7 +154,9 @@ void CalSlotComponent::resized() {
 
     if (cal) {
         auto meta = r.removeFromBottom (28);
-        replaceBtn.setBounds (meta.removeFromRight (104));
+        replaceBtn.setBounds (meta.removeFromRight (96));
+        meta.removeFromRight (8);
+        removeBtn.setBounds (meta.removeFromRight (84));
         meta.removeFromRight (10);
         fileLabel.setBounds (meta);
         errorLabel.setBounds (meta);
