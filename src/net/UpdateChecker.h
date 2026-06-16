@@ -1,5 +1,9 @@
 #pragma once
 #include <juce_core/juce_core.h>
+#include <juce_events/juce_events.h>   // juce::MessageManager (callback marshalling)
+#include <atomic>
+#include <functional>
+#include <memory>
 
 namespace eb {
 
@@ -20,5 +24,21 @@ struct UpdateInfo {
 // `currentVersion`. Pure (no network). A body with no "tag_name" (e.g. a rate-limit
 // error) or unparseable JSON yields { reachedServer=true, updateAvailable=false }.
 UpdateInfo parseRelease (const juce::String& jsonBody, const juce::String& currentVersion);
+
+// One-shot, cancel-safe update check. start() fetches GitHub's releases/latest on a
+// background thread and invokes onDone on the MESSAGE thread. If this object is destroyed
+// before the fetch returns, the callback is silently dropped (so a destroyed owner is never
+// called). Fire-and-forget: safe to keep as a value member.
+class UpdateChecker {
+public:
+    UpdateChecker() : alive (std::make_shared<std::atomic<bool>> (true)) {}
+    ~UpdateChecker() { alive->store (false); }
+
+    void start (juce::String currentVersion, std::function<void (UpdateInfo)> onDone);
+
+private:
+    std::shared_ptr<std::atomic<bool>> alive;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (UpdateChecker)
+};
 
 } // namespace eb

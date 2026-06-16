@@ -43,4 +43,23 @@ UpdateInfo parseRelease (const juce::String& jsonBody, const juce::String& curre
     return info;
 }
 
+void UpdateChecker::start (juce::String currentVersion, std::function<void (UpdateInfo)> onDone) {
+    auto a = alive;
+    juce::Thread::launch ([currentVersion, onDone = std::move (onDone), a]() mutable {
+        UpdateInfo info;
+        juce::URL url ("https://api.github.com/repos/Elevatormusic/ears-bridge/releases/latest");
+        auto opts = juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress)
+                        .withConnectionTimeoutMs (3000)
+                        .withExtraHeaders ("User-Agent: EARS-Bridge/" + currentVersion
+                                           + "\r\nAccept: application/vnd.github+json");
+        if (auto stream = url.createInputStream (opts))
+            info = parseRelease (stream->readEntireStreamAsString(), currentVersion);
+        // else: offline / connect failed -> info.reachedServer stays false (retry next launch)
+
+        juce::MessageManager::callAsync ([onDone = std::move (onDone), a, info]() mutable {
+            if (a->load()) onDone (info);
+        });
+    });
+}
+
 } // namespace eb
