@@ -26,4 +26,21 @@ bool isNewer (juce::String currentVersion, juce::String latestTag) {
     return false;
 }
 
+UpdateInfo parseRelease (const juce::String& jsonBody, const juce::String& currentVersion) {
+    UpdateInfo info;
+    info.reachedServer = true;                      // we have a response body
+    auto json = juce::JSON::parse (jsonBody);
+    auto tag  = json.getProperty ("tag_name", juce::var()).toString();
+    if (tag.isEmpty()) return info;                 // error/rate-limit JSON has no tag_name
+    if (isNewer (currentVersion, tag)) {
+        info.updateAvailable = true;
+        info.latestVersion = tag.startsWithIgnoreCase ("v") ? tag.substring (1) : tag;
+        auto html = json.getProperty ("html_url", juce::var()).toString();
+        info.releaseUrl = html.isNotEmpty()
+            ? html
+            : juce::String ("https://github.com/Elevatormusic/ears-bridge/releases");
+    }
+    return info;
+}
+
 } // namespace eb
