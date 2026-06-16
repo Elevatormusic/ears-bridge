@@ -230,16 +230,19 @@ MainComponent::MainComponent() {
     // re-sync the engine selection while stopped, and re-evaluate the Start gate.
     engine.onDevicesChanged = [this] {
         refreshDeviceLists();
+        autoSelectDefaults();   // a freshly-plugged EARS / cable gets auto-selected into an empty slot
         if (engine.status() != EngineStatus::Running) {
             if (auto in  = inputPicker.selectedDevice())  engine.setInput  (*in);
             if (auto out = outputPicker.selectedDevice()) engine.setOutput (*out);
             rebuildRateMenu();
             rebuildBitDepthMenu();
+            updateDiracCableHint();
         }
         updateStartGate();
     };
 
     refreshDeviceLists();
+    autoSelectDefaults();   // first run / saved device absent: auto-pick a detected EARS + standard VB-CABLE
     // refreshDeviceLists()/setDevices() only PRESELECT the saved devices in the pickers — they do
     // NOT notify the engine (that happens only when the user manually picks). Without this, a fresh
     // launch + Start opens an unset input and fails with "could not create input device". Push the
@@ -279,6 +282,32 @@ double MainComponent::activeRate() const { return settings.sampleRate(); }
 void MainComponent::refreshDeviceLists() {
     inputPicker.setDevices  (engine.inputDevices(),  settings.inputKey());
     outputPicker.setDevices (engine.outputDevices(), settings.outputKey());
+}
+
+void MainComponent::autoSelectDefaults() {
+    // Convenience: when a device slot has no selection (first run, or the saved device is absent), pick
+    // the obvious default so the user doesn't have to. Input -> a recognised EARS / EARS Pro; output ->
+    // a STANDARD VB-CABLE (never the Hi-Fi Cable, which has no SRC). Skipped while running, and skipped
+    // whenever a slot already holds a selection, so it never overrides an explicit choice.
+    if (engine.status() == EngineStatus::Running) return;
+
+    if (! inputPicker.selectedDevice()) {
+        auto ins = engine.inputDevices();
+        for (auto& d : ins)
+            if (d.model != EarsModel::Unknown) {            // a recognised EARS in the capture list
+                inputPicker.setDevices (ins, d.key());
+                settings.setInputKey (d.key());             // persist: reliably the user's one jig
+                break;
+            }
+    }
+    if (! outputPicker.selectedDevice()) {
+        auto outs = engine.outputDevices();
+        for (auto& d : outs)
+            if (DeviceManager::classifyVirtualSink (d.name) == DeviceManager::VirtualSinkKind::StdVbCable) {
+                outputPicker.setDevices (outs, d.key());     // not persisted: re-derived each launch
+                break;
+            }
+    }
 }
 
 void MainComponent::onInputChosen (const DeviceId& d) {

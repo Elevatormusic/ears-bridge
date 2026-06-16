@@ -36,7 +36,7 @@ inline std::vector<RateMenuItem> buildRateMenu (const std::vector<double>& nativ
 // One row of the combine-mode selector, ordered by methodological rigor.
 struct CombineMenuItem {
     CombineMode mode;
-    bool recommended = false;       // the two-pass single-ear workflow
+    bool recommended = false;       // AutoPerEar, the recommended Dirac headphone mode (one routine, both ears)
     bool clipRiskWarning = false;   // Sum: +6 dB level risk
 };
 
@@ -46,11 +46,11 @@ struct CombineMenuItem {
 // they are what Settings stores.) AutoPerEar is the recommended Dirac headphone mode.
 inline std::vector<CombineMenuItem> combineModeOrder() {
     return {
-        { CombineMode::TwoPassLeft,  /*recommended*/ true,  /*clipRisk*/ false },
-        { CombineMode::TwoPassRight, /*recommended*/ true,  /*clipRisk*/ false },
+        { CombineMode::TwoPassLeft,  /*recommended*/ false, /*clipRisk*/ false },
+        { CombineMode::TwoPassRight, /*recommended*/ false, /*clipRisk*/ false },
         { CombineMode::Average,      /*recommended*/ false, /*clipRisk*/ false },
         { CombineMode::Sum,          /*recommended*/ false, /*clipRisk*/ true  },
-        { CombineMode::AutoPerEar,   /*recommended*/ true,  /*clipRisk*/ false },
+        { CombineMode::AutoPerEar,   /*recommended*/ true,  /*clipRisk*/ false },   // the only recommended mode
     };
 }
 

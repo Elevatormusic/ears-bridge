@@ -50,12 +50,13 @@ TEST_CASE("combineModeOrder lists modes in enum order with the right recommended
     CHECK (order[2].mode == eb::CombineMode::Average);
     CHECK (order[3].mode == eb::CombineMode::Sum);
     CHECK (order[4].mode == eb::CombineMode::AutoPerEar);
-    // TwoPass single-ear modes and AutoPerEar carry the Recommended badge; Average/Sum do not.
-    CHECK (order[0].recommended == true);
-    CHECK (order[1].recommended == true);
-    CHECK (order[2].recommended == false);
-    CHECK (order[3].recommended == false);
-    CHECK (order[4].recommended == true);
+    // Only AutoPerEar carries the Recommended badge — it is the one recommended Dirac headphone mode
+    // (Dirac runs a single both-channels routine; the manual Two-pass modes are not "recommended").
+    CHECK (order[0].recommended == false);   // TwoPassLeft
+    CHECK (order[1].recommended == false);   // TwoPassRight
+    CHECK (order[2].recommended == false);   // Average
+    CHECK (order[3].recommended == false);   // Sum
+    CHECK (order[4].recommended == true);    // AutoPerEar
     // Sum carries the +6 dB clip-risk warning.
     CHECK (order[3].clipRiskWarning == true);
 }

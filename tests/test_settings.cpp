@@ -53,7 +53,7 @@ TEST_CASE("Settings returns sane defaults on a fresh store") {
     CHECK (s.outputKey().isEmpty());
     CHECK_THAT (s.sampleRate(), WithinAbs (48000.0, 1e-9));  // default native EARS rate
     CHECK (s.outputBitDepth() == 24);
-    CHECK (s.combineMode() == eb::CombineMode::TwoPassLeft);
+    CHECK (s.combineMode() == eb::CombineMode::AutoPerEar);   // recommended Dirac headphone mode by default
     CHECK_THAT (s.outputTrimDb(), WithinAbs (0.0, 1e-9));
     CHECK (s.firLength() == 0);   // 0 = Auto: taps scale with rate via numTapsForRate()
     CHECK (s.complexPhase() == false);

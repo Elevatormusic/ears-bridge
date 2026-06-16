@@ -45,7 +45,9 @@ int Settings::outputBitDepth() const { return file->getIntValue (kBits, 24); }
 void Settings::setOutputBitDepth (int b) { file->setValue (kBits, b); }
 
 CombineMode Settings::combineMode() const {
-    return static_cast<CombineMode> (file->getIntValue (kCombine, (int) CombineMode::TwoPassLeft));
+    // Default to AutoPerEar: the recommended Dirac headphone mode (one routine, both ears). A fresh
+    // install should start in it, not the manual two-pass mode.
+    return static_cast<CombineMode> (file->getIntValue (kCombine, (int) CombineMode::AutoPerEar));
 }
 void Settings::setCombineMode (CombineMode m) { file->setValue (kCombine, (int) m); }
 

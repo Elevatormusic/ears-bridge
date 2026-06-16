@@ -27,6 +27,7 @@ public:
 
 private:
     void refreshDeviceLists();
+    void autoSelectDefaults();       // first run / empty slot: pick a recognised EARS + a standard VB-CABLE
     void onInputChosen  (const DeviceId&);
     void onOutputChosen (const DeviceId&);
     void updateDiracCableHint();     // standard-VB-CABLE-vs-Dirac warning + one-click shared-mode fix

@@ -2,7 +2,7 @@
 
 <img src="installer/assets/icon.png" alt="" width="76" align="right">
 
-Use a two-channel **miniDSP EARS** or **EARS Pro** headphone-measurement jig with **Dirac Live**, which only accepts a single calibrated microphone. EARS Bridge applies each ear's calibration, combines the two channels to mono, and feeds that mono signal to a virtual audio device that Dirac records from.
+Use a two-channel **miniDSP EARS** or **EARS Pro** headphone-measurement jig with **Dirac Live**, which only accepts a single calibrated microphone. EARS Bridge applies each ear's calibration and presents it to Dirac through a virtual audio device as the single mono microphone Dirac expects — in the default Auto per-ear mode it follows Dirac's sweep and sends whichever earcup is being measured, rather than mixing the two.
 
 ![Release](https://img.shields.io/badge/release-v0.2.11-informational?style=flat)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgray?style=flat)
@@ -14,13 +14,13 @@ Use a two-channel **miniDSP EARS** or **EARS Pro** headphone-measurement jig wit
   <img src="site/assets/app-dark.png" alt="EARS Bridge: per-ear calibration plots, routing controls, and live level meters" width="720">
 </p>
 
-Dirac Live expects one microphone with one calibration curve, but the EARS has two capsules, each with its own factory calibration. EARS Bridge sits between the jig and Dirac: it captures both ear channels, applies each ear's calibration as an inverse-correction FIR, combines them into a single mono signal, and presents that to Dirac. Dirac sees exactly what it expects while both capsules are accounted for.
+Dirac Live expects one microphone with one calibration curve, but the EARS has two capsules, each with its own factory calibration. EARS Bridge sits between the jig and Dirac: it captures both ear channels, applies each ear's calibration as an inverse-correction FIR, and presents the result to Dirac as the single mono signal it expects — in the default Auto per-ear mode it sends whichever earcup Dirac is sweeping, so each ear is measured on its own pass rather than mixed together. Dirac sees exactly what it expects while both capsules are accounted for.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    A["miniDSP EARS / EARS Pro<br/>2-channel capture"] -->|L + R| B["EARS Bridge<br/>per-ear cal FIR, combine to mono, async SRC"]
+    A["miniDSP EARS / EARS Pro<br/>2-channel capture"] -->|L + R| B["EARS Bridge<br/>per-ear cal FIR, mono to Dirac, async SRC"]
     B -->|mono| C["Virtual cable<br/>VB-CABLE / BlackHole"]
     C -->|recording device| D["Dirac Live<br/>one calibrated mic"]
 ```
@@ -84,7 +84,7 @@ miniDSP supplies two variants per capsule:
 
 ## Combine modes
 
-EARS Bridge captures both ear channels, but Dirac records one mono signal, so the two ears have to be combined. The mode you choose decides how:
+EARS Bridge captures both ear channels, but Dirac records one mono signal, so the two ears have to be reduced to that one signal. The mode you choose decides how — by sending one ear at a time (Auto per-ear, Two-pass) or mixing them (Average, Sum):
 
 - **Auto per-ear (Dirac)** — *recommended for headphones.* Dirac measures with a single routine that sweeps both channels (left, then right); EARS Bridge tracks which earcup is sounding and feeds only that ear's calibrated mic, so each sweep is a single clean arrival, open-back leakage into the other capsule is never folded in, and that one routine corrects both ears. Just run Dirac's normal measurement.
 - **Two-pass Left / Two-pass Right** — locks the feed to one ear. Dirac has no single-earcup mode (its routine always sweeps both channels), so this is the manual alternative to Auto: run Dirac's whole measurement with EARS Bridge on **Left**, then again on **Right** — two Dirac projects, one corrected channel each. Use it for explicit control, or if Auto's earcup detection ever misreads.
