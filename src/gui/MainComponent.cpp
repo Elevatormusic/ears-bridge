@@ -812,16 +812,27 @@ void MainComponent::paint (juce::Graphics& g) {
     g.fillRect (railW - 1, barH, 1, getHeight() - barH);
 
     // Brand headphones glyph (monochrome — accent is reserved for the action/selection).
-    const float cx = 24.0f, cy = (float) bar.getCentreY(), rad = 8.0f;
+    // Same construction as installer/assets/icon.svg (headband arc + short side stems + filled
+    // rounded-rect earpads) so the in-app logo matches the app/window icon. Ratios are the icon's
+    // (band r=226; stems 76, earpads 126x256 rx60, pad-top 40 below band centre, stroke 54).
+    const float R   = 8.0f;                                  // headband radius
+    const float gx  = 24.0f;                                 // glyph centre x
+    const float gy  = (float) bar.getCentreY() - R * 0.16f;  // band centre (centres the whole glyph)
+    const float stem = R * 0.34f;
+    const float padW = R * 0.56f, padH = R * 1.13f, padRx = R * 0.27f;
+    const float padTop = gy + R * 0.18f;
     g.setColour (Theme::text());
-    juce::Path band;
-    band.addCentredArc (cx, cy, rad, rad, 0.0f,
-                        -juce::MathConstants<float>::halfPi,
-                         juce::MathConstants<float>::halfPi, true);
-    g.strokePath (band, juce::PathStrokeType (3.0f, juce::PathStrokeType::curved,
-                                              juce::PathStrokeType::rounded));
-    g.fillRoundedRectangle (cx - rad - 1.5f, cy, 3.0f, 8.0f, 1.5f);
-    g.fillRoundedRectangle (cx + rad - 1.5f, cy, 3.0f, 8.0f, 1.5f);
+    juce::Path hp;
+    hp.startNewSubPath (gx - R, gy + stem);
+    hp.lineTo (gx - R, gy);
+    hp.addCentredArc (gx, gy, R, R, 0.0f,
+                      -juce::MathConstants<float>::halfPi,
+                       juce::MathConstants<float>::halfPi, false);
+    hp.lineTo (gx + R, gy + stem);
+    g.strokePath (hp, juce::PathStrokeType (juce::jmax (2.0f, R * 0.24f),
+                                            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.fillRoundedRectangle (gx - R - padW * 0.5f, padTop, padW, padH, padRx);
+    g.fillRoundedRectangle (gx + R - padW * 0.5f, padTop, padW, padH, padRx);
 
     // Levels card backdrop.
     if (! levelsBounds.isEmpty()) {
