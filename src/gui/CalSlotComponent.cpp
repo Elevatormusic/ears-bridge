@@ -41,6 +41,10 @@ CalSlotComponent::CalSlotComponent (juce::String name) : earName (std::move (nam
 
     errorLabel.setColour (juce::Label::textColourId, Theme::danger());
     errorLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
+    errorLabel.setJustificationType (juce::Justification::topLeft);   // wrap warnings to 2 lines, top-aligned
+    errorLabel.setMinimumHorizontalScale (1.0f);                      // wrap rather than squish the text
+    fileLabel.setComponentID ("calFile");                             // findable in the layout regression test
+    errorLabel.setComponentID ("calWarn");
     addChildComponent (errorLabel);
 
     replaceBtn.onClick = [this] { browseForCal(); };
@@ -174,9 +178,19 @@ void CalSlotComponent::resized() {
         removeBtn.setBounds (meta.removeFromRight (84));
         meta.removeFromRight (10);
         fileLabel.setBounds (meta);
-        errorLabel.setBounds (meta);
+        // A type warning (HEQ / unidentified) gets its OWN line directly above the filename row, so it
+        // never lands on top of the filename label. It used to share `meta`'s bounds, so a HEQ or
+        // unknown-type file drew the warning and the filename in the same rectangle -> unreadable.
+        // The space is only carved out when a warning is actually visible (clean cards keep the room).
+        if (errorLabel.isVisible()) {
+            r.removeFromBottom (8);
+            errorLabel.setBounds (r.removeFromBottom (34));
+        }
         r.removeFromBottom (10);
         thumbnail.setBounds (r);
+    } else if (errorLabel.isVisible()) {
+        // Empty slot with a load/parse error (no thumbnail): show it along the bottom of the body.
+        errorLabel.setBounds (r.removeFromBottom (34));
     }
 }
 
