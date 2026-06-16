@@ -298,6 +298,13 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
     .ba-divider{ animation:ba-slide 7s ease-in-out infinite; }
     .ba-sidelabel-after{ animation:ba-fade-after 7s ease-in-out infinite; }
     .ba-sidelabel-before{ animation:ba-fade-before 7s ease-in-out infinite; }
+    /* The reveal animates a non-compositable SVG width, so it rebuilds the display list
+       and repaints every frame. Pause all four loops whenever the section is scrolled
+       off-screen or the tab is hidden, so the page does no rendering work when unseen. */
+    .ba-stage.is-paused .ba-reveal-rect,
+    .ba-stage.is-paused .ba-divider,
+    .ba-stage.is-paused .ba-sidelabel-after,
+    .ba-stage.is-paused .ba-sidelabel-before{ animation-play-state:paused; }
 
     /* width of reveal clip rect: 0 -> 624 (full plot) -> 0 */
     @keyframes ba-reveal{
@@ -398,5 +405,23 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
   <a href="https://github.com/Elevatormusic/ears-bridge#readme">Docs</a>
   <p class="disc">EARS Bridge is an independent open-source project. Not affiliated with or endorsed by miniDSP or Dirac. EARS, EARS Pro and Dirac Live are trademarks of their respective owners.</p>
 </div></footer>
+<script>
+(function(){
+  // The before/after reveal animates a non-compositable SVG width, so it repaints every
+  // frame for as long as it runs. Pause it (and the live-demo iframe's meter timer)
+  // whenever they are scrolled out of view or the tab is backgrounded, so the page does
+  // no rendering work while unseen and there is nothing to flush when you switch back.
+  var baStage = document.querySelector('.ba-stage'), baOn = true;
+  function syncBa(){ if(baStage) baStage.classList.toggle('is-paused', document.hidden || !baOn); }
+  if(baStage && 'IntersectionObserver' in window)
+    new IntersectionObserver(function(es){ baOn = es[0].isIntersecting; syncBa(); }, {threshold:0.01}).observe(baStage);
+  var demo = document.querySelector('.demoframe'), demoOn = true, lastSent = null;
+  function syncDemo(){ var vis = !document.hidden && demoOn; if(demo && demo.contentWindow && vis !== lastSent){ lastSent = vis; try{ demo.contentWindow.postMessage({ ebDemoVisible: vis }, '*'); }catch(e){} } }
+  if(demo && 'IntersectionObserver' in window)
+    new IntersectionObserver(function(es){ demoOn = es[0].isIntersecting; syncDemo(); }, {threshold:0.01}).observe(demo);
+  document.addEventListener('visibilitychange', function(){ syncBa(); syncDemo(); });
+  syncBa(); syncDemo();
+})();
+</script>
 </body>
 </html>

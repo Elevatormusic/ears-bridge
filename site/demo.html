@@ -246,15 +246,20 @@
   // Drive the meter animation with a timer that we PAUSE whenever the tab/iframe is hidden, so a
   // backgrounded demo does no work and there's nothing to flush when you switch back to the tab
   // (the cause of the multi-second refocus freeze). Same for the 3 s active-ear toggle.
-  var meterTimer = null;
+  var meterTimer = null, onscreen = true;
   function startMeters(){ if(!meterTimer && !reduce){ tick(); meterTimer = setInterval(tick, 140); } }
   function stopMeters(){ if(meterTimer){ clearInterval(meterTimer); meterTimer = null; } }
-  document.addEventListener('visibilitychange', function(){
-    if(document.hidden){ stopMeters(); if(earTimer){ clearInterval(earTimer); earTimer = null; } }
-    else { startMeters(); updateActiveEar(); }
-  });
+  // Active only when the tab is visible AND the demo is on-screen in the parent page,
+  // which posts {ebDemoVisible} as it scrolls in/out of view. A backgrounded or
+  // scrolled-away demo then does zero work, with nothing to flush on return.
+  function applyActive(){
+    if(!document.hidden && onscreen){ startMeters(); updateActiveEar(); }
+    else { stopMeters(); if(earTimer){ clearInterval(earTimer); earTimer = null; } }
+  }
+  document.addEventListener('visibilitychange', applyActive);
+  window.addEventListener('message', function(e){ if(e.data && typeof e.data.ebDemoVisible === 'boolean'){ onscreen = e.data.ebDemoVisible; applyActive(); } });
   tick();
-  if(!document.hidden) startMeters();
+  applyActive();
   refresh();
 
   // Start the demo already complete (right ear loaded, with the entrance curve-draw).
