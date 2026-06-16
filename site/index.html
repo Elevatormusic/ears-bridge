@@ -7,7 +7,14 @@
 <meta name="description" content="EARS Bridge lets you measure and correct headphones with Dirac Live using a two-channel miniDSP EARS or EARS Pro jig — per-ear calibration, presented to Dirac as the single mic it expects through a virtual audio device. Windows and macOS.">
 <link rel="icon" type="image/svg+xml" href="assets/icon.svg?v=3">
 <link rel="icon" href="assets/icon.png?v=3">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css">
+<style>
+/* Self-hosted, GSUB-stripped subset of Tabler Icons (~6 KB vs 825 KB). Replaces the
+   CDN webfont so Windows DirectWrite never parses the full font's huge ligature
+   table -- a ~0.8 s one-time main-thread stall on first paint in Firefox. */
+@font-face{font-family:"tabler-icons";font-style:normal;font-weight:400;font-display:block;src:url("assets/tabler-icons-subset.woff2") format("woff2")}
+.ti{font-family:"tabler-icons"!important;speak:none;font-style:normal;font-weight:normal;font-variant:normal;text-transform:none;line-height:1;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+.ti-activity-heartbeat::before{content:"\f0db"}.ti-adjustments::before{content:"\ea03"}.ti-arrow-right::before{content:"\ea1f"}.ti-arrows-left-right::before{content:"\edb0"}.ti-bolt::before{content:"\ea38"}.ti-brand-apple::before{content:"\ec17"}.ti-brand-windows::before{content:"\ecd8"}.ti-device-desktop-analytics::before{content:"\ee77"}.ti-device-speaker::before{content:"\ea8b"}.ti-devices::before{content:"\eb87"}.ti-download::before{content:"\ea96"}.ti-ear::before{content:"\ebce"}.ti-gauge::before{content:"\eab1"}.ti-headphones::before{content:"\eabd"}.ti-license::before{content:"\ebc0"}.ti-plug-connected::before{content:"\f00a"}.ti-wave-sine::before{content:"\ecd4"}
+</style>
 <style>
 :root{
   color-scheme: light dark;

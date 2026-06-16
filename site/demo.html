@@ -4,7 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EARS Bridge — interactive demo</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css">
+<style>
+/* Self-hosted, GSUB-stripped subset of Tabler Icons (~6 KB vs 825 KB). Replaces the
+   CDN webfont so Windows DirectWrite never parses the full font's huge ligature
+   table -- a ~0.8 s one-time main-thread stall on first paint in Firefox. */
+@font-face{font-family:"tabler-icons";font-style:normal;font-weight:400;font-display:block;src:url("assets/tabler-icons-subset.woff2") format("woff2")}
+.ti{font-family:"tabler-icons"!important;speak:none;font-style:normal;font-weight:normal;font-variant:normal;text-transform:none;line-height:1;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+.ti-activity::before{content:"\ed23"}.ti-adjustments-alt::before{content:"\ec37"}.ti-check::before{content:"\ea5e"}.ti-chevron-down::before{content:"\ea5f"}.ti-chevron-right::before{content:"\ea61"}.ti-circle-check::before{content:"\ea67"}.ti-ear::before{content:"\ebce"}.ti-file-upload::before{content:"\ec91"}.ti-folder-open::before{content:"\faf7"}.ti-headphones::before{content:"\eabd"}.ti-info-circle::before{content:"\eac5"}.ti-player-play::before{content:"\ed46"}.ti-player-stop::before{content:"\ed4a"}
+</style>
 <!-- Embedded as a live demo inside the marketing site's hero via <iframe>: transparent, edge-to-edge. -->
 <style> html{ color-scheme:light dark; } html,body{ margin:0; } body{ background:transparent; } </style>
 </head>
