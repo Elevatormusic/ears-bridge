@@ -8,11 +8,16 @@ LevelMeter::LevelMeter (juce::String caption) : label (std::move (caption)) {
     setOpaque (false);
 }
 
-float LevelMeter::linearToFrac (float linear) {
+float LevelMeter::dbToFrac (float db) {
     // Display window: -60 dBFS (left) .. 0 dBFS (right).
     constexpr float floorDb = -60.0f;
-    const float db = (linear <= 1.0e-6f) ? floorDb : 20.0f * std::log10 (linear);
     return juce::jlimit (0.0f, 1.0f, (db - floorDb) / (0.0f - floorDb));
+}
+
+float LevelMeter::linearToFrac (float linear) {
+    constexpr float floorDb = -60.0f;
+    const float db = (linear <= 1.0e-6f) ? floorDb : 20.0f * std::log10 (linear);
+    return dbToFrac (db);
 }
 
 void LevelMeter::setLevel (float peakLinear, bool clip) {
@@ -56,6 +61,23 @@ void LevelMeter::paint (juce::Graphics& g) {
     const float W = track.getWidth();
     g.setColour (Theme::track());
     g.fillRoundedRectangle (track, 4.0f);
+
+    // Green "aim here" target band (-18..-12 dBFS) on capture meters: gives the user a level to set
+    // the amp TO, instead of only flagging clipping. A translucent fill (not text), so the soft tint
+    // carries no contrast requirement; the level bar overlays it when the capture is in range.
+    if (showTargetBand) {
+        const float loF = dbToFrac (kTargetLoDb);
+        const float hiF = dbToFrac (kTargetHiDb);
+        auto bandR = juce::Rectangle<float> (track.getX() + loF * W, track.getY(),
+                                             (hiF - loF) * W, track.getHeight());
+        // Faint fill + crisp edges, so the "aim here" zone stays legible even when the (also green)
+        // level bar sits inside it -- a flat fill alone reads as one green block under the bar.
+        g.setColour (Theme::ok().withAlpha (0.16f));
+        g.fillRect (bandR);
+        g.setColour (Theme::ok().withAlpha (0.85f));
+        g.fillRect (bandR.getX(),            bandR.getY(), 1.0f, bandR.getHeight());
+        g.fillRect (bandR.getRight() - 1.0f, bandR.getY(), 1.0f, bandR.getHeight());
+    }
 
     // Zones near full scale: amber from -1.0 dB-ish, red at the very top.
     g.setColour (Theme::warn().withAlpha (0.65f));

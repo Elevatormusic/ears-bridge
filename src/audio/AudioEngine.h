@@ -66,6 +66,10 @@ public:
     // Edge-triggered raw-input clip since the last poll (self-clearing; drives the GUI gain warning).
     bool consumeRecentInputClip() noexcept;
 
+    // True once the input reached a healthy capture level this run (drives the GUI "level low"
+    // guidance so a too-quiet capture can't masquerade as "clean").
+    bool reachedGoodLevel() const noexcept;
+
     // Device-loss handling. A capture/render device that the OS removes mid-run (unplug, sleep,
     // gain-DIP re-enumerate) calls audioDeviceStopped(); we latch deviceDied_ there (never tear down
     // from inside that callback -- re-entrant with JUCE's close()). The GUI drains consumeDeviceDied()

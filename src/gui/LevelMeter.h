@@ -14,6 +14,10 @@ public:
     // peak: linear amplitude (0 = silence, 1 = full scale). clip: latch the red state.
     void setLevel (float peakLinear, bool clip);
 
+    // Draw the green "aim here" target band (capture meters only). The Out meter leaves it off and
+    // keeps just the clip-danger zones.
+    void setShowTargetBand (bool on) noexcept { showTargetBand = on; }
+
     void paint (juce::Graphics&) override;
 
     bool isClipLatched() const noexcept { return clipLatched; }   // exposed for unit tests
@@ -22,8 +26,14 @@ public:
     // every new clip). At the 30 Hz GUI tick that is ~45 ticks.
     static constexpr int kClipHoldTicks = 45;
 
+    // The healthy capture window shown as the green target band on input meters (matches the engine's
+    // kGoodLevelLinear "level low" guidance, which fires below this band).
+    static constexpr float kTargetLoDb = -18.0f;
+    static constexpr float kTargetHiDb = -12.0f;
+
 private:
     juce::String label;
+    bool  showTargetBand = false;   // capture meters draw the -18..-12 dBFS green target band
     float level = 0.0f;          // bar level (linear, fast attack / slow release)
     float smoothDb = -120.0f;    // slowly-smoothed dB for the READOUT so the number is readable
     bool  clipLatched = false;
@@ -31,6 +41,7 @@ private:
     juce::String lastDesc;       // last accessible description set (avoids per-frame churn)
 
     static float linearToFrac (float linear);   // map linear amp -> 0..1 via dBFS window
+    static float dbToFrac     (float db);       // map dBFS -> 0..1 via the same display window
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LevelMeter)
 };
 

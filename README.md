@@ -68,7 +68,8 @@ Because the app is unsigned, Windows SmartScreen may warn about an unknown publi
 4. Choose a combine mode. **Auto per-ear (Dirac)** is recommended — it records only the earcup Dirac is currently sweeping, so each side stays clean even on open-back headphones where sound leaks across to the other capsule (see [Combine modes](#combine-modes)).
 5. Set the sample rate and bit depth, then press **Start**.
 6. In Dirac Live, set the recording device to the virtual cable's capture side — for example, "CABLE Output (VB-Audio Virtual Cable)" or "BlackHole 2ch".
-7. Run Dirac's measurement as usual. With **Auto per-ear**, let Dirac sweep left then right — EARS Bridge follows whichever earcup is sounding and feeds only that ear's mic. (With a manual **Two-pass** mode instead, route Dirac's playback to a single earcup per pass.)
+7. **Set the level.** Play Dirac's level-check tone and turn your headphone amp up until the **L and R input meters sit in the green target band** — comfortably loud, matched, and not clipping. The exact loudness doesn't matter; *too quiet* is what produces a poor, "tin-can" result (see [Setting the level](#setting-the-level-gain-staging)).
+8. Run Dirac's measurement as usual. With **Auto per-ear**, let Dirac sweep left then right — EARS Bridge follows whichever earcup is sounding and feeds only that ear's mic. (With a manual **Two-pass** mode instead, route Dirac's playback to a single earcup per pass.)
 
 Watch the [health indicators](#health-indicators) while measuring. A clean capture is the prerequisite for a trustworthy result.
 
@@ -87,7 +88,24 @@ EARS Bridge captures both ear channels, but Dirac records one mono signal, so th
 
 - **Auto per-ear (Dirac)** — *recommended for headphones.* Tracks which earcup Dirac is sweeping and feeds only that ear's calibrated mic, so each sweep is a single clean arrival and open-back leakage into the other capsule is never folded in. Just run Dirac's normal left-then-right measurement.
 - **Two-pass Left / Two-pass Right** — feeds one fixed ear. The manual equivalent: route Dirac's playback to a single earcup, measure, then switch sides. Use it when you want explicit control over which mic is live.
-- **Average** `(L+R)/2` and **Sum** `L+R` — collapse both ears into one. Fine for a **sealed** closed-back where each capsule hears only its own side, but on open-backs they fold in the leaked signal from the other earcup — that comb-filters the response and can trigger Dirac's "imprecise measurement" warning. **Sum** also adds +6 dB and can clip.
+- **Average** `(L+R)/2` and **Sum** `L+R` — collapse both ears into one. Auto per-ear is preferred because it captures only the earcup Dirac is sweeping and ignores the other (silent) cup's open-back leakage; Average and Sum fold that leakage in, and **Sum** also adds +6 dB and can clip.
+
+## Setting the level (gain staging)
+
+The most confusing part of measuring headphones is what to set where — amp volume, the EARS gain switch, Dirac's output and microphone levels — and the various guides disagree. The single rule that resolves it:
+
+**The absolute loudness doesn't matter.** Dirac builds the correction from the *relative* difference between what it measures and its target curve, so the filter comes out the same whether you measure quietly or loudly. What *does* matter is a clean capture: enough signal above the noise floor (good SNR), no clipping, and the two ears at a matched level. That is why "find your headphones' reference SPL and set your amp from it" — advice borrowed from speaker/room calibration — does not apply here.
+
+So there is really just one thing to set: **the level the meters show.**
+
+- **Headphone amp volume** — your main level control. Turn it up until the **L and R input meters sit in the green target band**, matched and not clipping. Set it once and leave it for both the left and right sweeps. Too quiet is as bad as too loud: a quiet capture has poor SNR and sounds thin / "tin-can"; a clipped one is worse.
+- **EARS gain switch (DIP)** — leave it at the factory default (18 dB on the EARS). It sets the jig's *input headroom*, not loudness. Only step it **down** if the input meter clips even at a sensible amp level — and change it between runs, since it re-enumerates the USB device.
+- **Dirac's output / playback level** — keep it healthy, not buried. Together with the amp it drives the meters; *raise* it (don't cut it) if a measurement is too quiet.
+- **Dirac's microphone / input gain** — set so Dirac's own recording meter sits in its target window with headroom above the noise floor. It is an SNR trim, not a loudness control; don't crank it to silence a low-signal warning — if the level is already good, the problem is the capture path, not mic gain.
+- **EARS Bridge Output trim** (under Advanced) — leave at 0 dB. It can only *attenuate*, so it cannot rescue a too-quiet measurement — that fix is upstream at the amp. Use it only to pull a hot or Sum-mode feed down.
+- **Exclusive vs shared mode** is a separate axis entirely — it decides whether devices *connect*, not how loud they are. Leave every device in **shared** mode (see [troubleshooting](#tips-and-troubleshooting)).
+
+EARS Bridge watches this for you: if a run never reaches a healthy level it shows **"level low — turn your amp up to the green band"** instead of a misleading "clean."
 
 ## Tips and troubleshooting
 
@@ -104,12 +122,16 @@ EARS Bridge captures both ear channels, but Dirac records one mono signal, so th
 
 ## Health indicators
 
-While running, EARS Bridge monitors the capture for conditions that would invalidate a measurement:
+While running, EARS Bridge watches for conditions that would invalidate a measurement and warns you in the status line instead of letting a bad capture pass quietly:
 
 - **Clean capture** turns off if the path drops or overruns samples, or a device reports an xrun.
 - **Dropped frames** counts samples lost at the bridge as a running trend.
 - **Capture-to-render ratio** shows the live, drift-corrected resample ratio.
-- **Input and output levels** are metered per channel, with clipping indicators.
+- **Input and output levels** are metered per channel. The L and R input meters carry a green **target band** (−18 to −12 dBFS) to set your amp against. A sustained input clip prompts you to lower the EARS gain switch and/or the Dirac level; output clipping (e.g. the +6 dB Sum mode) is flagged too.
+- **Level too low** — a capture that is present but never reaches a healthy level (too quiet for good SNR — the cause of a thin, "tin-can" result) is flagged so it can't pass as "clean"; raise your amp until the meters reach the green band.
+- **Device disconnect** — if the EARS or the virtual cable drops out mid-run, the measurement stops with a clear message instead of recording silence as "clean".
+- **No input signal** — a connected-but-silent jig (muted, or the wrong input device) is called out rather than reading as clean.
+- **Rate / bit-depth downgrade** — if Windows grants a different format than you selected, you're told the run is being resampled.
 
 If clean capture is not green for the whole sweep, run it again.
 

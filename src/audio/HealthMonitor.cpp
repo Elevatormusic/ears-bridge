@@ -34,6 +34,7 @@ void HealthMonitor::reset() {
     cL.store (false); cR.store (false); cO.store (false);
     flagBits.store (0);                 // Plan 4: clear the sticky flags on a fresh run
     recentClip_.store (false);
+    reachedGood_.store (false);         // a fresh run has not yet reached a healthy capture level
     driftRun.store (0); blockCount.store (0);
 }
 
@@ -75,6 +76,13 @@ void HealthMonitor::reportInLevels (float peakL, float peakR, bool clipL, bool c
     if (blockCount.load() > kLowLevelGraceBlocks
         && peakL < kLowLevelLinear && peakR < kLowLevelLinear)
         raise (HealthFlag::LowLevel);   // guidance
+
+    // Latch "reached a healthy capture level" the first time either ear peaks at/above the good floor.
+    // Monotonic within a run (only set true here, cleared in reset()); no grace gate -- a peak this
+    // loud is unambiguous signal, not warm-up noise. The GUI uses this to warn when a capture stays
+    // too quiet for good SNR (sits above the no-signal floor but never reaches a usable level).
+    if (peakL >= kGoodLevelLinear || peakR >= kGoodLevelLinear)
+        reachedGood_.store (true);
 }
 
 void HealthMonitor::reportOutLevel (float peakMono, bool clipOut) {

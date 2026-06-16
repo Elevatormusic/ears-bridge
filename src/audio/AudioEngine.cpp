@@ -171,6 +171,7 @@ HealthFlag AudioEngine::healthFlags() const noexcept     { return hm.flags(); }
 bool       AudioEngine::cleanCapture() const noexcept    { return hm.cleanCapture(); }
 DipGainProfile AudioEngine::gainProfile() const noexcept { return hm.gainProfile(); }
 bool AudioEngine::consumeRecentInputClip() noexcept      { return hm.recentInputClip(); }
+bool AudioEngine::reachedGoodLevel()       const noexcept { return hm.reachedGoodLevel(); }
 bool AudioEngine::consumeDeviceDied()      noexcept      { return deviceDied_.exchange (false); }
 int  AudioEngine::grantedOutputBitDepth()  const noexcept { return devices.grantedOutputBitDepth(); }
 

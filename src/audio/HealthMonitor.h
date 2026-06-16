@@ -28,6 +28,7 @@ public:
     // Thresholds (public constants so tests assert exact boundaries).
     static constexpr float  kClipLinear         = 0.8913f;   // -1.0 dBFS
     static constexpr float  kLowLevelLinear      = 0.00316f;  // -50 dBFS (peak over a sweep window)
+    static constexpr float  kGoodLevelLinear     = 0.06310f;  // -24 dBFS (floor of a healthy capture level)
     static constexpr double kDriftRatioTol       = 0.005;     // +/-0.5% sustained
     static constexpr int    kDriftSustainBlocks  = 8;         // consecutive out-of-tol blocks to latch
     static constexpr int    kLowLevelGraceBlocks = 64;        // ignore initial silence before the sweep starts
@@ -52,6 +53,11 @@ public:
     bool recentInputClip() noexcept { return recentClip_.exchange (false); }
     DipGainProfile gainProfile() const noexcept { return DipGainProfile::forModel (model_); }
 
+    // True once either ear has peaked at a healthy capture level (>= kGoodLevelLinear) since the last
+    // reset. Lets the GUI separate a present-but-too-quiet capture (the low-SNR "tin-can" failure,
+    // which sits ABOVE the -50 dBFS no-signal floor and so reads as "clean" today) from a good one.
+    bool reachedGoodLevel() const noexcept { return reachedGood_.load(); }
+
 private:
     void raise (HealthFlag f) noexcept;   // OR into flags; clear cleanCapture for invalidating flags
 
@@ -71,6 +77,7 @@ private:
     std::atomic<unsigned>  flagBits { 0 };
     std::atomic<bool>      clean { true };
     std::atomic<bool>      recentClip_ { false };   // edge-triggered input clip, drained by recentInputClip()
+    std::atomic<bool>      reachedGood_ { false };  // latched true once a healthy input peak is seen this run
 
     std::atomic<int> driftRun { 0 };     // consecutive out-of-tol blocks
     std::atomic<int> blockCount { 0 };   // for the low-level grace window

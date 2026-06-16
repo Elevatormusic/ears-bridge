@@ -55,6 +55,7 @@ private:
     // Right-pane section eyebrows.
     juce::Label calEyebrow;
     juce::Label levelsEyebrow;
+    juce::Label levelsHint;              // inline caption: aim the amp at the meter target band
     juce::Rectangle<int> levelsBounds;   // Levels card backdrop (drawn in paint)
 
     // Input row.
@@ -86,6 +87,8 @@ private:
     static constexpr int kInputClipHoldTicks = 240;   // ~8 s at the 30 Hz GUI timer
     int          silentTicks_ = 0;                    // consecutive below-floor input ticks (debounce)
     static constexpr int kSilentHoldTicks = 60;       // ~2 s of sustained silence before "no input signal"
+    int          lowLevelTicks_ = 0;                  // consecutive present-but-too-quiet ticks (debounce)
+    static constexpr int kLowLevelHoldTicks = 45;     // ~1.5 s below a healthy capture level before warning
     juce::String statusErrorMsg_;                     // specific Error-state message (survives re-renders)
     // Transport.
     juce::TextButton startStop { "Start" };

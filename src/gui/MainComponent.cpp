@@ -192,9 +192,17 @@ MainComponent::MainComponent() {
     addAndMakeVisible (rightCal);
     styleEyebrow (levelsEyebrow, "LEVELS");
     addAndMakeVisible (levelsEyebrow);
+    levelsHint.setText ("Set your amp so the L and R meters reach the green band.", juce::dontSendNotification);
+    levelsHint.setColour (juce::Label::textColourId, Theme::textDim());
+    levelsHint.setFont (juce::Font (juce::FontOptions (11.5f)));
+    levelsHint.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (levelsHint);
     meterL.setTitle ("Left input level");
     meterR.setTitle ("Right input level");
     meterOut.setTitle ("Output level");
+    // Capture meters carry the green target band (a level to aim the amp at); the Out meter does not.
+    meterL.setShowTargetBand (true);
+    meterR.setShowTargetBand (true);
     addAndMakeVisible (meterL);
     addAndMakeVisible (meterR);
     addAndMakeVisible (meterOut);
@@ -486,7 +494,7 @@ void MainComponent::onStartStop() {
         juce::String err;
         if (engine.start (err)) {
             startStop.setButtonText ("Stop");
-            inputClipHold_ = 0; silentTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
+            inputClipHold_ = 0; silentTicks_ = 0; lowLevelTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
             // Surface a silent format downgrade: WASAPI shared mode can grant a different rate/depth
             // than the user selected, which would otherwise resample with no indication.
             juce::StringArray notes;
@@ -536,6 +544,7 @@ void MainComponent::applyTextColours() {
     styleEyebrow (trimLabel,     "OUTPUT TRIM (dB)");
     styleEyebrow (calEyebrow,    "CALIBRATION");
     styleEyebrow (levelsEyebrow, "LEVELS");
+    levelsHint.setColour     (juce::Label::textColourId, Theme::textDim());
     combineHint.setColour    (juce::Label::textColourId, Theme::textDim());
     outputHint.setColour     (juce::Label::textColourId, Theme::textDim());
     preflightLabel.setColour (juce::Label::textColourId, Theme::warn());
@@ -574,6 +583,12 @@ void MainComponent::updateStatusLine() {
             // of genuinely below-floor input (debounced in timerCallback so normal gaps don't flicker),
             // say so, since ambient room noise alone (~-30 dB) sits well above the -50 dB floor.
             statusLine.setText ("Running - no input signal (check the EARS)", juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::warn());
+        } else if (lowLevelTicks_ >= kLowLevelHoldTicks) {
+            // Signal present but the capture never reached a healthy level: a measurement this quiet has
+            // poor SNR and reads "tin-can", yet without this it would show "clean" (clean = no dropouts).
+            // Point the user at the meter target band, not an absolute dB they can't read.
+            statusLine.setText ("Running - level low: turn your amp up to the green band", juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::warn());
         } else {
             statusLine.setText ("Running - clean", juce::dontSendNotification);
@@ -617,6 +632,13 @@ void MainComponent::timerCallback() {
     // ticks so brief pre-/inter-sweep gaps don't flicker the status; reset the instant signal returns.
     const bool blockSilent = lv.inL < HealthMonitor::kLowLevelLinear && lv.inR < HealthMonitor::kLowLevelLinear;
     silentTicks_ = blockSilent ? (silentTicks_ + 1) : 0;
+    // Too-quiet (low-SNR) guidance: the input is PRESENT (not the silent case above) yet the run has
+    // never reached a healthy capture level. Debounced like the silent check so startup and the gaps
+    // between Dirac's L/R sweeps don't flicker it; clears the instant the level gets healthy (the
+    // engine latch is monotonic per run). This catches the present-but-quiet "tin-can" capture that
+    // otherwise reads as "clean".
+    const bool tooQuiet = ! blockSilent && ! engine.reachedGoodLevel();
+    lowLevelTicks_ = tooQuiet ? (lowLevelTicks_ + 1) : 0;
     if (engine.status() == EngineStatus::Running) updateStatusLine();
 
     // Raw-input (ADC) clipping warning. Re-arm from the edge-triggered, self-clearing recent-clip
@@ -787,7 +809,13 @@ void MainComponent::resized() {
 
         levelsBounds = pp.removeFromTop (104);
         auto lv = levelsBounds.reduced (16, 12);
-        levelsEyebrow.setBounds (lv.removeFromTop (14));
+        {
+            // Section eyebrow with the gain-staging caption inline to its right (zero extra vertical).
+            auto top = lv.removeFromTop (14);
+            levelsEyebrow.setBounds (top.removeFromLeft (60));
+            top.removeFromLeft (10);
+            levelsHint.setBounds (top);
+        }
         lv.removeFromTop (8);
         const int mh = lv.getHeight() / 3;
         meterL.setBounds   (lv.removeFromTop (mh));

@@ -188,3 +188,21 @@ TEST_CASE("HealthMonitor: Plan-2 setFifoFill / setCaptureToRenderRatio / levels 
     CHECK(std::abs (lv.inR - 0.25f) < 2e-3f);
     CHECK(std::abs (lv.outMono - 0.8f) < 2e-3f);
 }
+
+TEST_CASE("HealthMonitor latches reachedGoodLevel once a healthy capture peak is seen") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    CHECK_FALSE(h.reachedGoodLevel());
+    // A present-but-too-quiet capture sits ABOVE the -50 dBFS no-signal floor but BELOW the -24 dBFS
+    // healthy floor -- the "tin-can" case. It must NOT count as reaching a usable level.
+    h.reportInLevels (0.02f, 0.02f, false, false);   // ~ -34 dBFS, both ears
+    CHECK_FALSE(h.reachedGoodLevel());
+    // A healthy peak on EITHER ear (>= kGoodLevelLinear) latches it true.
+    h.reportInLevels (0.10f, 0.02f, false, false);   // L ~ -20 dBFS
+    CHECK(h.reachedGoodLevel());
+    // It stays latched even if the level later falls back (so an inter-sweep gap can't un-set it).
+    h.reportInLevels (0.0f, 0.0f, false, false);
+    CHECK(h.reachedGoodLevel());
+    // A fresh run clears the latch.
+    h.reset();
+    CHECK_FALSE(h.reachedGoodLevel());
+}

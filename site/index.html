@@ -40,7 +40,7 @@ img{ max-width:100%; display:block; }
 
 nav{ position:sticky; top:0; z-index:10; background:color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter:saturate(180%) blur(20px); border-bottom:1px solid var(--sep); }
 nav .wrap{ display:flex; align-items:center; height:52px; gap:8px; }
-nav .brand{ display:flex; align-items:center; gap:8px; font-weight:600; font-size:17px; color:var(--tx); }
+nav .brand{ display:inline-flex; align-items:center; min-height:44px; gap:8px; font-weight:600; font-size:17px; color:var(--tx); }
 nav .brand img{ width:24px; height:24px; border-radius:6px; }
 nav .grow{ flex:1; }
 /* full-height hit area so the whole 52px bar is clickable (≥44pt target) */
@@ -99,7 +99,7 @@ h2{ text-align:center; font-size:clamp(30px,5vw,48px); font-weight:600; letter-s
 footer{ border-top:1px solid var(--sep); padding:40px 0; color:var(--tx2); font-size:13px; }
 footer .wrap{ display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; }
 footer .grow{ flex:1; }
-footer .fbrand{ display:flex; align-items:center; gap:8px; color:var(--tx); font-weight:600; }
+footer .fbrand{ display:inline-flex; align-items:center; min-height:44px; gap:8px; color:var(--tx); font-weight:600; }
 footer .fbrand img{ width:20px; height:20px; border-radius:5px; }
 /* full-height hit area for the inline footer links (≥44pt target) */
 footer a:not(.fbrand){ display:inline-flex; align-items:center; min-height:44px; padding:4px 2px; }
@@ -108,7 +108,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
 </head>
 <body>
 <nav><div class="wrap">
-  <a class="brand" href="#top"><img src="assets/icon.svg?v=3" alt="">EARS Bridge</a>
+  <a class="brand" href="#top"><img src="assets/icon.svg?v=3" alt="" aria-hidden="true">EARS Bridge</a>
   <span class="grow"></span>
   <a class="navlink" href="#how">How it works</a>
   <a class="navlink" href="#features">Features</a>
@@ -129,8 +129,8 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
   <p class="meta">Free · open source · Windows 10/11 and macOS · works with EARS and EARS&nbsp;Pro</p>
   <div class="shot">
     <picture>
-      <img class="lt" src="assets/app-light.png?v=3" alt="EARS Bridge running: two per-ear calibration plots, routing controls, and live level meters">
-      <img class="dk" src="assets/app-dark.png?v=3" alt="EARS Bridge running in dark mode">
+      <img class="lt" src="assets/app-light.png?v=4" alt="EARS Bridge: the Auto per-ear combine mode selected, per-ear calibration plots for both ears, routing controls with the Dirac shared-mode confirmation, and live level meters">
+      <img class="dk" src="assets/app-dark.png?v=4" alt="EARS Bridge in dark mode, showing the Auto per-ear mode, both calibration plots, and level meters">
     </picture>
   </div>
 </div></header>
@@ -344,10 +344,13 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
   <p class="eyebrow">Features</p>
   <h2>Built for accurate measurement.</h2>
   <div class="grid">
+    <div class="feat"><i class="ti ti-arrows-left-right ic" aria-hidden="true"></i><h3>Auto per-ear</h3><p>Follows whichever earcup Dirac is sweeping and records only that ear's calibrated mic — a clean per-ear capture in one pass, with no open-back crosstalk folded in.</p></div>
     <div class="feat"><i class="ti ti-ear ic" aria-hidden="true"></i><h3>Per-ear calibration</h3><p>Loads each capsule's FRD calibration as an inverse-correction FIR, so the EARS's own response is removed before Dirac ever sees it.</p></div>
+    <div class="feat"><i class="ti ti-bolt ic" aria-hidden="true"></i><h3>One-click Dirac setup</h3><p>Detects the standard VB-CABLE and sets Dirac to shared mode in a click, so its exclusive-mode “recording device error 600007” never blocks you.</p></div>
     <div class="feat"><i class="ti ti-wave-sine ic" aria-hidden="true"></i><h3>Drift-corrected audio</h3><p>A lock-free asynchronous sample-rate converter keeps the two independent clocks in step over a full sweep — no dropouts, no slip.</p></div>
+    <div class="feat"><i class="ti ti-activity-heartbeat ic" aria-hidden="true"></i><h3>Measurement health</h3><p>Live per-ear meters with a green target band, plus clear warnings — a too-low level, input clipping, a disconnected jig, a silent input, a resampled rate — so a bad measurement never passes for a good one.</p></div>
+    <div class="feat"><i class="ti ti-gauge ic" aria-hidden="true"></i><h3>Gain staging, simplified</h3><p>The exact loudness doesn't matter — Dirac normalizes the measurement. Turn your amp up until the L and R meters reach the green band; a too-quiet capture is flagged instead of passing as “clean.”</p></div>
     <div class="feat"><i class="ti ti-device-speaker ic" aria-hidden="true"></i><h3>EARS and EARS Pro</h3><p>Original EARS (48&nbsp;kHz / 24-bit) and EARS Pro (44.1–192&nbsp;kHz, 16/24/32-bit). FIR taps scale with the rate.</p></div>
-    <div class="feat"><i class="ti ti-activity-heartbeat ic" aria-hidden="true"></i><h3>Health monitoring</h3><p>Live level meters and a clean-capture indicator catch dropouts and clipping so you only keep good measurements.</p></div>
     <div class="feat"><i class="ti ti-devices ic" aria-hidden="true"></i><h3>Cross-platform</h3><p>A self-contained installer on Windows and a universal disk image on macOS — built from one codebase.</p></div>
     <div class="feat"><i class="ti ti-license ic" aria-hidden="true"></i><h3>Open source</h3><p>The full source, design system, and build are public — inspect it, build it, or contribute on GitHub.</p></div>
   </div>
@@ -356,7 +359,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
 <section id="download"><div class="wrap">
   <p class="eyebrow">Download</p>
   <h2>Get started in a few minutes.</h2>
-  <p class="sub">You'll also need <a href="https://www.dirac.com/live/">Dirac Live</a> and a virtual audio device. Then run Dirac once per ear.</p>
+  <p class="sub">You'll also need <a href="https://www.dirac.com/live/">Dirac Live</a> and a virtual audio device. Pick <b>Auto per-ear</b> in EARS Bridge, then let Dirac run its normal measurement — it follows each earcup for you.</p>
   <div class="dl">
     <div class="dlcard">
       <h3><i class="ti ti-brand-windows" aria-hidden="true"></i>Windows</h3>
@@ -380,7 +383,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
 </div></section>
 
 <footer><div class="wrap">
-  <a class="fbrand" href="#top"><img src="assets/icon.svg?v=3" alt="">EARS Bridge</a>
+  <a class="fbrand" href="#top"><img src="assets/icon.svg?v=3" alt="" aria-hidden="true">EARS Bridge</a>
   <span class="grow"></span>
   <a href="https://github.com/Elevatormusic/ears-bridge">GitHub</a>
   <a href="https://github.com/Elevatormusic/ears-bridge/releases">Releases</a>
