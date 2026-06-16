@@ -62,6 +62,7 @@ private:
 
     // Input row.
     DevicePicker inputPicker { "INPUT" };
+    juce::Label  inputGainHint;   // "keep the EARS gain at its factory 18 dB" recommendation
     // Cal slots.
     CalSlotComponent leftCal  { "LEFT EAR CAL" };
     CalSlotComponent rightCal { "RIGHT EAR CAL" };

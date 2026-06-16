@@ -52,11 +52,13 @@ void LevelMeter::paint (juce::Graphics& g) {
     auto lab = r.removeFromLeft (26.0f);
     g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
     if (active_) {
-        // AutoPerEar "live" indicator: an accent dot (shape, not colour alone) before the label, both
-        // in the accent colour, marking the earcup currently being fed to Dirac. Drawn inside the
-        // 26 px label column so the track width never shifts when the active side toggles.
+        // AutoPerEar "live" indicator: an accent DOT (a graphical object) before the label marks the
+        // earcup currently fed to Dirac. The label text stays the readable primary colour -- the accent
+        // is a fill, not low-contrast text. Drawn inside the 26 px label column so the track width
+        // never shifts when the active side toggles.
         g.setColour (Theme::accent());
         g.fillEllipse (lab.getX(), lab.getCentreY() - 3.0f, 6.0f, 6.0f);
+        g.setColour (Theme::text());
         g.drawText (label, lab.withTrimmedLeft (11.0f), juce::Justification::centredLeft);
     } else {
         g.setColour (Theme::textDim());

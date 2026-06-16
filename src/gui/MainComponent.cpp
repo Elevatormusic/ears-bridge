@@ -53,6 +53,13 @@ MainComponent::MainComponent() {
     // --- Input picker ---
     inputPicker.onDeviceChosen = [this] (const DeviceId& d) { onInputChosen (d); };
     addAndMakeVisible (inputPicker);
+    inputGainHint.setText ("Keep the EARS gain switch at its factory 18 dB - only lower it if the input clips.",
+                           juce::dontSendNotification);
+    inputGainHint.setColour (juce::Label::textColourId, Theme::textDim());
+    inputGainHint.setFont (juce::Font (juce::FontOptions (11.5f)));
+    inputGainHint.setJustificationType (juce::Justification::topLeft);
+    inputGainHint.setMinimumHorizontalScale (1.0f);
+    addAndMakeVisible (inputGainHint);
 
     // --- Combine selector ---
     styleEyebrow (combineLabel, "COMBINE MODE");
@@ -576,6 +583,7 @@ void MainComponent::applyTextColours() {
     styleEyebrow (levelsEyebrow, "LEVELS");
     // levelsHint colour/text is owned by the timer (updateActiveEarIndicator), so it is not set here.
     combineHint.setColour    (juce::Label::textColourId, Theme::textDim());
+    inputGainHint.setColour  (juce::Label::textColourId, Theme::textDim());
     outputHint.setColour     (juce::Label::textColourId, Theme::textDim());
     preflightLabel.setColour (juce::Label::textColourId, Theme::warn());
     rateWarn.setColour       (juce::Label::textColourId, Theme::warn());
@@ -661,7 +669,7 @@ void MainComponent::updateActiveEarIndicator (bool silent) {
         if (live) {
             text = (ear == 0) ? "Auto per-ear - capturing the LEFT earcup"
                               : "Auto per-ear - capturing the RIGHT earcup";
-            col  = Theme::accent();
+            col  = Theme::text();   // readable primary text; the meter's accent dot carries the colour cue
         } else {
             text = "Auto per-ear - waiting for the next sweep...";
             col  = Theme::textDim();
@@ -807,7 +815,9 @@ void MainComponent::resized() {
     {
         auto rr = rail.reduced (16);
         inputPicker.setBounds (rr.removeFromTop (62));
-        rr.removeFromTop (16);
+        rr.removeFromTop (4);
+        inputGainHint.setBounds (rr.removeFromTop (30));
+        rr.removeFromTop (12);
 
         combineLabel.setBounds (rr.removeFromTop (16));
         rr.removeFromTop (6);

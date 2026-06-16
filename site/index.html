@@ -60,11 +60,14 @@ nav a.navlink:hover{ color:var(--tx); }
 .hero .cta{ display:flex; gap:14px; justify-content:center; flex-wrap:wrap; margin-top:30px; }
 .hero .meta{ margin-top:18px; font-size:13px; color:var(--tx2); }
 
-.shot{ margin:54px auto 0; max-width:880px; border-radius:18px; border:1px solid var(--sep); overflow:hidden; box-shadow:0 30px 60px -30px rgba(0,0,0,.35); }
-@media (prefers-color-scheme: dark){ .shot{ box-shadow:0 30px 60px -30px rgba(0,0,0,.8); } }
-.shot img{ width:100%; }
-.shot picture img.dk{ display:none; }
-@media (prefers-color-scheme: dark){ .shot picture img.lt{ display:none; } .shot picture img.dk{ display:block; } }
+/* Hero shows the LIVE interactive app (demo.html) in an iframe, auto-sized to its content; small
+   screens and no-JS fall back to a static screenshot. */
+.demowrap{ margin:54px auto 0; max-width:840px; }
+.demoframe{ display:block; width:100%; height:800px; border:0; background:transparent; border-radius:12px; box-shadow:0 30px 60px -30px rgba(0,0,0,.35); }
+@media (prefers-color-scheme: dark){ .demoframe{ box-shadow:0 30px 60px -30px rgba(0,0,0,.8); } }
+.demowrap .mobshot, .demowrap .nojs{ display:none; }
+.demowrap .mobshot img, .demowrap .nojs{ width:100%; border-radius:14px; border:1px solid var(--sep); }
+@media (max-width:700px){ .demoframe{ display:none; } .demowrap .mobshot{ display:block; } }
 
 section{ padding:90px 0; }
 section.alt{ background:var(--bg2); }
@@ -127,12 +130,15 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
     <a class="btn" href="https://github.com/Elevatormusic/ears-bridge/releases/latest/download/EARS-Bridge-macOS.dmg"><i class="ti ti-brand-apple" aria-hidden="true"></i>Download for macOS</a>
   </div>
   <p class="meta">Free · open source · Windows 10/11 and macOS · works with EARS and EARS&nbsp;Pro</p>
-  <div class="shot">
-    <picture>
-      <img class="lt" src="assets/app-light.png?v=4" alt="EARS Bridge: the Auto per-ear combine mode selected, per-ear calibration plots for both ears, routing controls with the Dirac shared-mode confirmation, and live level meters">
-      <img class="dk" src="assets/app-dark.png?v=4" alt="EARS Bridge in dark mode, showing the Auto per-ear mode, both calibration plots, and level meters">
+  <div class="demowrap">
+    <iframe class="demoframe" title="Interactive EARS Bridge demo — try the dropdowns, load a calibration, and press Start" src="demo.html" loading="lazy"></iframe>
+    <picture class="mobshot">
+      <source media="(prefers-color-scheme: dark)" srcset="assets/app-dark.png?v=5">
+      <img src="assets/app-light.png?v=5" alt="EARS Bridge: Auto per-ear mode, per-ear calibration plots, the Dirac shared-mode confirmation, and live level meters sitting in the green target band">
     </picture>
+    <noscript><img class="nojs" src="assets/app-light.png?v=5" alt="EARS Bridge interface: Auto per-ear mode, per-ear calibration plots, and level meters"></noscript>
   </div>
+  <script>addEventListener('message',function(e){if(e.data&&typeof e.data.ebDemoHeight==='number'){var f=document.querySelector('.demoframe');if(f)f.style.height=Math.max(560,Math.min(1120,e.data.ebDemoHeight))+'px';}});</script>
 </div></header>
 
 <section id="correction" class="alt"><div class="wrap">

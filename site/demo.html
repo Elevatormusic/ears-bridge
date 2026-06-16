@@ -3,9 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EARS Bridge — interactive prototype</title>
+<title>EARS Bridge — interactive demo</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css">
-<style> html{ color-scheme:light dark; } body{ margin:0; background:#0c0c0d; display:flex; justify-content:center; padding:32px 16px; } @media (prefers-color-scheme: light){ body{ background:#c7c7cc; } } </style>
+<!-- Embedded as a live demo inside the marketing site's hero via <iframe>: transparent, edge-to-edge. -->
+<style> html{ color-scheme:light dark; } html,body{ margin:0; } body{ background:transparent; } </style>
 </head>
 <body>
 <div class="eb-stage">
@@ -17,7 +18,7 @@
   --tx:#FFFFFF; --tx2:rgba(255,255,255,.62); --tx3:rgba(255,255,255,.3); --axis:#98989D;
   --accent:#0091FF; --accent-h:#1F9DFF; --ok:#30D158; --ok-tx:#30D158; --warn:#FF9230; --err:#FF4245;
   --sans:-apple-system,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,Roboto,sans-serif;
-  --mono:"SF Mono","Cascadia Code","Consolas",ui-monospace,monospace; width:100%; max-width:760px; margin:0 auto;
+  --mono:"SF Mono","Cascadia Code","Consolas",ui-monospace,monospace; width:100%; max-width:none; margin:0 auto;
 }
 @media (prefers-color-scheme: light){
   .eb-stage{
@@ -77,6 +78,10 @@
 .eb-monitor{ background:var(--surface); border-radius:10px; padding:12px 16px; }
 .eb-mhead{ display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; letter-spacing:.04em; color:var(--tx2); text-transform:uppercase; margin-bottom:10px; }
 .eb-meter{ display:flex; align-items:center; gap:8px; margin-bottom:8px; } .eb-meter:last-child{ margin-bottom:0; } .eb-meter .ml{ font-size:11px; font-weight:600; color:var(--tx2); width:28px; }
+/* AutoPerEar "live" indicator: an accent DOT (a graphical object) marks the earcup currently being
+   captured; the label/caption text stay readable (the accent is a fill, not low-contrast text). */
+.eb-meter .ml.active{ color:var(--tx); }
+.eb-meter .ml.active::before{ content:""; display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--accent); margin-right:5px; vertical-align:middle; }
 .eb-mtrack{ flex:1; height:8px; border-radius:4px; background:var(--track); position:relative; overflow:hidden; }
 .eb-zamber{ position:absolute; right:1.6%; top:0; height:100%; width:3.4%; background:rgba(255,146,48,.65); }
 .eb-zred{ position:absolute; right:0; top:0; height:100%; width:1.6%; background:rgba(255,66,69,.8); }
@@ -186,7 +191,7 @@
     var tag = document.getElementById('rightTag'); tag.className = 'eb-info'; tag.textContent = 'HPN';
     refresh();
   });
-  start.addEventListener('click', function(){ if(start.disabled) return; running = !running; refresh(); });
+  start.addEventListener('click', function(){ if(start.disabled) return; running = !running; refresh(); updateActiveEar(); });
   var advBtn = document.getElementById('advBtn'), adv = document.getElementById('adv');
   advBtn.addEventListener('click', function(){ var open = advBtn.getAttribute('aria-expanded') === 'true'; advBtn.setAttribute('aria-expanded', String(!open)); adv.classList.toggle('open', !open); });
   var trim = document.getElementById('f-trim'), trimVal = document.getElementById('trimVal');
@@ -199,7 +204,30 @@
             : this.value === 'Average (L+R)/2' ? 'Averages both ears. For sealed closed-backs only — on open-backs it folds in the other earcup’s leakage.'
             : 'Single fixed ear. Dirac has no one-earcup mode, so run its measurement twice — Left, then Right. Auto per-ear does both in one routine.';
     help.innerHTML = msg;
+    updateActiveEar();
   });
+
+  // Active-ear indicator: in Auto per-ear, while "running", accent the earcup being captured and
+  // alternate L/R to mirror Dirac's left-then-right sweep -- the live counterpart of the app's meter
+  // accent + "capturing the LEFT/RIGHT earcup" caption.
+  var earLabels = document.querySelectorAll('.eb-meter .ml');
+  var levelsCap = document.querySelector('.eb-monitor .eb-help');
+  var capDefault = levelsCap.textContent;
+  var activeEar = 0, earTimer = null;
+  function paintEar(){
+    var show = running && combine.value.indexOf('Auto per-ear') === 0;
+    earLabels[0].classList.toggle('active', show && activeEar === 0);
+    earLabels[1].classList.toggle('active', show && activeEar === 1);
+    if(show){ levelsCap.textContent = 'Auto per-ear — capturing the ' + (activeEar === 0 ? 'LEFT' : 'RIGHT') + ' earcup'; levelsCap.style.color = 'var(--tx)'; }
+    else { levelsCap.textContent = capDefault; levelsCap.style.color = ''; }
+  }
+  function updateActiveEar(){
+    if(earTimer){ clearInterval(earTimer); earTimer = null; }
+    if(running && combine.value.indexOf('Auto per-ear') === 0){
+      activeEar = 0; paintEar();
+      if(!reduce) earTimer = setInterval(function(){ activeEar = 1 - activeEar; paintEar(); }, 3000);
+    } else { paintEar(); }
+  }
   // animated meters (respect reduce-motion)
   var fills = [].slice.call(document.querySelectorAll('.eb-mfill'));
   var dbs = [].slice.call(document.querySelectorAll('.eb-mdb'));
@@ -217,6 +245,14 @@
   }
   if(reduce){ tick(); } else { tick(); setInterval(tick, 140); }
   refresh();
+
+  // Start the demo already complete (right ear loaded, with the entrance curve-draw).
+  document.getElementById('drop').click();
+
+  // Report content height to the embedding page so the hero <iframe> can auto-size to the app.
+  function reportH(){ try{ parent.postMessage({ ebDemoHeight: document.documentElement.scrollHeight }, '*'); } catch(e){} }
+  if(window.ResizeObserver){ try{ new ResizeObserver(reportH).observe(document.body); } catch(e){} }
+  window.addEventListener('load', reportH); setTimeout(reportH, 350);
 })();
 </script>
 </div>
