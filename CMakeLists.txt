@@ -141,6 +141,9 @@ target_sources(EarsBridge PRIVATE src/Main.cpp)
 # not through eb_core, so don't rely on transitive defines reaching it.
 target_compile_definitions(EarsBridge PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+# One source of truth for the app version: the update checker (in eb_gui) and the app's
+# getApplicationVersion() both read EB_VERSION_STRING, derived from project(... VERSION ...).
+target_compile_definitions(EarsBridge PRIVATE EB_VERSION_STRING="${PROJECT_VERSION}")
 target_link_libraries(EarsBridge PRIVATE
     eb_gui eb_core juce::juce_gui_extra
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
