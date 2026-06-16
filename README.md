@@ -54,7 +54,9 @@ Because the app is unsigned, Windows SmartScreen may warn about an unknown publi
 
 ### macOS
 1. Download `EARS-Bridge-<version>-macOS.dmg` from the [Releases page](https://github.com/Elevatormusic/ears-bridge/releases), open it, and drag **EARS Bridge** to **Applications**.
-2. The app is not yet notarized, so clear the quarantine flag once in Terminal (or right-click the app and choose **Open**):
+2. The app isn't notarized yet, so the first launch is blocked. To allow it **without Terminal**: double-click **EARS Bridge** in Applications and click **Done** on the "cannot be opened because Apple cannot check it for malicious software" dialog, then open **System Settings → Privacy & Security**, scroll down to the "EARS Bridge was blocked…" message, and click **Open Anyway** (confirm with your password or Touch ID). On macOS 15 (Sequoia) this replaced the old right-click → Open.
+
+   Or strip the quarantine flag once in Terminal (no prompts), then open it normally:
    ```sh
    xattr -dr com.apple.quarantine "/Applications/EARS Bridge.app"
    ```
