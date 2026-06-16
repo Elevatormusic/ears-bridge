@@ -63,7 +63,7 @@ Because the app is unsigned, Windows SmartScreen may warn about an unknown publi
 ## Usage
 
 1. Connect the EARS and open EARS Bridge.
-2. Select the EARS as the input and your virtual cable as the output.
+2. Select the EARS as the input and your virtual cable as the output. EARS Bridge **auto-selects a connected EARS and a standard VB-CABLE** for you, so these are usually already chosen — just confirm them. (If the EARS doesn't appear at all, it isn't enumerating on USB — try a known-good **data** cable and a direct port; the app can only list devices Windows presents.)
 3. Load each ear's calibration into the matching **Left** and **Right** slot. Use the **HPN** files by default (see [Calibration files](#calibration-files)).
 4. Choose a combine mode. **Auto per-ear (Dirac)** is recommended — it records only the earcup Dirac is currently sweeping, so each side stays clean even on open-back headphones where sound leaks across to the other capsule (see [Combine modes](#combine-modes)).
 5. Set the sample rate and bit depth, then press **Start**.
@@ -86,7 +86,7 @@ miniDSP supplies two variants per capsule:
 
 EARS Bridge captures both ear channels, but Dirac records one mono signal, so the two ears have to be reduced to that one signal. The mode you choose decides how — by sending one ear at a time (Auto per-ear, Two-pass) or mixing them (Average, Sum):
 
-- **Auto per-ear (Dirac)** — *recommended for headphones.* Dirac measures with a single routine that sweeps both channels (left, then right); EARS Bridge tracks which earcup is sounding and feeds only that ear's calibrated mic, so each sweep is a single clean arrival, open-back leakage into the other capsule is never folded in, and that one routine corrects both ears. Just run Dirac's normal measurement.
+- **Auto per-ear (Dirac)** — *recommended for headphones, and the default.* Dirac measures with a single routine that sweeps both channels (left, then right); EARS Bridge tracks which earcup is sounding and feeds only that ear's calibrated mic, so each sweep is a single clean arrival, open-back leakage into the other capsule is never folded in, and that one routine corrects both ears. Just run Dirac's normal measurement. While it sweeps, a **live indicator** highlights which earcup is currently being captured, so you can confirm the bridge is following Dirac's left-then-right sweep.
 - **Two-pass Left / Two-pass Right** — locks the feed to one ear. Dirac has no single-earcup mode (its routine always sweeps both channels), so this is the manual alternative to Auto: run Dirac's whole measurement with EARS Bridge on **Left**, then again on **Right** — two Dirac projects, one corrected channel each. Use it for explicit control, or if Auto's earcup detection ever misreads.
 - **Average** `(L+R)/2` and **Sum** `L+R` — collapse both ears into one. Auto per-ear is preferred because it captures only the earcup Dirac is sweeping and ignores the other (silent) cup's open-back leakage; Average and Sum fold that leakage in, and **Sum** also adds +6 dB and can clip.
 
