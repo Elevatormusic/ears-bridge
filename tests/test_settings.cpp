@@ -59,3 +59,19 @@ TEST_CASE("Settings returns sane defaults on a fresh store") {
     CHECK (s.complexPhase() == false);
     dir.deleteRecursively();
 }
+
+TEST_CASE("Settings persists update-check preferences", "[update]") {
+    auto dir = makeTempDir();
+    {
+        eb::Settings s (dir);
+        CHECK (s.autoCheckUpdates() == true);   // default ON
+        CHECK (s.lastUpdateCheck() == 0);        // default 0
+        s.setAutoCheckUpdates (false);
+        s.setLastUpdateCheck (1750000000);
+        s.flush();
+    }
+    eb::Settings reloaded (dir);                 // re-open same folder -> reads back the file
+    CHECK (reloaded.autoCheckUpdates() == false);
+    CHECK (reloaded.lastUpdateCheck() == 1750000000);
+    dir.deleteRecursively();
+}

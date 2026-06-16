@@ -26,6 +26,8 @@ public:
     double       outputTrimDb() const; void setOutputTrimDb (double);
     int          firLength() const;   void setFirLength (int);   // 0 = Auto (numTapsForRate); else explicit override
     bool         complexPhase() const; void setComplexPhase (bool);
+    bool         autoCheckUpdates() const; void setAutoCheckUpdates (bool);
+    juce::int64  lastUpdateCheck() const;  void setLastUpdateCheck (juce::int64);   // unix seconds
 
     void flush();   // force the PropertiesFile to disk immediately
 
