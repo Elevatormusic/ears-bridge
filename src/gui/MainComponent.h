@@ -8,6 +8,7 @@
 #include "gui/CalSlotComponent.h"
 #include "gui/LevelMeter.h"
 #include "gui/RateMenu.h"
+#include "net/UpdateChecker.h"
 #include <memory>
 
 namespace eb {
@@ -96,9 +97,13 @@ private:
     // Transport.
     juce::TextButton startStop { "Start" };
     juce::Label statusLine;
+    // Non-modal "Update available" link shown in the title bar when a newer release exists.
+    juce::HyperlinkButton updateLink;
+    UpdateChecker         updateChecker;
     // Advanced disclosure.
     juce::ToggleButton advancedToggle { "Advanced" };
     juce::ToggleButton complexPhaseToggle { "Complex (with-phase) FIR" };
+    juce::ToggleButton autoUpdateToggle { "Automatically check for updates" };
     juce::Label    firLenLabel; juce::ComboBox firLenBox;
     juce::Label    trimLabel;   juce::Slider trimSlider;
     // L/R check: drive a tone into the LEFT earcup; the engine reports whether L/R are wired right.

@@ -50,6 +50,11 @@ MainComponent::MainComponent() {
     statusLine.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (statusLine);
 
+    // Update link: hidden until a newer release is found; opens the release page in the browser.
+    updateLink.setColour (juce::HyperlinkButton::textColourId, Theme::accent());
+    updateLink.setFont (juce::Font (juce::FontOptions (12.0f)), false, juce::Justification::centredRight);
+    addChildComponent (updateLink);
+
     // --- Input picker ---
     inputPicker.onDeviceChosen = [this] (const DeviceId& d) { onInputChosen (d); };
     addAndMakeVisible (inputPicker);
@@ -142,6 +147,16 @@ MainComponent::MainComponent() {
         rebuildFirsAsync();
     };
     addChildComponent (complexPhaseToggle);
+    autoUpdateToggle.setToggleState (settings.autoCheckUpdates(), juce::dontSendNotification);
+    autoUpdateToggle.onClick = [this] {
+        settings.setAutoCheckUpdates (autoUpdateToggle.getToggleState());
+        settings.flush();
+        if (! autoUpdateToggle.getToggleState() && updateLink.isVisible()) {
+            updateLink.setVisible (false);
+            resized();
+        }
+    };
+    addChildComponent (autoUpdateToggle);
     styleEyebrow (firLenLabel, "FIR LENGTH");
     addChildComponent (firLenLabel);
     firLenBox.addItem ("Auto (scales with rate)", kFirLenAutoId);
@@ -275,6 +290,27 @@ MainComponent::MainComponent() {
     syncPlotScales();
     setSize (900, 700);
     startTimerHz (30);
+
+    // Background update check: once per launch, but at most one successful check per 24 h.
+    {
+        const juce::int64 nowSecs  = juce::Time::getCurrentTime().toMilliseconds() / 1000;
+        const juce::int64 kDaySecs = 24 * 60 * 60;
+        if (settings.autoCheckUpdates() && nowSecs - settings.lastUpdateCheck() >= kDaySecs) {
+            updateChecker.start (juce::String (EB_VERSION_STRING),
+                [this, nowSecs] (UpdateInfo info) {
+                    if (info.reachedServer) {
+                        settings.setLastUpdateCheck (nowSecs);
+                        settings.flush();
+                    }
+                    if (info.updateAvailable) {
+                        updateLink.setButtonText ("Update available - v" + info.latestVersion);
+                        updateLink.setURL (juce::URL (info.releaseUrl));
+                        updateLink.setVisible (true);
+                        resized();
+                    }
+                });
+        }
+    }
 }
 
 MainComponent::~MainComponent() {
@@ -806,6 +842,11 @@ void MainComponent::resized() {
         // (running health / a gate reason), not stacked underneath.
         startStop.setBounds (x.removeFromRight (120).withSizeKeepingCentre (120, 34));
         x.removeFromRight (14);
+        if (updateLink.isVisible()) {
+            const int w = juce::jmin (230, x.getWidth());
+            updateLink.setBounds (x.removeFromRight (w).withSizeKeepingCentre (w, 22));
+            x.removeFromRight (12);
+        }
         statusLine.setBounds (x.withSizeKeepingCentre (x.getWidth(), 22));
     }
 
@@ -856,6 +897,7 @@ void MainComponent::resized() {
         firLenLabel.setVisible (adv); firLenBox.setVisible (adv);
         trimLabel.setVisible (adv);   trimSlider.setVisible (adv);
         verifyButton.setVisible (adv); verifyResultLabel.setVisible (adv);
+        autoUpdateToggle.setVisible (adv);
         if (adv) {
             rr.removeFromTop (4);
             complexPhaseToggle.setBounds (rr.removeFromTop (26));
@@ -869,6 +911,8 @@ void MainComponent::resized() {
             verifyButton.setBounds (rr.removeFromTop (30));
             rr.removeFromTop (4);
             verifyResultLabel.setBounds (rr.removeFromTop (16));
+            rr.removeFromTop (10);
+            autoUpdateToggle.setBounds (rr.removeFromTop (26));
         }
     }
 
