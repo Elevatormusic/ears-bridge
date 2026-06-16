@@ -107,13 +107,13 @@ So there is really just one thing to set: **the level the meters show.**
 - **EARS Bridge Output trim** (under Advanced) — leave at 0 dB. It can only *attenuate*, so it cannot rescue a too-quiet measurement — that fix is upstream at the amp. Use it only to pull a hot or Sum-mode feed down.
 - **Exclusive vs shared mode** is a separate axis entirely — it decides whether devices *connect*, not how loud they are. Leave every device in **shared** mode (see [troubleshooting](#tips-and-troubleshooting)).
 
-EARS Bridge watches this for you: if a run never reaches a healthy level it shows **"level low — turn your amp up to the green band"** instead of a misleading "clean."
+EARS Bridge watches this for you: if a run never reaches a healthy level it shows **"level low: turn your amp up to the green band"** instead of a misleading "clean."
 
 ## Tips and troubleshooting
 
 - **One Dirac routine covers both ears.** Dirac's measurement is a single routine that sweeps both channels — there is no single-earcup mode to select. Auto per-ear gives each earcup its own correction from that one routine; Two-pass is the manual two-run alternative.
 - **Use WASAPI or CoreAudio, not ASIO.** Bridging a capture device to a different render device needs a driver model with separate inputs and outputs; ASIO does not provide one. The app uses WASAPI on Windows and CoreAudio on macOS, and falls back automatically if an ASIO device is selected.
-- **If Dirac can't open the cable** (e.g. *"Failed to connect to the microphone … Recording device error", error code 600007*): Dirac Live 3.10.3+ opens the recording device in **WASAPI exclusive mode**, and the standard VB-CABLE exposes no exclusive-mode format for it to use. This is not a sample-rate problem. Fix it on the Dirac/Windows side, easiest first:
+- **If Dirac can't open the cable** (e.g. *"Failed to connect to the microphone … Recording device error", error code 600007*): Dirac Live opens the recording device in **WASAPI exclusive mode** by default, and the standard VB-CABLE exposes no exclusive-mode format for it to use. This is not a sample-rate problem. Fix it on the Dirac/Windows side, easiest first:
   1. **Let EARS Bridge fix it.** When it detects the standard cable it shows a **"Set Dirac to shared mode"** button — click it, then fully quit and relaunch Dirac and reselect the cable's output. It sets Dirac's own `DAUDIO_WASAPI_NON_EXCLUSIVE` = `ON` *User* environment variable (you can also add it by hand via Windows search → "Edit environment variables for your account").
   2. **Or disable exclusive control on the cable.** `mmsys.cpl` → **Recording** → "CABLE Output (VB-Audio Virtual Cable)" → **Properties** → **Advanced** → untick *"Allow applications to take exclusive control of this device."*
   3. **Check microphone privacy.** Settings → Privacy & security → Microphone → turn on *"Let desktop apps access your microphone."*
@@ -130,7 +130,7 @@ While running, EARS Bridge watches for conditions that would invalidate a measur
 - **Dropped frames** counts samples lost at the bridge as a running trend.
 - **Capture-to-render ratio** shows the live, drift-corrected resample ratio.
 - **Input and output levels** are metered per channel. The L and R input meters carry a green **target band** (−18 to −12 dBFS) to set your amp against. A sustained input clip prompts you to lower the EARS gain switch and/or the Dirac level; output clipping (e.g. the +6 dB Sum mode) is flagged too.
-- **Level too low** — a capture that is present but never reaches a healthy level (too quiet for good SNR — the cause of a thin, "tin-can" result) is flagged so it can't pass as "clean"; raise your amp until the meters reach the green band.
+- **Level low** — a capture that is present but never reaches a healthy level (too quiet for good SNR — the cause of a thin, "tin-can" result) is flagged so it can't pass as "clean"; raise your amp until the meters reach the green band.
 - **Device disconnect** — if the EARS or the virtual cable drops out mid-run, the measurement stops with a clear message instead of recording silence as "clean".
 - **No input signal** — a connected-but-silent jig (muted, or the wrong input device) is called out rather than reading as clean.
 - **Rate / bit-depth downgrade** — if Windows grants a different format than you selected, you're told the run is being resampled.
@@ -194,7 +194,7 @@ The `.github/workflows/release.yml` workflow builds and publishes both installer
 ```
 src/cal/        Calibration-file parsing and FIR design
 src/audio/      Processing graph, clock bridge, device manager, health, engine
-src/platform/   macOS CoreAudio aggregate device
+src/platform/   Endpoint-id resolver, macOS CoreAudio aggregate device, Windows Dirac shared-mode helper
 src/gui/        Components, theme, meters, device pickers
 src/state/      Settings persistence
 tests/          Catch2 unit tests
