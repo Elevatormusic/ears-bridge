@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EARS Bridge — use a miniDSP EARS with Dirac Live</title>
-<meta name="description" content="EARS Bridge lets you measure and correct headphones with Dirac Live using a two-channel miniDSP EARS or EARS Pro jig — per-ear calibration, presented to Dirac as one mono mic through a virtual audio device. Windows and macOS.">
+<meta name="description" content="EARS Bridge lets you measure and correct headphones with Dirac Live using a two-channel miniDSP EARS or EARS Pro jig — per-ear calibration, presented to Dirac as the single mic it expects through a virtual audio device. Windows and macOS.">
 <link rel="icon" type="image/svg+xml" href="assets/icon.svg?v=3">
 <link rel="icon" href="assets/icon.png?v=3">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css">
@@ -125,7 +125,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
   <img class="appicon" src="assets/icon.svg?v=3" alt="EARS Bridge app icon">
   <h1>EARS Bridge</h1>
   <p class="tag">Measure your headphones with Dirac Live.</p>
-  <p class="lede">Dirac Live takes one calibrated microphone. A miniDSP EARS has two — one per ear. EARS Bridge sits between them: it applies each ear's calibration and presents it to Dirac through a virtual audio device as the single mono mic it expects — in the default Auto per-ear mode, following Dirac's sweep so each earcup is measured in turn rather than mixed.</p>
+  <p class="lede">Dirac Live takes one calibrated microphone. A miniDSP EARS has two — one per ear. EARS Bridge sits between them: it applies each ear's calibration and presents it to Dirac through a virtual audio device as the single microphone it expects. By default it runs in Auto per-ear mode, following Dirac's sweep so each earcup is measured in turn rather than combined.</p>
   <div class="cta">
     <a class="btn" href="https://github.com/Elevatormusic/ears-bridge/releases/latest/download/EARS-Bridge-Windows-Setup.exe"><i class="ti ti-brand-windows" aria-hidden="true"></i>Download for Windows</a>
     <a class="btn" href="https://github.com/Elevatormusic/ears-bridge/releases/latest/download/EARS-Bridge-macOS.dmg"><i class="ti ti-brand-apple" aria-hidden="true"></i>Download for macOS</a>
@@ -339,7 +339,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
   <div class="flow">
     <div class="node"><div class="ic"><i class="ti ti-headphones" aria-hidden="true"></i></div><h3>EARS / EARS Pro</h3><p>Two-channel mic capture</p></div>
     <div class="arr"><i class="ti ti-arrow-right" aria-hidden="true"></i></div>
-    <div class="node"><div class="ic"><i class="ti ti-adjustments" aria-hidden="true"></i></div><h3>EARS Bridge</h3><p>Per-ear cal → mono → SRC</p></div>
+    <div class="node"><div class="ic"><i class="ti ti-adjustments" aria-hidden="true"></i></div><h3>EARS Bridge</h3><p>Per-ear cal → 1 ch → SRC</p></div>
     <div class="arr"><i class="ti ti-arrow-right" aria-hidden="true"></i></div>
     <div class="node"><div class="ic"><i class="ti ti-plug-connected" aria-hidden="true"></i></div><h3>Virtual cable</h3><p>VB-CABLE / BlackHole</p></div>
     <div class="arr"><i class="ti ti-arrow-right" aria-hidden="true"></i></div>

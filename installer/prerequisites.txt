@@ -2,12 +2,13 @@ EARS Bridge - before you start
 
 EARS Bridge lets you use a two-channel miniDSP EARS or EARS Pro headphone jig with
 Dirac Live, which only accepts a single calibrated microphone. It applies each ear's
-calibration and presents it to Dirac through a virtual audio device as the single mono
-microphone Dirac expects -- following Dirac's sweep so each earcup is measured in turn.
+calibration and presents it to Dirac through a virtual audio device as the single
+microphone Dirac expects -- following Dirac's sweep so each earcup is measured in turn,
+one ear at a time rather than mixing the two.
 
 To actually measure headphones you will also need:
 
-  1. A virtual audio device, so the mono signal can reach Dirac:
+  1. A virtual audio device, so EARS Bridge's output can reach Dirac:
         - VB-CABLE  (https://vb-audio.com/Cable/)
 
   2. Dirac Live, the room-correction software you are measuring headphones with.
