@@ -69,7 +69,7 @@ Because the app is unsigned, Windows SmartScreen may warn about an unknown publi
 5. Set the sample rate and bit depth, then press **Start**.
 6. In Dirac Live, set the recording device to the virtual cable's capture side — for example, "CABLE Output (VB-Audio Virtual Cable)" or "BlackHole 2ch".
 7. **Set the level.** Play Dirac's level-check tone and turn your headphone amp up until the **L and R input meters sit in the green target band** — comfortably loud, matched, and not clipping. The exact loudness doesn't matter; *too quiet* is what produces a poor, "tin-can" result (see [Setting the level](#setting-the-level-gain-staging)).
-8. Run Dirac's measurement as usual. With **Auto per-ear**, let Dirac sweep left then right — EARS Bridge follows whichever earcup is sounding and feeds only that ear's mic. (With a manual **Two-pass** mode instead, route Dirac's playback to a single earcup per pass.)
+8. Run Dirac's measurement as usual — it is a single routine that sweeps both channels (left, then right); Dirac has no single-earcup mode. With **Auto per-ear**, EARS Bridge follows whichever earcup is sounding and feeds only that ear's mic, so that one routine corrects both ears. (The **Two-pass** modes are the manual alternative: run Dirac's measurement twice, switching EARS Bridge between Left and Right.)
 
 Watch the [health indicators](#health-indicators) while measuring. A clean capture is the prerequisite for a trustworthy result.
 
@@ -86,8 +86,8 @@ miniDSP supplies two variants per capsule:
 
 EARS Bridge captures both ear channels, but Dirac records one mono signal, so the two ears have to be combined. The mode you choose decides how:
 
-- **Auto per-ear (Dirac)** — *recommended for headphones.* Tracks which earcup Dirac is sweeping and feeds only that ear's calibrated mic, so each sweep is a single clean arrival and open-back leakage into the other capsule is never folded in. Just run Dirac's normal left-then-right measurement.
-- **Two-pass Left / Two-pass Right** — feeds one fixed ear. The manual equivalent: route Dirac's playback to a single earcup, measure, then switch sides. Use it when you want explicit control over which mic is live.
+- **Auto per-ear (Dirac)** — *recommended for headphones.* Dirac measures with a single routine that sweeps both channels (left, then right); EARS Bridge tracks which earcup is sounding and feeds only that ear's calibrated mic, so each sweep is a single clean arrival, open-back leakage into the other capsule is never folded in, and that one routine corrects both ears. Just run Dirac's normal measurement.
+- **Two-pass Left / Two-pass Right** — locks the feed to one ear. Dirac has no single-earcup mode (its routine always sweeps both channels), so this is the manual alternative to Auto: run Dirac's whole measurement with EARS Bridge on **Left**, then again on **Right** — two Dirac projects, one corrected channel each. Use it for explicit control, or if Auto's earcup detection ever misreads.
 - **Average** `(L+R)/2` and **Sum** `L+R` — collapse both ears into one. Auto per-ear is preferred because it captures only the earcup Dirac is sweeping and ignores the other (silent) cup's open-back leakage; Average and Sum fold that leakage in, and **Sum** also adds +6 dB and can clip.
 
 ## Setting the level (gain staging)
@@ -109,7 +109,7 @@ EARS Bridge watches this for you: if a run never reaches a healthy level it show
 
 ## Tips and troubleshooting
 
-- **Measure one ear at a time.** Dirac correlates a single microphone, so measuring left and right separately gives each earcup its own correction.
+- **One Dirac routine covers both ears.** Dirac's measurement is a single routine that sweeps both channels — there is no single-earcup mode to select. Auto per-ear gives each earcup its own correction from that one routine; Two-pass is the manual two-run alternative.
 - **Use WASAPI or CoreAudio, not ASIO.** Bridging a capture device to a different render device needs a driver model with separate inputs and outputs; ASIO does not provide one. The app uses WASAPI on Windows and CoreAudio on macOS, and falls back automatically if an ASIO device is selected.
 - **If Dirac can't open the cable** (e.g. *"Failed to connect to the microphone … Recording device error", error code 600007*): Dirac Live 3.10.3+ opens the recording device in **WASAPI exclusive mode**, and the standard VB-CABLE exposes no exclusive-mode format for it to use. This is not a sample-rate problem. Fix it on the Dirac/Windows side, easiest first:
   1. **Let EARS Bridge fix it.** When it detects the standard cable it shows a **"Set Dirac to shared mode"** button — click it, then fully quit and relaunch Dirac and reselect the cable's output. It sets Dirac's own `DAUDIO_WASAPI_NON_EXCLUSIVE` = `ON` *User* environment variable (you can also add it by hand via Windows search → "Edit environment variables for your account").

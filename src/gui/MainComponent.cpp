@@ -435,7 +435,8 @@ void MainComponent::onCombineChosen() {
             break;
         case CombineMode::TwoPassLeft:
         case CombineMode::TwoPassRight:
-            h = "Single ear only. miniDSP's manual method: route Dirac playback to one earcup per pass.";
+            h = "Single fixed ear. Dirac has no one-earcup mode, so run its measurement twice - Left, "
+                "then Right. Auto per-ear does both in one routine.";
             break;
     }
     combineHint.setText (h, juce::dontSendNotification);

@@ -197,7 +197,7 @@
     var msg = this.value.indexOf('Auto per-ear') === 0 ? rec + 'records only the earcup Dirac is sweeping — clean per-ear capture, no open-back crosstalk.'
             : this.value === 'Sum L+R' ? 'Sums both ears (+6 dB). Watch for clipping; folds in open-back leakage.'
             : this.value === 'Average (L+R)/2' ? 'Averages both ears. For sealed closed-backs only — on open-backs it folds in the other earcup’s leakage.'
-            : rec + 'single ear only — route Dirac’s playback to one earcup per pass (miniDSP’s manual method).';
+            : 'Single fixed ear. Dirac has no one-earcup mode, so run its measurement twice — Left, then Right. Auto per-ear does both in one routine.';
     help.innerHTML = msg;
   });
   // animated meters (respect reduce-motion)
