@@ -109,6 +109,7 @@ add_library(eb_gui STATIC
     src/gui/CalSlotComponent.cpp
     src/gui/DevicePicker.cpp
     src/gui/MainComponent.cpp
+    src/net/UpdateChecker.cpp
     src/platform/DiracCompat.cpp)   # Windows: Dirac shared-mode env-var helper (no-op elsewhere)
 target_include_directories(eb_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(eb_gui PUBLIC cxx_std_20)
@@ -121,6 +122,10 @@ target_link_libraries(eb_gui
         juce::juce_recommended_warning_flags)
 target_compile_definitions(eb_gui PUBLIC
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+# Single source of truth for the running version (PROJECT_VERSION from project(...) above),
+# used by the update checker. eb_gui is a plain static lib, so JUCE's generated ProjectInfo
+# is not available here -- this macro replaces it.
+target_compile_definitions(eb_gui PRIVATE EB_VERSION_STRING="${PROJECT_VERSION}")
 
 # ---- GUI app ----
 juce_add_gui_app(EarsBridge
