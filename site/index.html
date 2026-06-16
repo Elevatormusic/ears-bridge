@@ -139,7 +139,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
     </picture>
     <noscript><img class="nojs" src="assets/app-light.png?v=5" alt="EARS Bridge interface: Auto per-ear mode, per-ear calibration plots, and level meters"></noscript>
   </div>
-  <script>addEventListener('message',function(e){if(e.data&&typeof e.data.ebDemoHeight==='number'){var f=document.querySelector('.demoframe');if(f)f.style.height=Math.max(560,Math.min(1120,e.data.ebDemoHeight))+'px';}});</script>
+  <script>addEventListener('message',function(e){if(e.data&&typeof e.data.ebDemoHeight==='number'){var f=document.querySelector('.demoframe');if(f){var h=Math.max(560,Math.min(1120,e.data.ebDemoHeight))+'px';if(f.style.height!==h)f.style.height=h;}}});</script>
 </div></header>
 
 <section id="correction" class="alt"><div class="wrap">

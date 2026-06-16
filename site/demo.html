@@ -243,16 +243,36 @@
       dbs[i].textContent = '−' + Math.abs(db) + ' dB';
     });
   }
-  if(reduce){ tick(); } else { tick(); setInterval(tick, 140); }
+  // Drive the meter animation with a timer that we PAUSE whenever the tab/iframe is hidden, so a
+  // backgrounded demo does no work and there's nothing to flush when you switch back to the tab
+  // (the cause of the multi-second refocus freeze). Same for the 3 s active-ear toggle.
+  var meterTimer = null;
+  function startMeters(){ if(!meterTimer && !reduce){ tick(); meterTimer = setInterval(tick, 140); } }
+  function stopMeters(){ if(meterTimer){ clearInterval(meterTimer); meterTimer = null; } }
+  document.addEventListener('visibilitychange', function(){
+    if(document.hidden){ stopMeters(); if(earTimer){ clearInterval(earTimer); earTimer = null; } }
+    else { startMeters(); updateActiveEar(); }
+  });
+  tick();
+  if(!document.hidden) startMeters();
   refresh();
 
   // Start the demo already complete (right ear loaded, with the entrance curve-draw).
   document.getElementById('drop').click();
 
-  // Report content height to the embedding page so the hero <iframe> can auto-size to the app.
-  function reportH(){ try{ parent.postMessage({ ebDemoHeight: document.documentElement.scrollHeight }, '*'); } catch(e){} }
-  if(window.ResizeObserver){ try{ new ResizeObserver(reportH).observe(document.body); } catch(e){} }
-  window.addEventListener('load', reportH); setTimeout(reportH, 350);
+  // Report the app's CONTENT height so the hero <iframe> auto-sizes. Measure the stable .eb-stage
+  // height (NOT documentElement.scrollHeight, which tracks the iframe's own height and could feed a
+  // resize loop), post ONLY when it actually changes, and rAF-debounce the observer -- no
+  // postMessage<->resize feedback, so a refocus can't trigger a layout storm.
+  var stage = document.querySelector('.eb-stage'), lastH = 0, rafPending = false;
+  function reportH(){
+    rafPending = false;
+    var h = Math.ceil(stage.getBoundingClientRect().height);
+    if(h && h !== lastH){ lastH = h; try{ parent.postMessage({ ebDemoHeight: h }, '*'); } catch(e){} }
+  }
+  function scheduleReport(){ if(!rafPending){ rafPending = true; if(window.requestAnimationFrame) requestAnimationFrame(reportH); else setTimeout(reportH, 16); } }
+  if(window.ResizeObserver){ try{ new ResizeObserver(scheduleReport).observe(stage); } catch(e){} }
+  window.addEventListener('load', scheduleReport); setTimeout(scheduleReport, 350);
 })();
 </script>
 </div>
