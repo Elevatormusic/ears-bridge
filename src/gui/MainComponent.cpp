@@ -545,7 +545,7 @@ void MainComponent::applyTextColours() {
     styleEyebrow (trimLabel,     "OUTPUT TRIM (dB)");
     styleEyebrow (calEyebrow,    "CALIBRATION");
     styleEyebrow (levelsEyebrow, "LEVELS");
-    levelsHint.setColour     (juce::Label::textColourId, Theme::textDim());
+    // levelsHint colour/text is owned by the timer (updateActiveEarIndicator), so it is not set here.
     combineHint.setColour    (juce::Label::textColourId, Theme::textDim());
     outputHint.setColour     (juce::Label::textColourId, Theme::textDim());
     preflightLabel.setColour (juce::Label::textColourId, Theme::warn());
@@ -614,6 +614,40 @@ void MainComponent::updateStatusLine() {
     }
 }
 
+void MainComponent::updateActiveEarIndicator (bool silent) {
+    // In AutoPerEar mode, EARS Bridge feeds Dirac only the earcup Dirac is currently sweeping. Show
+    // which side that is, so the user can confirm the bridge is following Dirac's left-then-right
+    // sweep correctly: accent the live meter and replace the gain caption with a "capturing L/R" line.
+    const bool running  = engine.status() == EngineStatus::Running;
+    const bool autoMode = settings.combineMode() == CombineMode::AutoPerEar;
+    const bool live     = running && autoMode && ! silent;
+
+    const int ear = live ? engine.autoActiveEar() : -1;   // 0 = left, 1 = right, -1 = none
+    meterL.setActive (ear == 0);
+    meterR.setActive (ear == 1);
+
+    juce::String text;
+    juce::Colour col;
+    if (running && autoMode) {
+        if (live) {
+            text = (ear == 0) ? "Auto per-ear - capturing the LEFT earcup"
+                              : "Auto per-ear - capturing the RIGHT earcup";
+            col  = Theme::accent();
+        } else {
+            text = "Auto per-ear - waiting for the next sweep...";
+            col  = Theme::textDim();
+        }
+    } else {
+        text = "Set your amp so the L and R meters reach the green band.";
+        col  = Theme::textDim();
+    }
+    // setColour no-ops when unchanged; setText only on a real change -> no per-tick repaint churn. The
+    // timer is the sole owner of levelsHint's text+colour (so it is not touched in applyTextColours).
+    levelsHint.setColour (juce::Label::textColourId, col);
+    if (text != levelsHint.getText())
+        levelsHint.setText (text, juce::dontSendNotification);
+}
+
 void MainComponent::timerCallback() {
     // A device removed mid-run (unplug / sleep / gain-DIP re-enumerate) latches deviceDied_ from its
     // audioDeviceStopped() callback. Tear it down and surface it, instead of leaving the engine sitting
@@ -640,6 +674,7 @@ void MainComponent::timerCallback() {
     // otherwise reads as "clean".
     const bool tooQuiet = ! blockSilent && ! engine.reachedGoodLevel();
     lowLevelTicks_ = tooQuiet ? (lowLevelTicks_ + 1) : 0;
+    updateActiveEarIndicator (blockSilent);   // AutoPerEar: highlight the earcup being captured now
     if (engine.status() == EngineStatus::Running) updateStatusLine();
 
     // Raw-input (ADC) clipping warning. Re-arm from the edge-triggered, self-clearing recent-clip

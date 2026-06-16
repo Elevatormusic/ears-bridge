@@ -70,6 +70,10 @@ public:
     // guidance so a too-quiet capture can't masquerade as "clean").
     bool reachedGoodLevel() const noexcept;
 
+    // AutoPerEar: which earcup is currently being fed to Dirac (0 = left, 1 = right). Drives the GUI
+    // "capturing Left/Right" indicator; only meaningful while running in AutoPerEar with signal.
+    int autoActiveEar() const noexcept;
+
     // Device-loss handling. A capture/render device that the OS removes mid-run (unplug, sleep,
     // gain-DIP re-enumerate) calls audioDeviceStopped(); we latch deviceDied_ there (never tear down
     // from inside that callback -- re-entrant with JUCE's close()). The GUI drains consumeDeviceDied()

@@ -138,18 +138,22 @@ TEST_CASE("ProcessingGraph AutoPerEar follows whichever earcup is sounding (Dira
     for (int i = 0; i < 15; ++i) g.process (loud.data(), silent.data(), out.data(), N);
     INFO ("left active out=" << out[N-1]);
     CHECK_THAT (out[N-1], WithinAbs (0.3f, 1e-2));
+    CHECK (g.activeEar() == 0);   // published for the GUI "capturing Left/Right" indicator
 
     // Inter-sweep silence: the held choice should not flip.
     for (int i = 0; i < 15; ++i) g.process (silent.data(), silent.data(), out.data(), N);
+    CHECK (g.activeEar() == 0);   // held through the gap, not reset to a default
 
     // RIGHT earcup sweeping: it switches to the RIGHT mic.
     for (int i = 0; i < 15; ++i) g.process (silent.data(), loud.data(), out.data(), N);
     INFO ("right active out=" << out[N-1]);
     CHECK_THAT (out[N-1], WithinAbs (0.3f, 1e-2));
+    CHECK (g.activeEar() == 1);
 
     // And follows back to LEFT for the validation repeat.
     for (int i = 0; i < 15; ++i) g.process (loud.data(), silent.data(), out.data(), N);
     CHECK_THAT (out[N-1], WithinAbs (0.3f, 1e-2));
+    CHECK (g.activeEar() == 0);
 }
 
 TEST_CASE("ProcessingGraph auto headroom bounds the output and preserves L/R balance") {

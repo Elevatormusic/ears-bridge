@@ -172,6 +172,7 @@ bool       AudioEngine::cleanCapture() const noexcept    { return hm.cleanCaptur
 DipGainProfile AudioEngine::gainProfile() const noexcept { return hm.gainProfile(); }
 bool AudioEngine::consumeRecentInputClip() noexcept      { return hm.recentInputClip(); }
 bool AudioEngine::reachedGoodLevel()       const noexcept { return hm.reachedGoodLevel(); }
+int  AudioEngine::autoActiveEar()          const noexcept { return graph.activeEar(); }
 bool AudioEngine::consumeDeviceDied()      noexcept      { return deviceDied_.exchange (false); }
 int  AudioEngine::grantedOutputBitDepth()  const noexcept { return devices.grantedOutputBitDepth(); }
 

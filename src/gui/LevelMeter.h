@@ -18,6 +18,10 @@ public:
     // keeps just the clip-danger zones.
     void setShowTargetBand (bool on) noexcept { showTargetBand = on; }
 
+    // Mark this meter as the earcup currently being captured in AutoPerEar mode: an accent "live" dot
+    // (a shape, not colour alone) + accent label. Repaints only on change.
+    void setActive (bool on) { if (on != active_) { active_ = on; repaint(); } }
+
     void paint (juce::Graphics&) override;
 
     bool isClipLatched() const noexcept { return clipLatched; }   // exposed for unit tests
@@ -34,6 +38,7 @@ public:
 private:
     juce::String label;
     bool  showTargetBand = false;   // capture meters draw the -18..-12 dBFS green target band
+    bool  active_ = false;          // AutoPerEar: this is the earcup currently fed to Dirac
     float level = 0.0f;          // bar level (linear, fast attack / slow release)
     float smoothDb = -120.0f;    // slowly-smoothed dB for the READOUT so the number is readable
     bool  clipLatched = false;

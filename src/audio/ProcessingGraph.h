@@ -13,6 +13,11 @@ public:
     void setOutputGain (float linear);   // applied to the mono output (the "Output trim" control)
     void process (const float* inL, const float* inR, float* outMono, int numSamples);
     void reset();
+
+    // AutoPerEar: which earcup the graph is currently feeding to the mono output (0 = left, 1 = right).
+    // Published lock-free for the GUI's "active side" indicator. Meaningful only while AutoPerEar is the
+    // live mode with signal present; the GUI gates on mode + level.
+    int activeEar() const noexcept { return activeEar_.load (std::memory_order_relaxed); }
 private:
     // Auto makeup-attenuation so the per-ear correction FIR can never push the mono output past
     // 0 dBFS, whatever the playback level. Because Dirac normalizes the measurement, only the
@@ -37,7 +42,7 @@ private:
     // AutoPerEar state (audio-thread only; reset in prepare()/reset()). Tracks per-ear input
     // envelopes so the mode can follow whichever earcup Dirac is currently sweeping.
     float envL_ = 0.0f, envR_ = 0.0f;
-    int   activeEar_ = 0;   // 0 = left mic, 1 = right mic
+    std::atomic<int> activeEar_ { 0 };   // 0 = left mic, 1 = right mic (published for the GUI indicator)
     float relCoeff_ = 0.0f; // AutoPerEar envelope-release coefficient, precomputed in prepare() (no per-block exp)
     int   lastMode_ = (int) CombineMode::TwoPassLeft;   // detect a live combine-mode change to re-arm AutoPerEar cleanly
 };

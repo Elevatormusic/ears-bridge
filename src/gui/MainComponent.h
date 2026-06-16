@@ -40,6 +40,7 @@ private:
     void onRightCalLoaded (const juce::File&);
     void onStartStop();
     void updateStatusLine();
+    void updateActiveEarIndicator (bool silent);   // AutoPerEar "capturing Left/Right" caption + meter accent
     void updateStartGate();          // enable Start only when both ear cals are loaded
     void syncPlotScales();           // lock both ear plots to one shared dB scale
     void applyTextColours();         // (re)apply theme-dependent label colours (live light/dark)

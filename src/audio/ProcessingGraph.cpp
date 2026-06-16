@@ -9,7 +9,7 @@ void ProcessingGraph::prepare (double sampleRate, int maxBlockSize) {
     juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) maxBlockSize, 1 };
     convL.prepare (spec); convR.prepare (spec);
     scratch.setSize (2, maxBlockSize);
-    envL_ = envR_ = 0.0f; activeEar_ = 0;   // fresh AutoPerEar state
+    envL_ = envR_ = 0.0f; activeEar_.store (0, std::memory_order_relaxed);   // fresh AutoPerEar state
     relCoeff_ = std::exp (-(float) maxBlockSize / (float) (sampleRate * 0.08));  // ~80 ms release, off-thread
     lastMode_ = combine.load();
 }
@@ -116,16 +116,18 @@ void ProcessingGraph::process (const float* inL, const float* inR,
                             : std::exp (-(float) numSamples / (float) (sr * 0.08));   // exact for a rare short block
             envL_ = juce::jmax (pkL, envL_ * rel);   // fast attack, slow release -> quick onset detection
             envR_ = juce::jmax (pkR, envR_ * rel);
-            const int prev = activeEar_;
+            const int prev = activeEar_.load (std::memory_order_relaxed);
+            int ear = prev;
             // Only reconsider when something is clearly above the noise floor; otherwise HOLD through
             // the inter-sweep silence. Switch only when the OTHER ear is >= 2x (6 dB) louder, so
             // open-back leakage into the far mic can't flip the choice mid-sweep.
             if (envL_ > 0.0032f || envR_ > 0.0032f) {            // ~ -50 dBFS gate
-                if (activeEar_ == 0) { if (envR_ > envL_ * 2.0f) activeEar_ = 1; }
-                else                 { if (envL_ > envR_ * 2.0f) activeEar_ = 0; }
+                if (ear == 0) { if (envR_ > envL_ * 2.0f) ear = 1; }
+                else          { if (envL_ > envR_ * 2.0f) ear = 0; }
             }
-            const float* cur = (activeEar_ == 0) ? l : r;
-            if (activeEar_ != prev) {                            // crossfade old->new across this block (anti-click)
+            if (ear != prev) activeEar_.store (ear, std::memory_order_relaxed);   // publish for the GUI
+            const float* cur = (ear == 0) ? l : r;
+            if (ear != prev) {                                   // crossfade old->new across this block (anti-click)
                 const float* old = (prev == 0) ? l : r;
                 const float inv = 1.0f / (float) juce::jmax (1, numSamples);
                 for (int i = 0; i < numSamples; ++i) { const float t = (float) i * inv; outMono[i] = old[i] * (1.0f - t) + cur[i] * t; }
@@ -152,7 +154,7 @@ void ProcessingGraph::process (const float* inL, const float* inR,
 
 void ProcessingGraph::reset() {
     convL.reset(); convR.reset();
-    envL_ = envR_ = 0.0f; activeEar_ = 0;
+    envL_ = envR_ = 0.0f; activeEar_.store (0, std::memory_order_relaxed);
     lastMode_ = combine.load();
 }
 
