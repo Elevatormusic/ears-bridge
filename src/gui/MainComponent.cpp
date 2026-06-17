@@ -1,4 +1,5 @@
 #include "gui/MainComponent.h"
+#include "gui/ClipStatus.h"
 #include "platform/DiracCompat.h"
 #include <algorithm>
 #include <cmath>
@@ -238,8 +239,8 @@ MainComponent::MainComponent() {
     inputClipHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     inputClipHint.setJustificationType (juce::Justification::topLeft);
     inputClipHint.setColour (juce::Label::textColourId, Theme::danger());
-    inputClipHint.setText ("Input clipping - the EARS is overloading on the sweep. Lower the EARS "
-                           "gain switch a step and/or Dirac's playback level, then re-measure.",
+    inputClipHint.setText ("Input near full scale - if the meter hits the top, lower the EARS gain "
+                           "switch a step and/or Dirac's playback level, then re-measure.",
                            juce::dontSendNotification);
     addChildComponent (inputClipHint);   // hidden until a raw-input clip is seen
 
@@ -648,7 +649,7 @@ void MainComponent::updateStatusLine() {
     if (st == EngineStatus::Running) {
         const auto h = engine.health();
         if (! h.cleanCapture) {
-            statusLine.setText ("Dropouts detected", juce::dontSendNotification);
+            statusLine.setText (eb::invalidMeasurementMessage (h.flags), juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::danger());
         } else if (any (h.flags & HealthFlag::ClipOutput)) {
             // The output hit full scale (e.g. Sum's uncompensated +6 dB drove past the clamp). The
