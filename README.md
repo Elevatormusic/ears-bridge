@@ -86,11 +86,10 @@ miniDSP supplies two variants per capsule:
 
 ## Combine modes
 
-EARS Bridge captures both ear channels, but Dirac records a single channel, so the two ears have to be reduced to that one signal. The mode you choose decides how — by sending one ear at a time (Auto per-ear, or a fixed Left / Right ear) or mixing them (Average, Sum):
+**With Dirac Live and the EARS, use Auto per-ear — it is the only mode that works with a Dirac measurement.** Dirac records a single channel, so EARS Bridge has to reduce the EARS's two ear channels to one. Auto per-ear does that the way Dirac needs; the other modes don't, so Dirac reports a measurement error if you use them. They're included for other use cases — bench-testing your own capture, feeding a non-Dirac tool, or experimenting.
 
-- **Auto per-ear (Dirac)** — *recommended for headphones, and the default.* Dirac measures with a single routine that sweeps both channels (left, then right); EARS Bridge tracks which earcup is sounding and feeds only that ear's calibrated mic, so each sweep is a single clean arrival, open-back leakage into the other capsule is never folded in, and that one routine corrects both ears. Just run Dirac's normal measurement. While it sweeps, a **live indicator** highlights which earcup is currently being captured, so you can confirm the bridge is following Dirac's left-then-right sweep.
-- **Left ear only / Right ear only** — locks the feed to a single ear's calibrated mic, for explicit control over which ear Dirac is correcting (or if Auto's earcup detection ever misreads).
-- **Average** `(L+R)/2` and **Sum** `L+R` — collapse both ears into one. Auto per-ear is preferred because it captures only the earcup Dirac is sweeping and ignores the other (silent) cup's open-back leakage; Average and Sum fold that leakage in, and **Sum** also adds +6 dB and can clip.
+- **Auto per-ear (Dirac)** — *the mode to use with Dirac and the EARS; the default.* Dirac measures with a single routine that sweeps both channels (left, then right); EARS Bridge tracks which earcup is sounding and feeds only that ear's calibrated mic, so each sweep is a single clean arrival, open-back leakage into the other capsule is never folded in, and that one routine corrects both ears. Just run Dirac's normal measurement — a **live indicator** shows which earcup is currently being captured.
+- **Left ear only / Right ear only / Average `(L+R)/2` / Sum `L+R`** — *not for Dirac.* These send a fixed single ear, or mix both ears, regardless of which channel Dirac is currently sweeping. Because they don't follow Dirac's left-then-right sweep, Dirac sees the wrong (or a silent) signal for part of the measurement and errors out. Use them only for other purposes — testing your own capture, a non-Dirac measurement tool, or experiments. (**Sum** also adds +6 dB and can clip.)
 
 ## Setting the level (gain staging)
 

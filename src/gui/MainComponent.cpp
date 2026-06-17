@@ -495,20 +495,20 @@ void MainComponent::onCombineChosen() {
     juce::String h;
     switch (mode) {
         case CombineMode::AutoPerEar:
-            h = "Recommended for Dirac. Records only the earcup Dirac is sweeping - clean per-ear "
+            h = "Use this with Dirac. Records only the earcup Dirac is sweeping - clean per-ear "
                 "capture in one pass, no open-back crosstalk.";
             break;
         case CombineMode::Average:
-            h = "Mono average. SEALED closed-backs only - on open-backs it folds in the other "
-                "earcup's leakage. Use Auto per-ear for Dirac.";
+            h = "Not for Dirac (it won't follow Dirac's sweep, so Dirac errors). Mono average for "
+                "other/test uses; folds in open-back leakage on open-backs.";
             break;
         case CombineMode::Sum:
-            h = "Sums both ears (+6 dB). Clip risk; folds in open-back leakage like Average.";
+            h = "Not for Dirac. Sums both ears (+6 dB) for other/test uses; clip risk.";
             break;
         case CombineMode::LeftOnly:
         case CombineMode::RightOnly:
-            h = "Sends only that ear's calibrated mic. Use it for explicit control over which ear "
-                "Dirac corrects, or if Auto's earcup detection ever misreads.";
+            h = "Not for Dirac. One fixed ear won't follow Dirac's both-channel sweep, so Dirac "
+                "errors. For testing or non-Dirac use.";
             break;
     }
     combineHint.setText (h, juce::dontSendNotification);

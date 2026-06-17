@@ -207,10 +207,10 @@
   combine.addEventListener('change', function(){
     var rec = '<span class="eb-rec"><i class="ti ti-check"></i>Recommended</span> ';
     var msg = this.value.indexOf('Auto per-ear') === 0 ? rec + 'records only the earcup Dirac is sweeping — clean per-ear capture, no open-back crosstalk.'
-            : this.value === 'Left ear only'  ? 'Sends only the left ear’s calibrated mic — explicit per-ear control.'
-            : this.value === 'Right ear only' ? 'Sends only the right ear’s calibrated mic — explicit per-ear control.'
-            : this.value === 'Sum L+R' ? 'Sums both ears (+6 dB). Watch for clipping; folds in open-back leakage.'
-            : 'Averages both ears. For sealed closed-backs only — on open-backs it folds in the other earcup’s leakage.';
+            : this.value === 'Left ear only'  ? 'Not for Dirac. Sends only the left ear’s mic; for testing or non-Dirac use.'
+            : this.value === 'Right ear only' ? 'Not for Dirac. Sends only the right ear’s mic; for testing or non-Dirac use.'
+            : this.value === 'Sum L+R' ? 'Not for Dirac. Sums both ears (+6 dB) for other/test uses; clip risk.'
+            : 'Not for Dirac. Averages both ears for other/test uses; folds in open-back leakage.';
     help.innerHTML = msg;
     updateActiveEar();
   });
