@@ -25,10 +25,10 @@ static juce::AudioBuffer<float> scaledImpulse (int taps, float gain) {
 // time; under CPU contention those threads can be starved, so the budget is generous
 // and we return as soon as the values converge rather than after a fixed rep count.
 //
-// We wait for BOTH channels deliberately: convL (read via TwoPassLeft) and convR (read
-// via TwoPassRight) load and ramp independently, so keying "settled" on L alone could
+// We wait for BOTH channels deliberately: convL (read via LeftOnly) and convR (read
+// via RightOnly) load and ramp independently, so keying "settled" on L alone could
 // return while R is still mid-ramp -- which then shows up as drift in the Average/Sum/
-// TwoPassRight assertions below. lVal/rVal/reps are reported so a REQUIRE failure shows
+// RightOnly assertions below. lVal/rVal/reps are reported so a REQUIRE failure shows
 // how far each channel got (i.e. distinguishes "never settled" from a later value drift).
 struct WarmUpResult { bool settled; float lVal; float rVal; int reps; };
 
@@ -41,10 +41,10 @@ static WarmUpResult warmUp (eb::ProcessingGraph& g, const std::vector<float>& in
     float lVal = 0.0f, rVal = 0.0f;
     int stable = 0;
     for (int rep = 0; rep < maxReps; ++rep) {
-        g.setCombineMode (eb::CombineMode::TwoPassLeft);
+        g.setCombineMode (eb::CombineMode::LeftOnly);
         g.process (inL.data(), inR.data(), out.data(), N);
         lVal = out[N - 1];
-        g.setCombineMode (eb::CombineMode::TwoPassRight);
+        g.setCombineMode (eb::CombineMode::RightOnly);
         g.process (inL.data(), inR.data(), out.data(), N);
         rVal = out[N - 1];
 
@@ -86,16 +86,16 @@ TEST_CASE("ProcessingGraph combine modes with identity FIRs") {
         INFO ("Sum out[N-1]=" << out[N - 1] << " want 0.8");
         CHECK_THAT(out[N-1], WithinAbs(0.8f, 1e-3));
     }
-    SECTION("TwoPassLeft") {
-        g.setCombineMode (eb::CombineMode::TwoPassLeft);
+    SECTION("LeftOnly") {
+        g.setCombineMode (eb::CombineMode::LeftOnly);
         g.process (inL.data(), inR.data(), out.data(), N);
-        INFO ("TwoPassLeft out[N-1]=" << out[N - 1] << " want 0.5");
+        INFO ("LeftOnly out[N-1]=" << out[N - 1] << " want 0.5");
         CHECK_THAT(out[N-1], WithinAbs(0.5f, 1e-3));
     }
-    SECTION("TwoPassRight") {
-        g.setCombineMode (eb::CombineMode::TwoPassRight);
+    SECTION("RightOnly") {
+        g.setCombineMode (eb::CombineMode::RightOnly);
         g.process (inL.data(), inR.data(), out.data(), N);
-        INFO ("TwoPassRight out[N-1]=" << out[N - 1] << " want 0.3");
+        INFO ("RightOnly out[N-1]=" << out[N - 1] << " want 0.3");
         CHECK_THAT(out[N-1], WithinAbs(0.3f, 1e-3));
     }
 }
@@ -108,7 +108,7 @@ TEST_CASE("ProcessingGraph output gain scales the mono output (the Output-trim c
     auto wu = warmUp (g, inL, inR, out, N, inL[0], inR[0]);
     REQUIRE (wu.settled);
 
-    g.setCombineMode (eb::CombineMode::TwoPassLeft);   // pass inL (0.5) straight through
+    g.setCombineMode (eb::CombineMode::LeftOnly);   // pass inL (0.5) straight through
 
     g.setOutputGain (1.0f);                             // unity -> 0.5
     g.process (inL.data(), inR.data(), out.data(), N);
@@ -172,13 +172,13 @@ TEST_CASE("ProcessingGraph auto headroom bounds the output and preserves L/R bal
 
     // (a) The +12 dB FIR alone would put a 0 dBFS input at 4.0 (hard clip); the makeup pulls it back
     //     to exactly the input level and never above it.
-    g.setCombineMode (eb::CombineMode::TwoPassLeft);
+    g.setCombineMode (eb::CombineMode::LeftOnly);
     g.process (inL.data(), inR.data(), out.data(), N);
     const float outL = out[N - 1];
     CHECK (outL <= 1.0f + 1e-3f);
     CHECK_THAT (outL, WithinAbs (1.0f, 1e-2f));
 
-    g.setCombineMode (eb::CombineMode::TwoPassRight);
+    g.setCombineMode (eb::CombineMode::RightOnly);
     g.process (inL.data(), inR.data(), out.data(), N);
     const float outR = out[N - 1];
 
@@ -213,7 +213,7 @@ TEST_CASE("ProcessingGraph clearFir restores unity passthrough and resets the au
     g.clearFir (0); g.clearFir (1);                       // back to unity FIRs -> headroom 1.0
     auto wu2 = warmUp (g, inL, inR, out, N, 1.0f, 1.0f);  // 1.0 * 1 * 1 = 1.0 (passthrough)
     REQUIRE (wu2.settled);
-    g.setCombineMode (eb::CombineMode::TwoPassLeft);
+    g.setCombineMode (eb::CombineMode::LeftOnly);
     g.process (inL.data(), inR.data(), out.data(), N);
     CHECK_THAT (out[N - 1], WithinAbs (1.0f, 1e-2f));     // input passes through unchanged
 }

@@ -41,18 +41,22 @@ TEST_CASE("buildRateMenu without a non-native selection emits exactly the native
     CHECK (items[0].selected == true);
 }
 
-TEST_CASE("combineModeOrder lists the exposed modes with the right recommended badges") {
+TEST_CASE("combineModeOrder lists AutoPerEar first with the right recommended badges") {
     auto order = eb::combineModeOrder();
-    REQUIRE (order.size() == 3);   // TwoPass L/R were removed from the UI (superseded by AutoPerEar)
-    CHECK (order[0].mode == eb::CombineMode::Average);
-    CHECK (order[1].mode == eb::CombineMode::Sum);
-    CHECK (order[2].mode == eb::CombineMode::AutoPerEar);
-    // Only AutoPerEar carries the Recommended badge — it is the one recommended Dirac headphone mode.
-    CHECK (order[0].recommended == false);   // Average
-    CHECK (order[1].recommended == false);   // Sum
-    CHECK (order[2].recommended == true);    // AutoPerEar
+    REQUIRE (order.size() == 5);
+    CHECK (order[0].mode == eb::CombineMode::AutoPerEar);   // recommended, on top
+    CHECK (order[1].mode == eb::CombineMode::LeftOnly);
+    CHECK (order[2].mode == eb::CombineMode::RightOnly);
+    CHECK (order[3].mode == eb::CombineMode::Average);
+    CHECK (order[4].mode == eb::CombineMode::Sum);
+    // Only AutoPerEar carries the Recommended badge.
+    CHECK (order[0].recommended == true);    // AutoPerEar
+    CHECK (order[1].recommended == false);   // LeftOnly
+    CHECK (order[2].recommended == false);   // RightOnly
+    CHECK (order[3].recommended == false);   // Average
+    CHECK (order[4].recommended == false);   // Sum
     // Sum carries the +6 dB clip-risk warning.
-    CHECK (order[1].clipRiskWarning == true);
+    CHECK (order[4].clipRiskWarning == true);
 }
 
 TEST_CASE("numTapsForRate scales 8192 @ 48k to powers of two") {

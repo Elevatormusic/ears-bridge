@@ -65,7 +65,7 @@ float ProcessingGraph::peakGainOfIr (const juce::AudioBuffer<float>& ir) {
 
 void ProcessingGraph::recomputeHeadroom() {
     // Bound by the louder ear's FIR peak only -- removes any cal-FIR boost so a 0 dBFS *sweep tone*
-    // can't exceed 0 dBFS through Auto/TwoPass/Average (for which 0.5*(L+R) <= max(peak) too). This is
+    // can't exceed 0 dBFS through Auto/single-ear/Average (for which 0.5*(L+R) <= max(peak) too). This is
     // the steady-state sinusoid bound, which is the right one for Dirac's slow log sweep; a broadband
     // transient could still nudge over, but the measurement signal is a sweep. Sum's intentional +6 dB
     // is NOT compensated (it owns the clip-risk warning). Attenuate only past unity; flat/cut stays transparent.
@@ -95,9 +95,9 @@ void ProcessingGraph::process (const float* inL, const float* inR,
         lastMode_ = modeNow;                      // doesn't inherit a stale active-ear from before
     }
     switch ((CombineMode) modeNow) {
-        case CombineMode::TwoPassLeft:
+        case CombineMode::LeftOnly:
             juce::FloatVectorOperations::copy (outMono, l, numSamples); break;
-        case CombineMode::TwoPassRight:
+        case CombineMode::RightOnly:
             juce::FloatVectorOperations::copy (outMono, r, numSamples); break;
         case CombineMode::Sum:
             juce::FloatVectorOperations::copy (outMono, l, numSamples);

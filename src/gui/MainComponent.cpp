@@ -74,8 +74,8 @@ MainComponent::MainComponent() {
         auto& m = combineModel[i];
         juce::String label;
         switch (m.mode) {
-            case CombineMode::TwoPassLeft:  label = "Two-pass: Left only";    break;
-            case CombineMode::TwoPassRight: label = "Two-pass: Right only";   break;
+            case CombineMode::LeftOnly:     label = "Left ear only";          break;
+            case CombineMode::RightOnly:    label = "Right ear only";         break;
             case CombineMode::Average:      label = "Average (L+R)/2";        break;
             case CombineMode::Sum:          label = "Sum L+R";                break;
             case CombineMode::AutoPerEar:   label = "Auto per-ear (Dirac)";   break;
@@ -505,10 +505,10 @@ void MainComponent::onCombineChosen() {
         case CombineMode::Sum:
             h = "Sums both ears (+6 dB). Clip risk; folds in open-back leakage like Average.";
             break;
-        case CombineMode::TwoPassLeft:
-        case CombineMode::TwoPassRight:
-            h = "Single fixed ear. Dirac has no one-earcup mode, so run its measurement twice - Left, "
-                "then Right. Auto per-ear does both in one routine.";
+        case CombineMode::LeftOnly:
+        case CombineMode::RightOnly:
+            h = "Sends only that ear's calibrated mic. Use it for explicit control over which ear "
+                "Dirac corrects, or if Auto's earcup detection ever misreads.";
             break;
     }
     combineHint.setText (h, juce::dontSendNotification);

@@ -75,15 +75,3 @@ TEST_CASE("Settings persists update-check preferences", "[update]") {
     CHECK (reloaded.lastUpdateCheck() == 1750000000);
     dir.deleteRecursively();
 }
-
-TEST_CASE("Settings migrates a removed Two-pass combine setting to AutoPerEar") {
-    auto dir = makeTempDir();
-    {
-        eb::Settings s (dir);
-        s.setCombineMode (eb::CombineMode::TwoPassLeft);   // a mode no longer offered in the UI
-        s.flush();
-    }
-    eb::Settings reloaded (dir);
-    CHECK (reloaded.combineMode() == eb::CombineMode::AutoPerEar);
-    dir.deleteRecursively();
-}

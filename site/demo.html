@@ -116,7 +116,7 @@
       <div class="eb-field"><label class="eb-field-l" for="f-input">Input</label><div class="eb-selwrap"><select id="f-input"><option>miniDSP EARS</option><option>miniDSP EARS Pro</option></select><i class="ti ti-chevron-down chev" aria-hidden="true"></i></div><p class="eb-help"><i class="ti ti-adjustments-alt" aria-hidden="true"></i>Keep the EARS gain switch at its factory 18&nbsp;dB — only lower it if the input clips.</p></div>
       <div class="eb-field">
         <label class="eb-field-l" for="f-combine">Combine mode</label>
-        <div class="eb-selwrap"><select id="f-combine"><option>Average (L+R)/2</option><option>Sum L+R</option><option selected>Auto per-ear (Dirac)</option></select><i class="ti ti-chevron-down chev" aria-hidden="true"></i></div>
+        <div class="eb-selwrap"><select id="f-combine"><option selected>Auto per-ear (Dirac)</option><option>Left ear only</option><option>Right ear only</option><option>Average (L+R)/2</option><option>Sum L+R</option></select><i class="ti ti-chevron-down chev" aria-hidden="true"></i></div>
         <p class="eb-help" id="combineHelp"><span class="eb-rec"><i class="ti ti-check" aria-hidden="true"></i>Recommended</span> records only the earcup Dirac is sweeping — clean per-ear capture, no open-back crosstalk.</p>
       </div>
       <div class="eb-field">
@@ -207,6 +207,8 @@
   combine.addEventListener('change', function(){
     var rec = '<span class="eb-rec"><i class="ti ti-check"></i>Recommended</span> ';
     var msg = this.value.indexOf('Auto per-ear') === 0 ? rec + 'records only the earcup Dirac is sweeping — clean per-ear capture, no open-back crosstalk.'
+            : this.value === 'Left ear only'  ? 'Sends only the left ear’s calibrated mic — explicit per-ear control.'
+            : this.value === 'Right ear only' ? 'Sends only the right ear’s calibrated mic — explicit per-ear control.'
             : this.value === 'Sum L+R' ? 'Sums both ears (+6 dB). Watch for clipping; folds in open-back leakage.'
             : 'Averages both ears. For sealed closed-backs only — on open-backs it folds in the other earcup’s leakage.';
     help.innerHTML = msg;

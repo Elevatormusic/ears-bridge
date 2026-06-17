@@ -48,7 +48,7 @@ TEST_CASE("AudioEngine: real R_HPN cal designed at 96k cuts the 4 kHz resonance"
     eng.prepareForTest (96000.0, N);
     eng.setSampleRate (96000.0);            // active rate drives tap count = 16384
     eng.loadRightCal (cal);                 // designs FIR at 96k internally
-    eng.setCombineMode (eb::CombineMode::TwoPassRight);
+    eng.setCombineMode (eb::CombineMode::RightOnly);
 
     // Drive a 4 kHz sine and confirm it is strongly attenuated vs a 200 Hz reference.
     auto rms = [&](double freq) {
