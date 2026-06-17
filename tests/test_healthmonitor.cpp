@@ -272,6 +272,17 @@ TEST_CASE("HealthMonitor: a consecutive near-rail run is a confirmed clip; an is
         h.analyzeInputBlock (l.data(), r.data(), 16);
         CHECK_FALSE (h.clipConfirmed());
         CHECK (h.cleanCapture());
+        CHECK (eb::any (h.flags() & eb::HealthFlag::ClipInput));   // guidance fires; still valid
+    }
+    SECTION ("a NaN on one channel does not suppress a confirmed run on the other") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+        std::vector<float> l { 1.0f, 1.0f, std::numeric_limits<float>::quiet_NaN(), 1.0f, 1.0f };
+        std::vector<float> r { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };   // clean 5-sample rail run on R
+        h.analyzeInputBlock (l.data(), r.data(), (int) l.size());
+        CHECK (h.clipConfirmed());                                  // R's run still confirms
+        CHECK (eb::any (h.flags() & eb::HealthFlag::ClipConfirmed));
+        CHECK (eb::any (h.flags() & eb::HealthFlag::NonFinite));    // the L NaN is also flagged
+        CHECK_FALSE (h.cleanCapture());
     }
     SECTION ("right-channel-only rail run -> confirmed (per-channel)") {
         eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);

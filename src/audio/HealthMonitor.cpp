@@ -73,13 +73,24 @@ void HealthMonitor::analyzeInputBlock (const float* l, const float* r, int n) no
     bool  nonFinite = false, confirmed = false;
     for (int i = 0; i < n; ++i) {
         const float a = l[i], b = r[i];
-        if (! std::isfinite (a) || ! std::isfinite (b)) { nonFinite = true; railRunL_ = railRunR_ = 0; continue; }
-        const float ma = std::abs (a), mb = std::abs (b);
-        pkL = juce::jmax (pkL, ma);  pkR = juce::jmax (pkR, mb);
-        railRunL_ = (ma >= kRailCeiling) ? railRunL_ + 1 : 0;
-        railRunR_ = (mb >= kRailCeiling) ? railRunR_ + 1 : 0;
-        if (ma >= kRailCeiling) ++railL;
-        if (mb >= kRailCeiling) ++railR;
+        const bool fa = std::isfinite (a), fb = std::isfinite (b);
+        if (! fa || ! fb) nonFinite = true;
+        if (fa) {
+            const float ma = std::abs (a);
+            pkL = juce::jmax (pkL, ma);
+            railRunL_ = (ma >= kRailCeiling) ? railRunL_ + 1 : 0;
+            if (ma >= kRailCeiling) ++railL;
+        } else {
+            railRunL_ = 0;                 // a non-finite sample breaks THIS channel's run only
+        }
+        if (fb) {
+            const float mb = std::abs (b);
+            pkR = juce::jmax (pkR, mb);
+            railRunR_ = (mb >= kRailCeiling) ? railRunR_ + 1 : 0;
+            if (mb >= kRailCeiling) ++railR;
+        } else {
+            railRunR_ = 0;
+        }
         longestRun_ = juce::jmax (longestRun_, juce::jmax (railRunL_, railRunR_));
         if (railRunL_ >= kRailRunMin || railRunR_ >= kRailRunMin) confirmed = true;
     }
