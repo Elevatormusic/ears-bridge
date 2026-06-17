@@ -22,7 +22,7 @@ TEST_CASE("Settings round-trips every field through a PropertiesFile") {
         s.setOutputKey ("WASAPI|CABLE Input (VB-Audio Virtual Cable)|{uid}");
         s.setSampleRate (96000.0);
         s.setOutputBitDepth (24);
-        s.setCombineMode (eb::CombineMode::TwoPassRight);
+        s.setCombineMode (eb::CombineMode::Sum);
         s.setLeftCalPath  ("C:/cal/L_HPN_0000000.txt");
         s.setRightCalPath ("C:/cal/R_HPN_0000000.txt");
         s.setOutputTrimDb (-3.5);
@@ -36,7 +36,7 @@ TEST_CASE("Settings round-trips every field through a PropertiesFile") {
     CHECK (reloaded.outputKey() == juce::String ("WASAPI|CABLE Input (VB-Audio Virtual Cable)|{uid}"));
     CHECK_THAT (reloaded.sampleRate(), WithinAbs (96000.0, 1e-9));
     CHECK (reloaded.outputBitDepth() == 24);
-    CHECK (reloaded.combineMode() == eb::CombineMode::TwoPassRight);
+    CHECK (reloaded.combineMode() == eb::CombineMode::Sum);
     CHECK (reloaded.leftCalPath()  == juce::String ("C:/cal/L_HPN_0000000.txt"));
     CHECK (reloaded.rightCalPath() == juce::String ("C:/cal/R_HPN_0000000.txt"));
     CHECK_THAT (reloaded.outputTrimDb(), WithinAbs (-3.5, 1e-9));
@@ -73,5 +73,17 @@ TEST_CASE("Settings persists update-check preferences", "[update]") {
     eb::Settings reloaded (dir);                 // re-open same folder -> reads back the file
     CHECK (reloaded.autoCheckUpdates() == false);
     CHECK (reloaded.lastUpdateCheck() == 1750000000);
+    dir.deleteRecursively();
+}
+
+TEST_CASE("Settings migrates a removed Two-pass combine setting to AutoPerEar") {
+    auto dir = makeTempDir();
+    {
+        eb::Settings s (dir);
+        s.setCombineMode (eb::CombineMode::TwoPassLeft);   // a mode no longer offered in the UI
+        s.flush();
+    }
+    eb::Settings reloaded (dir);
+    CHECK (reloaded.combineMode() == eb::CombineMode::AutoPerEar);
     dir.deleteRecursively();
 }

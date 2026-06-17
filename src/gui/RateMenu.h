@@ -45,9 +45,10 @@ struct CombineMenuItem {
 // this order may now be reordered freely. (The CombineMode enum values themselves stay append-only --
 // they are what Settings stores.) AutoPerEar is the recommended Dirac headphone mode.
 inline std::vector<CombineMenuItem> combineModeOrder() {
+    // The TwoPass single-ear modes were removed from the UI (superseded by AutoPerEar). The
+    // CombineMode enum still carries them so persisted settings stay stable and they remain a
+    // per-channel test primitive -- they are simply not offered here.
     return {
-        { CombineMode::TwoPassLeft,  /*recommended*/ false, /*clipRisk*/ false },
-        { CombineMode::TwoPassRight, /*recommended*/ false, /*clipRisk*/ false },
         { CombineMode::Average,      /*recommended*/ false, /*clipRisk*/ false },
         { CombineMode::Sum,          /*recommended*/ false, /*clipRisk*/ true  },
         { CombineMode::AutoPerEar,   /*recommended*/ true,  /*clipRisk*/ false },   // the only recommended mode
