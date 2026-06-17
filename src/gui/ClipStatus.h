@@ -5,7 +5,7 @@ namespace eb {
 
 // Maps the flags of an INVALID capture (cleanCapture == false) to an honest, specific message.
 // Order = most actionable first. Pure + header-only so it is unit-testable without the GUI.
-inline const char* invalidMeasurementMessage (HealthFlag flags) noexcept {
+[[nodiscard]] inline const char* invalidMeasurementMessage (HealthFlag flags) noexcept {
     if (any (flags & HealthFlag::ClipConfirmed))
         return "Input reached digital full scale - this measurement is invalid. Lower the level and repeat.";
     if (any (flags & HealthFlag::NonFinite))
