@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(EarsBridge VERSION 0.2.13 LANGUAGES C CXX)
+project(EarsBridge VERSION 0.2.14 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
