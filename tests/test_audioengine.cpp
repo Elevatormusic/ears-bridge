@@ -38,6 +38,26 @@ TEST_CASE("AudioEngine headless seam: identity FIR + Average combine averages th
     CHECK_THAT (out[N-1], WithinAbs (0.4f, 1e-3));   // (0.5+0.3)/2
 }
 
+TEST_CASE("AudioEngine seam: a clipped raw input invalidates the measurement") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 8);
+    std::vector<float> inL { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f };  // 3-sample rail run
+    std::vector<float> inR (inL.size(), 0.0f);
+    std::vector<float> mono (inL.size(), 0.0f);
+    e.processCaptureBlockForTest (inL.data(), inR.data(), mono.data(), (int) inL.size());
+    CHECK (eb::any (e.health().flags & eb::HealthFlag::ClipConfirmed));
+    CHECK_FALSE (e.cleanCapture());
+}
+
+TEST_CASE("AudioEngine seam: a clean input stays valid") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 8);
+    std::vector<float> inL (8, 0.5f), inR (8, 0.3f), mono (8, 0.0f);
+    e.processCaptureBlockForTest (inL.data(), inR.data(), mono.data(), 8);
+    CHECK_FALSE (eb::any (e.health().flags & eb::HealthFlag::ClipConfirmed));
+    CHECK (e.cleanCapture());
+}
+
 TEST_CASE("AudioEngine: real R_HPN cal designed at 96k cuts the 4 kHz resonance") {
     auto f = juce::File (EB_TEST_DATA_DIR).getChildFile ("R_HPN_0000000.txt");
     REQUIRE (f.existsAsFile());

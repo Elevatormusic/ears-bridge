@@ -30,12 +30,11 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
                                            const juce::AudioIODeviceCallbackContext&) override {
         if (numIn < 2 || (int) mono.size() < numSamples) { e.hm.reportXrun(); return; }
         const float* l = in[0]; const float* r = in[1];
-        // Input level/clip telemetry.
-        float pkL = 0, pkR = 0;
-        for (int i = 0; i < numSamples; ++i) { pkL = juce::jmax (pkL, std::abs (l[i])); pkR = juce::jmax (pkR, std::abs (r[i])); }
-        e.hm.reportInLevels (pkL, pkR, pkL >= 0.999f, pkR >= 0.999f);
+        e.hm.analyzeInputBlock (l, r, numSamples);             // peak + confirmed-clip-run + NaN/Inf (RAW input)
 
-        e.graph.process (l, r, mono.data(), numSamples);   // per-ear FIR + combine
+        e.graph.process (l, r, mono.data(), numSamples);       // per-ear FIR + combine
+        if (e.hm.scanAndFlagNonFinite (mono.data(), numSamples))   // a non-finite sample would corrupt Dirac
+            juce::FloatVectorOperations::clear (mono.data(), numSamples);
         e.bridge.pushCapture (mono.data(), numSamples);
 
         // Surface producer-side FIFO-full losses into Health (the render callback handles the
@@ -69,7 +68,7 @@ struct AudioEngine::RenderCallback : juce::AudioIODeviceCallback {
         const int got = e.bridge.pullRender (mono.data(), numSamples);   // capture frames written
         float pk = 0;
         for (int i = 0; i < got; ++i) pk = juce::jmax (pk, std::abs (mono[i]));
-        e.hm.reportOutLevel (pk, pk >= 0.999f);                          // Plan 2 method (raises ClipOutput)
+        e.hm.reportOutLevel (pk, pk >= HealthMonitor::kClipLinear);      // unified near-rail threshold
         // pullRender ALWAYS returns numSamples (it zero-pads on starvation), so `got` alone never signals
         // a shortfall. The LIVE starvation signal is the ClockBridge underrun delta: a NEW underrun this
         // block means the FIFO starved and the interpolator zero-padded -> report 0 delivered so
@@ -347,10 +346,14 @@ void AudioEngine::stop() {
 void AudioEngine::prepareForTest (double sampleRate, int block) {
     activeRate = sampleRate; blockSize = block;
     graph.prepare (sampleRate, block);
+    hm.prepare (eb::EarsModel::Ears, juce::jmax (8192, block * 4));   // reset + size so the seam mirrors a run
 }
 void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR,
                                               float* outMono, int numSamples) {
+    hm.analyzeInputBlock (inL, inR, numSamples);                      // same analysis as the capture callback
     graph.process (inL, inR, outMono, numSamples);
+    if (hm.scanAndFlagNonFinite (outMono, numSamples))
+        juce::FloatVectorOperations::clear (outMono, numSamples);
 }
 
 } // namespace eb
