@@ -204,6 +204,12 @@ installer/      Inno Setup script and the app icon
 ```
 </details>
 
+## Project size
+
+![Lines of code in EARS Bridge, by language, across releases](assets/loc.svg)
+
+<sub>Non-blank source lines of first-party C++ in `src/` and `tests/` — JUCE and Catch2 are fetched at build time and not counted. Regenerated automatically by [`loc.yml`](.github/workflows/loc.yml).</sub>
+
 ## Bench validation
 
 The behaviors that can only be confirmed against real Dirac and hardware — virtual-cable visibility, calibration polarity, sample-rate negotiation, inter-clock drift, and the macOS aggregate path — are documented as manual procedures with explicit pass criteria in [`docs/bench-validation-runbook.md`](docs/bench-validation-runbook.md).

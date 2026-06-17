@@ -1,0 +1,49 @@
+name: Lines of code
+
+# Regenerates assets/loc.svg (the README "lines of code" graph) and commits it when the
+# count changes. Triggers when source actually changes (push to src/ or tests/), weekly to
+# pick up new release tags, or on demand. The commit-back touches only assets/** — which the
+# push filter below ignores — so it never re-triggers itself.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'tools/loc-graph.mjs'
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays 06:00 UTC
+
+permissions:
+  contents: write
+
+concurrency:
+  group: loc-graph
+  cancel-in-progress: false
+
+jobs:
+  loc:
+    # Don't react to our own commit-back.
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0          # full history + tags for the per-release growth curve
+
+      - name: Regenerate the lines-of-code graph
+        run: node tools/loc-graph.mjs
+
+      - name: Commit if it changed
+        run: |
+          if [ -n "$(git status --porcelain assets/loc.svg assets/loc-history.json)" ]; then
+            git config user.name  'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add assets/loc.svg assets/loc-history.json
+            git commit -m 'chore: update lines-of-code graph [skip ci]'
+            git push
+          else
+            echo "Lines-of-code graph already up to date."
+          fi

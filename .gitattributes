@@ -5,3 +5,9 @@
 # Windows batch wrappers need CRLF.
 *.cmd text eol=crlf
 *.bat text eol=crlf
+
+# Auto-generated lines-of-code graph: pin to LF so the local seed and the CI regeneration
+# (tools/loc-graph.mjs) produce byte-identical output and don't churn with spurious commits.
+assets/loc.svg          text eol=lf
+assets/loc-history.json text eol=lf
+tools/loc-graph.mjs     text eol=lf
