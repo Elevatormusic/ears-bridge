@@ -41,6 +41,13 @@ MainComponent::MainComponent() {
     brandLabel.setFont (juce::Font (juce::FontOptions (15.0f).withStyle ("Bold")));
     addAndMakeVisible (brandLabel);
 
+    // Current-version footnote, pinned bottom-right. Reads the single version source of truth.
+    versionLabel.setText ("v" EB_VERSION_STRING, juce::dontSendNotification);
+    versionLabel.setColour (juce::Label::textColourId, Theme::textFaint());
+    versionLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
+    versionLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (versionLabel);
+
     // --- Transport (gated Start + status note) ---
     startStop.getProperties().set ("primary", true);
     startStop.onClick = [this] { onStartStop(); };
@@ -291,25 +298,20 @@ MainComponent::MainComponent() {
     setSize (900, 700);
     startTimerHz (30);
 
-    // Background update check: once per launch, but at most one successful check per 24 h.
-    {
-        const juce::int64 nowSecs  = juce::Time::getCurrentTime().toMilliseconds() / 1000;
-        const juce::int64 kDaySecs = 24 * 60 * 60;
-        if (settings.autoCheckUpdates() && nowSecs - settings.lastUpdateCheck() >= kDaySecs) {
-            updateChecker.start (juce::String (EB_VERSION_STRING),
-                [this, nowSecs] (UpdateInfo info) {
-                    if (info.reachedServer) {
-                        settings.setLastUpdateCheck (nowSecs);
-                        settings.flush();
-                    }
-                    if (info.updateAvailable) {
-                        updateLink.setButtonText ("Update available - v" + info.latestVersion);
-                        updateLink.setURL (juce::URL (info.releaseUrl));
-                        updateLink.setVisible (true);
-                        resized();
-                    }
-                });
-        }
+    // Background update check: runs on every launch, gated only by the user's opt-out toggle.
+    // It is async + non-blocking, so a newer release surfaces the title-bar link each time the
+    // app starts. (No throttle: GitHub's unauthenticated rate limit is 60/h — far above any
+    // realistic launch rate — and a failed/offline check simply shows nothing and retries next time.)
+    if (settings.autoCheckUpdates()) {
+        updateChecker.start (juce::String (EB_VERSION_STRING),
+            [this] (UpdateInfo info) {
+                if (info.updateAvailable) {
+                    updateLink.setButtonText ("Update available - v" + info.latestVersion);
+                    updateLink.setURL (juce::URL (info.releaseUrl));
+                    updateLink.setVisible (true);
+                    resized();
+                }
+            });
     }
 }
 
@@ -610,6 +612,7 @@ void MainComponent::applyTextColours() {
     // Re-set every theme-dependent label colour (the Theme statics return the active mode);
     // paint-based components (meters, cards, plots) pick the mode up on repaint.
     brandLabel.setColour (juce::Label::textColourId, Theme::text());
+    versionLabel.setColour (juce::Label::textColourId, Theme::textFaint());
     styleEyebrow (combineLabel,  "COMBINE MODE");
     styleEyebrow (rateLabel,     "RATE");
     styleEyebrow (bitLabel,      "DEPTH");
@@ -860,6 +863,9 @@ void MainComponent::resized() {
         }
         statusLine.setBounds (x.withSizeKeepingCentre (x.getWidth(), 22));
     }
+
+    // --- Version footnote (pinned bottom-right, below both panes) ---
+    versionLabel.setBounds (area.removeFromBottom (22).reduced (16, 2));
 
     // --- Left configuration rail ---
     auto rail = area.removeFromLeft (262);

@@ -6,7 +6,7 @@
 
 #define MyAppName "EARS Bridge"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.15"
+  #define MyAppVersion "0.2.16"
 #endif
 #define MyAppPublisher "Elevatormusic"
 #define MyAppURL "https://github.com/Elevatormusic/ears-bridge"

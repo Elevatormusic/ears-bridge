@@ -120,7 +120,7 @@ EARS Bridge watches this for you: if a run never reaches a healthy level it show
 
   **Don't reach for the VB-Audio Hi-Fi Cable to dodge this.** It avoids the 600007 error, but the Hi-Fi Cable has no internal sample-rate converter, so it won't carry EARS Bridge's audio through to Dirac — Dirac connects, but the mic input stays dead. Use the standard **VB-CABLE** with shared mode (above).
 - **Let the filters settle.** Correction filters load on a background thread. Wait a moment after changing a calibration file or the sample rate before starting a sweep.
-- **Update check.** On launch the app quietly asks GitHub whether a newer release exists and, if so, shows a small **"Update available"** link in the title bar that opens the release page — it never downloads or installs anything itself. This is the only network request EARS Bridge makes: a single call to GitHub's public releases API, at most once per 24 hours, sending nothing but a standard request. Turn it off under **Advanced → Automatically check for updates.**
+- **Update check.** Each time it starts, the app quietly asks GitHub whether a newer release exists and, if so, shows a small **"Update available"** link in the title bar that opens the release page — it never downloads or installs anything itself. This is the only network request EARS Bridge makes: a single call to GitHub's public releases API per launch, sending nothing but a standard request. Turn it off under **Advanced → Automatically check for updates.** The version you're running is shown in the bottom-right corner of the window.
 
 ## Health indicators
 

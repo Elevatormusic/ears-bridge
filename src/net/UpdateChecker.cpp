@@ -48,8 +48,13 @@ void UpdateChecker::start (juce::String currentVersion, std::function<void (Upda
     juce::Thread::launch ([currentVersion, onDone = std::move (onDone), a]() mutable {
         UpdateInfo info;
         juce::URL url ("https://api.github.com/repos/Elevatormusic/ears-bridge/releases/latest");
+        // Generous connection timeout: a cold DNS+TLS handshake to api.github.com can take
+        // 10 s+ on the first call after launch (warm calls are <1 s). This runs on a background
+        // thread and never blocks the UI, so a long timeout costs nothing — and a too-short one
+        // silently fails the check on every cold launch (reachedServer stays false). Failure just
+        // defers to the next launch, so erring long is strictly safer than erring short.
         auto opts = juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress)
-                        .withConnectionTimeoutMs (3000)
+                        .withConnectionTimeoutMs (15000)
                         .withExtraHeaders ("User-Agent: EARS-Bridge/" + currentVersion
                                            + "\r\nAccept: application/vnd.github+json");
         if (auto stream = url.createInputStream (opts))

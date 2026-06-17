@@ -55,6 +55,8 @@ private:
 
     // Title bar brand.
     juce::Label brandLabel;
+    // Subtle "vX.Y.Z" footnote in the bottom-right corner (current installed version).
+    juce::Label versionLabel;
     // Right-pane section eyebrows.
     juce::Label calEyebrow;
     juce::Label levelsEyebrow;

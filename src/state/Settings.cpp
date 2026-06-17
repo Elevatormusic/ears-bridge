@@ -14,7 +14,6 @@ namespace {
     constexpr const char* kFirLen     = "firLength";
     constexpr const char* kComplex    = "complexPhase";
     constexpr const char* kAutoCheck  = "autoCheckUpdates";
-    constexpr const char* kLastCheck  = "lastUpdateCheck";
 }
 
 Settings::Settings (const juce::File& dir) {
@@ -72,10 +71,6 @@ void Settings::setComplexPhase (bool b) { file->setValue (kComplex, b); }
 
 bool Settings::autoCheckUpdates() const { return file->getBoolValue (kAutoCheck, true); }
 void Settings::setAutoCheckUpdates (bool b) { file->setValue (kAutoCheck, b); }
-
-// Stored as a string (PropertiesFile has no int64 setter); getLargeIntValue() reads it back.
-juce::int64 Settings::lastUpdateCheck() const { return file->getValue (kLastCheck, "0").getLargeIntValue(); }
-void Settings::setLastUpdateCheck (juce::int64 secs) { file->setValue (kLastCheck, juce::String (secs)); }
 
 void Settings::flush() { file->saveIfNeeded(); }
 
