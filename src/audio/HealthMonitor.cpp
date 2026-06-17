@@ -37,6 +37,9 @@ void HealthMonitor::reset() {
     flagBits.store (0);                 // Plan 4: clear the sticky flags on a fresh run
     recentClip_.store (false);
     reachedGood_.store (false);         // a fresh run has not yet reached a healthy capture level
+    railRunL_ = railRunR_ = longestRun_ = 0;
+    railSamplesL_.store (0); railSamplesR_.store (0); longestRunA_.store (0);
+    clipConfirmed_.store (false);
     driftRun.store (0); blockCount.store (0);
 }
 
@@ -62,6 +65,31 @@ void HealthMonitor::setFifoFill (double frac) {
 
 void HealthMonitor::setCaptureToRenderRatio (double r) {
     ratioMicro.store ((int) std::lround (r * 1.0e6));
+}
+
+void HealthMonitor::analyzeInputBlock (const float* l, const float* r, int n) noexcept {
+    float pkL = 0.0f, pkR = 0.0f;
+    int   railL = 0, railR = 0;
+    bool  nonFinite = false, confirmed = false;
+    for (int i = 0; i < n; ++i) {
+        const float a = l[i], b = r[i];
+        if (! std::isfinite (a) || ! std::isfinite (b)) { nonFinite = true; railRunL_ = railRunR_ = 0; continue; }
+        const float ma = std::abs (a), mb = std::abs (b);
+        pkL = juce::jmax (pkL, ma);  pkR = juce::jmax (pkR, mb);
+        railRunL_ = (ma >= kRailCeiling) ? railRunL_ + 1 : 0;
+        railRunR_ = (mb >= kRailCeiling) ? railRunR_ + 1 : 0;
+        if (ma >= kRailCeiling) ++railL;
+        if (mb >= kRailCeiling) ++railR;
+        longestRun_ = juce::jmax (longestRun_, juce::jmax (railRunL_, railRunR_));
+        if (railRunL_ >= kRailRunMin || railRunR_ >= kRailRunMin) confirmed = true;
+    }
+    if (railL > 0) railSamplesL_.fetch_add (railL);
+    if (railR > 0) railSamplesR_.fetch_add (railR);
+    longestRunA_.store (longestRun_);
+    if (nonFinite)  raise (HealthFlag::NonFinite);
+    if (confirmed) { clipConfirmed_.store (true); raise (HealthFlag::ClipConfirmed); }
+    // Guidance path (peak meter + near-rail ClipInput + low-level + reached-good), unified on kClipLinear.
+    reportInLevels (pkL, pkR, pkL >= kClipLinear, pkR >= kClipLinear);
 }
 
 void HealthMonitor::reportInLevels (float peakL, float peakR, bool clipL, bool clipR) {

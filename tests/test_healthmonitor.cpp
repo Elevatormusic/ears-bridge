@@ -226,3 +226,58 @@ TEST_CASE("HealthMonitor: scanAndFlagNonFinite invalidates on NaN/Inf, ignores f
     CHECK_FALSE (h2.cleanCapture());
     CHECK (eb::any (h2.flags() & eb::HealthFlag::NonFinite));
 }
+
+TEST_CASE("HealthMonitor: a consecutive near-rail run is a confirmed clip; an isolated peak is not") {
+    using eb::HealthFlag; using eb::any;
+    // helper: build an L buffer, R silent
+    auto runL = [] (eb::HealthMonitor& h, std::vector<float> l) {
+        std::vector<float> r (l.size(), 0.0f);
+        h.analyzeInputBlock (l.data(), r.data(), (int) l.size());
+    };
+
+    SECTION ("positive rail run -> confirmed + invalid") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+        runL (h, { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f });   // 3 consecutive at the rail
+        CHECK (h.clipConfirmed());
+        CHECK (any (h.flags() & HealthFlag::ClipConfirmed));
+        CHECK_FALSE (h.cleanCapture());               // confirmed clip invalidates
+        CHECK (h.clipLongestRun() >= 3);
+        CHECK (h.clipRailSamples() >= 3);
+    }
+    SECTION ("negative rail run -> confirmed") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+        runL (h, { -1.0f, -1.0f, -1.0f });
+        CHECK (h.clipConfirmed());
+        CHECK_FALSE (h.cleanCapture());
+    }
+    SECTION ("isolated full-scale peak (clean 0 dBFS sine sample) -> NOT confirmed") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+        runL (h, { 0.7f, 1.0f, 0.7f, -1.0f, 0.7f });  // no run of 3
+        CHECK_FALSE (h.clipConfirmed());
+        CHECK (h.cleanCapture());                     // stays valid
+    }
+    SECTION ("clean -1 dBFS constant -> near-rail guidance, NOT confirmed, still valid") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+        std::vector<float> l (16, eb::HealthMonitor::kClipLinear);   // exactly -1.0 dBFS
+        std::vector<float> r (16, 0.0f);
+        h.analyzeInputBlock (l.data(), r.data(), 16);
+        CHECK_FALSE (h.clipConfirmed());
+        CHECK (h.cleanCapture());
+        CHECK (any (h.flags() & HealthFlag::ClipInput));   // guidance fires
+    }
+    SECTION ("clean -0.1 dBFS -> neither confirmed nor near-rail-invalid") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+        std::vector<float> l (16, 0.98855f);   // -0.1 dBFS, below kRailCeiling
+        std::vector<float> r (16, 0.0f);
+        h.analyzeInputBlock (l.data(), r.data(), 16);
+        CHECK_FALSE (h.clipConfirmed());
+        CHECK (h.cleanCapture());
+    }
+    SECTION ("right-channel-only rail run -> confirmed (per-channel)") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+        std::vector<float> l (8, 0.1f);
+        std::vector<float> r { 0.1f, 1.0f, 1.0f, 1.0f, 0.1f };
+        h.analyzeInputBlock (l.data(), r.data(), (int) r.size());
+        CHECK (h.clipConfirmed());
+    }
+}
