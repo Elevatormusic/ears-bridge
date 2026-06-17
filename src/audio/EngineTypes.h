@@ -17,10 +17,12 @@ enum class HealthFlag : unsigned {
     Xrun        = 1u << 0,
     Dropout     = 1u << 1,
     ExcessDrift = 1u << 2,
-    ClipInput   = 1u << 3,
+    ClipInput   = 1u << 3,   // guidance: near full scale (-1 dBFS); does NOT invalidate
     LowLevel    = 1u << 4,
-    ClipOutput  = 1u << 5,
-    FifoStarved = 1u << 6
+    ClipOutput  = 1u << 5,   // guidance: program output hit the clamp; does NOT invalidate
+    FifoStarved = 1u << 6,
+    ClipConfirmed = 1u << 7, // INVALIDATING: a consecutive near-rail run = confirmed digital clip
+    NonFinite     = 1u << 8  // INVALIDATING: a NaN/Inf sample reached the path
 };
 constexpr HealthFlag operator| (HealthFlag a, HealthFlag b) noexcept {
     return static_cast<HealthFlag> (static_cast<unsigned> (a) | static_cast<unsigned> (b));

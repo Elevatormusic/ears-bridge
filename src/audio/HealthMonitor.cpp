@@ -9,10 +9,12 @@ void HealthMonitor::raise (HealthFlag f) noexcept {
     flagBits.fetch_or (static_cast<unsigned> (f));
     // Conditions that invalidate a measurement clear cleanCapture; pure guidance warnings do not.
     const unsigned invalidating =
-        static_cast<unsigned> (HealthFlag::Xrun)        |
-        static_cast<unsigned> (HealthFlag::Dropout)     |
-        static_cast<unsigned> (HealthFlag::ExcessDrift) |
-        static_cast<unsigned> (HealthFlag::FifoStarved);
+        static_cast<unsigned> (HealthFlag::Xrun)          |
+        static_cast<unsigned> (HealthFlag::Dropout)       |
+        static_cast<unsigned> (HealthFlag::ExcessDrift)   |
+        static_cast<unsigned> (HealthFlag::FifoStarved)   |
+        static_cast<unsigned> (HealthFlag::ClipConfirmed) |
+        static_cast<unsigned> (HealthFlag::NonFinite);
     if ((static_cast<unsigned> (f) & invalidating) != 0u)
         clean.store (false);
 }
@@ -90,6 +92,12 @@ void HealthMonitor::reportOutLevel (float peakMono, bool clipOut) {
     cO.store (clipOut);
     if (clipOut || peakMono >= kClipLinear)
         raise (HealthFlag::ClipOutput); // Plan 4: guidance warning
+}
+
+bool HealthMonitor::scanAndFlagNonFinite (const float* buf, int n) noexcept {
+    for (int i = 0; i < n; ++i)
+        if (! std::isfinite (buf[i])) { raise (HealthFlag::NonFinite); return true; }
+    return false;
 }
 
 Health HealthMonitor::snapshot() const {

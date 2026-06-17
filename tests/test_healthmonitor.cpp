@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "audio/HealthMonitor.h"
 #include <cmath>   // std::abs in the Task-2 level/ratio round-trip cases appended below
+#include <limits>
 // (HealthMonitor.h / EngineTypes.h already included by the Plan-2 test prologue above)
 using Catch::Matchers::WithinAbs;
 
@@ -205,4 +206,22 @@ TEST_CASE("HealthMonitor latches reachedGoodLevel once a healthy capture peak is
     // A fresh run clears the latch.
     h.reset();
     CHECK_FALSE(h.reachedGoodLevel());
+}
+
+TEST_CASE("HealthMonitor: scanAndFlagNonFinite invalidates on NaN/Inf, ignores finite") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    const float clean[4] = { 0.0f, 0.5f, -0.5f, 0.25f };
+    CHECK_FALSE (h.scanAndFlagNonFinite (clean, 4));
+    CHECK (h.cleanCapture());
+    CHECK_FALSE (eb::any (h.flags() & eb::HealthFlag::NonFinite));
+
+    const float bad[4] = { 0.1f, std::numeric_limits<float>::quiet_NaN(), 0.2f, 0.3f };
+    CHECK (h.scanAndFlagNonFinite (bad, 4));
+    CHECK (eb::any (h.flags() & eb::HealthFlag::NonFinite));
+    CHECK_FALSE (h.cleanCapture());                 // NonFinite is invalidating
+
+    const float inf[2] = { std::numeric_limits<float>::infinity(), 0.0f };
+    eb::HealthMonitor h2; h2.prepare (eb::EarsModel::Ears, 4096);
+    CHECK (h2.scanAndFlagNonFinite (inf, 2));
+    CHECK_FALSE (h2.cleanCapture());
 }

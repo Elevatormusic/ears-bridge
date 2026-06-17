@@ -53,6 +53,11 @@ public:
     bool recentInputClip() noexcept { return recentClip_.exchange (false); }
     DipGainProfile gainProfile() const noexcept { return DipGainProfile::forModel (model_); }
 
+    // Scan a block for non-finite samples (NaN/Inf). Raises HealthFlag::NonFinite (invalidating)
+    // and returns true if any are found, so the caller can zero the block before it reaches the cable.
+    // RT-safe: a plain loop, no allocation. Called on the audio thread.
+    bool scanAndFlagNonFinite (const float* buf, int n) noexcept;
+
     // True once either ear has peaked at a healthy capture level (>= kGoodLevelLinear) since the last
     // reset. Lets the GUI separate a present-but-too-quiet capture (the low-SNR "tin-can" failure,
     // which sits ABOVE the -50 dBFS no-signal floor and so reads as "clean" today) from a good one.
