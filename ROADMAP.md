@@ -12,6 +12,61 @@ dates. Each substantial item gets its own spec + plan under
   → [spec](docs/superpowers/specs/2026-06-16-update-notification-design.md) ·
   [plan](docs/superpowers/plans/2026-06-16-update-notification.md)
 
+## Measurement integrity — clipping & stream audit
+
+A [full audit](docs/EARS_DIRAC_CLIPPING_AUDIT.md) found the app could show a green "Running · clean"
+verdict over a clipped, corrupted, or mistimed Dirac sweep. The first slice — confirmed-clip detection
+that actually **invalidates** the measurement, a NaN/Inf guard, one honest clip threshold, and honest
+status wording (audit findings D1, D3, D4) — is done on `feat/confirmed-clipping-detection`
+→ [plan](docs/superpowers/plans/2026-06-16-confirmed-clipping-detection.md). What remains, by priority:
+
+### Red — blocks the "no digital clipping" claim
+
+- **Raw-rail capture (D2)** — the EARS opens in WASAPI/CoreAudio *shared* mode with the OS resampler
+  armed (`AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`), so the app measures OS-resampled/mixed float, not the
+  device's true digital rails. Pin the EARS to its native rate and assert no SRC engages (or open it
+  exclusive for the measurement); document the residual shared-mixer caveat. This is the structural one.
+- **Sweep / measurement session (D5)** — clipping and integrity are scoped to the Start→Stop *engine
+  run*, not Dirac's sweep, so pre- and post-sweep room events fold into the result and the "on the
+  sweep" wording is unprovable. Add an idle → preflight → sweep-active → complete/invalid state machine
+  that scopes the latch to the active sweep window.
+- **Frozen resample ratio during the sweep (D6)** — the clock-bridge PI controller republishes the SRC
+  ratio every render block; continuous sub-0.5 % creep nonuniformly retimes the log sweep *below* the
+  drift threshold, so it reads clean. Estimate the ratio before the sweep, freeze it during, recenter
+  only in silence, and invalidate on any emergency correction.
+- **Full clip statistics (R4 / R8)** — the remaining per-session stats the first slice left out:
+  positive-vs-negative rail split, first/last clip position, clipped-sample percentage, and a numeric
+  per-channel peak / remaining-headroom readout.
+
+### Amber — important reliability (not strictly blocking)
+
+- **Block non-Auto combine modes for Dirac (D7)** — Sum / Average / Left / Right can still be recorded
+  into a Dirac measurement (the Start gate ignores combine mode; the engine default is even `LeftOnly`).
+  Gate or hard-confirm them with a real EARS + cable; default the engine to AutoPerEar.
+- **Re-validate device format mid-run (D8)** — sample rate / bit depth / channel count are latched once
+  at start; a sleep/wake or shared-mode renegotiation mistunes the ASRC and can still read clean.
+  Re-read per render block (or subscribe to a change notification) and invalidate on any change.
+- **Pre-clamp output-clip detection (D9)** — the output peak is measured *after* the ±1 safety clamp,
+  so it can only ever flag the app's own clamp, not a real overload. Measure the pre-clamp peak.
+- **Tests on the real audio path (R22)** — drive the actual `AudioIODeviceCallback`s in tests (today
+  only a production-equivalent seam is exercised) plus a golden, sample-accurate cross-clock transport
+  test, and the audit's device-reconnection / format-mismatch / drift / soak cases. *(The macOS
+  aggregate path also can't currently detect FIFO-starvation or drift — it reports a nominal ratio —
+  though that path is still inspection-only.)*
+
+### Optional — diagnostics
+
+- **Event capture buffer** — a pre-allocated circular buffer of recent *raw* EARS audio, dumped (with
+  peaks, rail positions, timestamps, and device format) when a clip or corruption fires, for
+  after-the-fact diagnosis. No blocking disk I/O on the audio thread.
+- **Possible-analog-saturation heuristics** — flat-top runs, crest-factor collapse, asymmetry —
+  surfaced strictly as *possible saturation*, **never** labeled confirmed clipping (the input stayed
+  below digital full scale).
+- **Callback-timing continuity** — use the audio callback's `hostTime` (currently ignored) to
+  cross-check for clock glitches the FIFO-drift path can miss.
+
+Each item gets its own spec + plan before it's built; the rough order for the blockers is D2 → D5 → D6.
+
 ## Next — app shell & onboarding
 
 A cohesive bundle: give the app the standard desktop "chrome" it currently lacks (today it's a bare
