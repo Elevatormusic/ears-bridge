@@ -224,4 +224,5 @@ TEST_CASE("HealthMonitor: scanAndFlagNonFinite invalidates on NaN/Inf, ignores f
     eb::HealthMonitor h2; h2.prepare (eb::EarsModel::Ears, 4096);
     CHECK (h2.scanAndFlagNonFinite (inf, 2));
     CHECK_FALSE (h2.cleanCapture());
+    CHECK (eb::any (h2.flags() & eb::HealthFlag::NonFinite));
 }
