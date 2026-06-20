@@ -483,3 +483,54 @@ TEST_CASE("HealthMonitor: reset clears prepared format; notifyPreparedFormat aft
     h.checkFormatChange(96000.0, 32, 2);   // matches
     CHECK(h.cleanCapture());
 }
+
+// ---- D8 Task 4: edge cases ----
+TEST_CASE("HealthMonitor: standard rates round-trip through Hz-integer storage without false positive") {
+    // All standard WASAPI shared-mode rates must store and compare without rounding error.
+    const double rates[] = { 44100.0, 48000.0, 88200.0, 96000.0, 176400.0, 192000.0 };
+    for (double r : rates) {
+        eb::HealthMonitor h;
+        h.prepare(eb::EarsModel::Ears, 4096);
+        h.notifyPreparedFormat(r, 32, 2);
+        for (int i = 0; i < 8; ++i)
+            h.checkFormatChange(r, 32, 2);
+        INFO("rate = " << r);
+        CHECK_FALSE(eb::any(h.flags() & eb::HealthFlag::FormatChanged));
+        CHECK(h.cleanCapture());
+    }
+}
+
+TEST_CASE("HealthMonitor: checkFormatChange is a no-op before notifyPreparedFormat is called") {
+    // On the first startup, or immediately after reset(), the sentinel is 0.
+    // An audio block that calls checkFormatChange before notifyPreparedFormat (a race that
+    // cannot happen in the real engine, but must be safe in tests) must not raise a flag.
+    eb::HealthMonitor h;
+    h.prepare(eb::EarsModel::Ears, 4096);
+    // Do NOT call notifyPreparedFormat.
+    h.checkFormatChange(48000.0, 32, 2);
+    CHECK(h.cleanCapture());
+    CHECK_FALSE(eb::any(h.flags() & eb::HealthFlag::FormatChanged));
+}
+
+TEST_CASE("HealthMonitor: same rate but depth change 32->16 raises FormatChanged") {
+    eb::HealthMonitor h;
+    h.prepare(eb::EarsModel::Ears, 4096);
+    h.notifyPreparedFormat(48000.0, 32, 2);
+    h.checkFormatChange(48000.0, 32, 2);   // clean
+    CHECK(h.cleanCapture());
+    h.checkFormatChange(48000.0, 16, 2);   // 32->16 bit depth downgrade
+    CHECK(eb::any(h.flags() & eb::HealthFlag::FormatChanged));
+    CHECK_FALSE(h.cleanCapture());
+}
+
+TEST_CASE("HealthMonitor: FormatChanged co-occurs with other flags correctly") {
+    // A dropout AND a format change in the same run: both flags set, cleanCapture false.
+    eb::HealthMonitor h;
+    h.prepare(eb::EarsModel::Ears, 4096);
+    h.notifyPreparedFormat(48000.0, 32, 2);
+    h.observeRenderBlock(256, 200, 1.0, 0.1);    // induces Dropout + FifoStarved
+    h.checkFormatChange(96000.0, 32, 2);           // also a rate change
+    CHECK(eb::any(h.flags() & eb::HealthFlag::FormatChanged));
+    CHECK(eb::any(h.flags() & eb::HealthFlag::Dropout));
+    CHECK_FALSE(h.cleanCapture());
+}
