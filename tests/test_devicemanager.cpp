@@ -48,3 +48,31 @@ TEST_CASE("nativeRatesFor falls back to the model whitelist for an unopened devi
     CHECK (dm.nativeRatesFor (ears) == std::vector<double>{48000});
     CHECK (dm.nativeBitDepthsFor (ears) == std::vector<int>{24});
 }
+
+TEST_CASE("DeviceManager::rawRailMatches is a pure no-SRC predicate") {
+    using eb::DeviceManager;
+    CHECK (DeviceManager::rawRailMatches (48000.0, 48000.0));   // requested == mix -> no SRC
+    CHECK (DeviceManager::rawRailMatches (48000.0, 48000.4));   // within 0.5 Hz
+    CHECK_FALSE (DeviceManager::rawRailMatches (96000.0, 48000.0)); // OS resamples 96k<->48k
+    CHECK_FALSE (DeviceManager::rawRailMatches (48000.0, 0.0));     // mix rate unresolved -> not verified
+    CHECK_FALSE (DeviceManager::rawRailMatches (0.0, 0.0));
+}
+
+TEST_CASE("DeviceManager raw-rail read-back is zeroed before open and after closeAll") {
+    eb::DeviceManager dm;
+    CHECK (dm.requestedInputSampleRate() == 0.0);
+    CHECK (dm.endpointMixSampleRate()    == 0.0);
+    CHECK_FALSE (dm.rawRailVerified());
+
+    eb::DeviceId nope; nope.name = "no-such-input-device-xyz";
+    auto err = dm.openInput (nope, 48000.0, 512);   // headless: device can't be created
+    CHECK (err.isNotEmpty());
+    CHECK (dm.requestedInputSampleRate() == 48000.0);   // request recorded even on failure
+    CHECK (dm.endpointMixSampleRate()    == 0.0);        // nothing resolved
+    CHECK_FALSE (dm.rawRailVerified());
+
+    dm.closeAll();
+    CHECK (dm.requestedInputSampleRate() == 0.0);
+    CHECK (dm.endpointMixSampleRate()    == 0.0);
+    CHECK_FALSE (dm.rawRailVerified());
+}

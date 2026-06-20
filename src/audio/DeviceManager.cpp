@@ -1,7 +1,9 @@
 #include "audio/DeviceManager.h"
 #include "audio/ModelDetect.h"
-#include "platform/EndpointUid.h"   // real WASAPI/CoreAudio endpoint id (replug/gain/rename-stable)
+#include "platform/EndpointUid.h"      // real WASAPI/CoreAudio endpoint id (replug/gain/rename-stable)
+#include "platform/EndpointFormat.h"   // endpoint shared mix-format rate (raw-rail / no-SRC check, D2)
 #include <algorithm>
+#include <cmath>
 namespace eb {
 
 DeviceManager::DeviceManager() {
@@ -153,6 +155,11 @@ std::vector<int> DeviceManager::nativeBitDepthsFor (const DeviceId& id) const {
 }
 
 juce::String DeviceManager::openInput (const DeviceId& id, double sampleRate, int bufferSize) {
+    // Record the request up front (raw-rail, D2) and clear any prior resolved mix rate, so even a
+    // failed open below reports what we asked for and resolves nothing (mix rate stays 0.0).
+    requestedInRate_ = sampleRate;
+    endpointMixRate_ = 0.0;
+
     auto* type = findPreferredType();
     if (type == nullptr) return "No suitable audio driver type (WASAPI/CoreAudio) found";
     type->scanForDevices();
@@ -162,6 +169,8 @@ juce::String DeviceManager::openInput (const DeviceId& id, double sampleRate, in
     juce::BigInteger noOut;
     auto err = inDev->open (inCh, noOut, sampleRate, bufferSize);
     if (err.isNotEmpty()) { inDev.reset(); return "Open input failed: " + err; }
+    // Raw-rail (D2): resolve the endpoint's shared mix-format rate to detect OS resampling of our stream.
+    endpointMixRate_ = endpointMixSampleRateForName (id.name, true);
     return {};
 }
 
@@ -197,6 +206,17 @@ void DeviceManager::closeAll() {
     if (inDev)  { inDev->stop();  inDev->close();  inDev.reset(); }
     if (outDev) { outDev->stop(); outDev->close(); outDev.reset(); }
     grantedOutBits = 0;
+    requestedInRate_ = 0.0; endpointMixRate_ = 0.0;   // raw-rail (D2) read-back resets on close
+}
+
+bool DeviceManager::rawRailMatches (double requestedRate, double endpointMixRate) noexcept {
+    // No-SRC verdict: the endpoint mix rate must be resolved (>0) and equal our requested rate to
+    // within rounding (0.5 Hz). 0.0 mix = unresolved = unverifiable, so NOT a match.
+    return endpointMixRate > 0.0 && std::abs (requestedRate - endpointMixRate) <= 0.5;
+}
+
+bool DeviceManager::rawRailVerified() const {
+    return inDev != nullptr && rawRailMatches (requestedInRate_, endpointMixRate_);
 }
 
 } // namespace eb

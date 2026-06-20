@@ -75,6 +75,18 @@ public:
     int requestedOutputBitDepth() const { return requestedOutBits; }
     int grantedOutputBitDepth()   const { return grantedOutBits; }   // read back after open (0 = unknown/none)
 
+    // ---- Raw-rail (D2): did the OS sample-rate converter resample our INPUT stream? ----
+    // In WASAPI/CoreAudio shared mode the OS mixer runs the endpoint at its own mix-format rate and
+    // AUTOCONVERTPCM resamples between THAT and our requested rate. We resolve the endpoint mix rate
+    // (EndpointFormat.h) and compare: requested == mix => no SRC on our stream (raw rails). NOTE:
+    // getCurrentSampleRate() is NOT used here — in shared mode JUCE reports the requested rate verbatim
+    // even while the OS resamples (see docs/EARS_DIRAC_CLIPPING_AUDIT.md D2).
+    double requestedInputSampleRate() const { return requestedInRate_; }   // 0.0 = none/closed
+    double endpointMixSampleRate()    const { return endpointMixRate_; }    // 0.0 = unresolved/closed
+    bool   rawRailVerified()          const;                                // open AND requested==mix
+    // Pure, side-effect-free verdict (unit-tested without a device). 0.0 mix rate = unresolved = false.
+    static bool rawRailMatches (double requestedRate, double endpointMixRate) noexcept;
+
     juce::AudioIODevice* inputDevice()  const { return inDev.get(); }
     juce::AudioIODevice* outputDevice() const { return outDev.get(); }
 
@@ -86,6 +98,8 @@ private:
     std::unique_ptr<juce::AudioIODevice> inDev, outDev;
     int requestedOutBits = 24;        // last bit depth requested on openOutput (best-effort)
     int grantedOutBits   = 0;         // depth getCurrentBitDepth() reported after the last open (0 = none)
+    double requestedInRate_ = 0.0;    // rate last requested on openInput (0 = none/closed)
+    double endpointMixRate_ = 0.0;    // endpoint shared mix-format rate resolved at the last input open
     juce::String forcedTypeName;      // set by setCurrentType() to override the preferred type
 
     juce::AudioIODeviceType* findPreferredType();    // the "Windows Audio"/"CoreAudio" type
