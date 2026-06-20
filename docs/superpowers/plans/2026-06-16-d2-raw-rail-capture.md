@@ -1,88 +1,286 @@
-# Raw-Rail Capture (native-rate pin + no-SRC assert) Implementation Plan
+# Raw-Rail Capture (endpoint mix-format SRC detection) Implementation Plan
 
 > For agentic workers: REQUIRED SUB-SKILL: use superpowers:subagent-driven-development (recommended) or executing-plans to implement this plan task-by-task. Steps use checkbox syntax.
 
-**Goal:** Make the "confirmed clip" verdict trustworthy at its source. Today the EARS opens in WASAPI/CoreAudio *shared* mode with the OS sample-rate converter armed (`AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`), so the app measures OS-resampled/mixed float, not the device's true digital rails — the merged "confirmed clip" run-detector is therefore only a run-on-shared-float proxy. This plan pins the EARS input to the requested native rate, reads back the granted rate/depth at open, and **asserts no SRC engaged** (`getCurrentSampleRate() == requested`). When the rates match it surfaces a **raw-rail verified** state; on a mismatch it refuses to silently trust the run and surfaces **"OS-resampled — clip detection approximate"** (a guidance, non-invalidating `HealthFlag`), to the engine and the GUI.
+**Goal:** Make the "confirmed clip" verdict trustworthy at its source by truthfully detecting whether the OS sample-rate converter resampled the EARS capture stream. When no resampling occurred, surface **raw-rail verified**; when it did (or can't be proven), flag the run **"OS-resampled — clip detection approximate"** (a guidance, non-invalidating `HealthFlag`).
 
-**Architecture:** Extend the existing surfaces — no new threads, no new libraries, no rewrite. `DeviceManager::openInput` records the requested input rate and reads back the granted input rate + bit depth (mirroring the existing `requestedOutBits`/`grantedOutBits` output pattern) and exposes a pure `rawRailVerified()` predicate. `AudioEngine::start` consults it after the streams open, latches a non-invalidating `HealthFlag::OsResampled` via `HealthMonitor` when SRC is detected, and exposes a `RawRailState` snapshot. `MainComponent` renders "raw-rail verified" vs the approximate caveat in the existing post-start downgrade-note path. All audio-thread-reachable code stays allocation/lock/log/exception-free.
+**Architecture:** Query the EARS input endpoint's **shared-mode mix-format sample rate** — the rate the OS mixer actually runs the endpoint at, i.e. the rate WASAPI's `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM` resamples *to* — and compare it to the rate we requested. If they match, the OS did not resample our stream. This is done with a portable native helper mirroring `src/platform/EndpointUid.*` (Windows: `IPropertyStore` `PKEY_AudioEngine_DeviceFormat`; macOS: CoreAudio `kAudioDevicePropertyNominalSampleRate`). The match/verdict logic is a **pure, unit-testable** predicate; the native query is runtime/on-device (like `EndpointUid`). No new threads, no rewrite.
 
-**Tech Stack:** C++20, JUCE 8.0.4, Catch2 v3, CMake + Ninja + MSVC via `tools/dev.cmd`.
+**Tech Stack:** C++20, JUCE 8.0.4, Catch2 v3, CMake + Ninja + MSVC via `tools/dev.cmd`. Windows COM (`mmdeviceapi`/`functiondiscoverykeys`-style PROPERTYKEY) + macOS CoreAudio.
 
-This plan implements audit finding **D2** / requirement **R2** (see `docs/EARS_DIRAC_CLIPPING_AUDIT.md` §2, the D2 defect, and §7 step 1). It builds directly on the merged first slice (`docs/superpowers/plans/2026-06-16-confirmed-clipping-detection.md` — D1/D3/D4: `analyzeInputBlock`, `scanAndFlagNonFinite`, `HealthFlag::ClipConfirmed`/`NonFinite`, `src/gui/ClipStatus.h`). **Out of scope** (named follow-ups): D5 sweep-session machine, D6 frozen SRC ratio during the sweep, D7 combine-mode gating, D8 per-block runtime-format-change revalidation, and full `AudioIODeviceCallback` instantiation in tests.
+This plan implements audit finding **D2** / requirement **R2** (`docs/EARS_DIRAC_CLIPPING_AUDIT.md` §2, the D2 defect, §7 step 1). It supersedes the first D2 attempt, which an xhigh `/code-review` proved was a **no-op on the primary platform**: it compared `juce::AudioIODevice::getCurrentSampleRate()` to the requested rate, but in WASAPI shared mode JUCE sets `currentSampleRate` to the *requested* rate verbatim while `AUTOCONVERTPCM` resamples underneath (`build/_deps/juce-src/.../juce_WASAPI_windows.cpp:1370, 836-838, 768-784, 1338`), so `granted == requested` is a tautology and the feature reported "Raw-rail verified, no OS resampling" exactly when the OS *was* resampling. The corrected signal below is the endpoint mix-format rate, which actually differs from the request when SRC engages.
+
+**Out of scope** (named follow-ups): D5 sweep-session machine, D6 frozen SRC ratio, D7 combine gating, D8 per-block runtime-format revalidation, exclusive-mode open. The residual case where the user has configured the EARS *endpoint* itself at a non-native rate in Windows Sound (so the OS resamples hardware→endpoint before our stream) is acknowledged in the wording, not eliminated — exclusive mode is the only full fix and stays deferred.
 
 ## Design decision
 
-**Chosen approach (audit §7 step 1): native-rate pin + read-back no-SRC assert in shared mode.** `DeviceManager::openInput` already calls `inDev->open(inCh, noOut, sampleRate, bufferSize)`; we keep shared mode but, after the open succeeds, read `getCurrentSampleRate()` / `getCurrentBitDepth()` back and compare to what was requested. If `granted == requested` (within 0.5 Hz) the OS SRC did not resample our stream and the float values faithfully represent the integer rails — **raw-rail verified**. If they differ, the stream was OS-resampled and the run-based clip detector is **approximate**; we flag it rather than silently trusting it.
+**Chosen: compare the requested capture rate to the endpoint's shared mix-format rate.** That mix rate is what the OS mixer runs the capture endpoint at; in shared mode `AUTOCONVERTPCM` resamples between *our requested rate* and that mix rate. If `requested == mixRate` (within 0.5 Hz), AUTOCONVERTPCM is a pass-through and our float samples are the endpoint's samples (raw-rail verified). If they differ — or the mix rate can't be resolved — we do **not** claim verified.
 
-**Named alternative (not chosen): open the EARS WASAPI-exclusive for the measurement** (`WASAPIDeviceMode::exclusive` / `AUDCLNT_SHAREMODE_EXCLUSIVE`). That would deliver true integer rails but JUCE's `"Windows Audio"` type is shared-only (`juce_WASAPI_windows.cpp:1957`), so it needs a separate exclusive device type and breaks the validated shared-mode config the whole app is built around (CLAUDE/MEMORY: "working config = standard VB-CABLE + shared mode"). The audit's §7 step 1 explicitly offers the native-rate-pin path as the smallest honest change ("Pin the EARS to its native rate/depth and verify `getCurrentSampleRate()==requested` … *or* open the EARS WASAPI-exclusive"), and §2's D2 nuance notes that in the matched-rate case a full-scale integer maps to ±1.0f and *is* detectable. We take the matched-rate pin and surface the residual shared-mixer caveat in the wording, deferring exclusive mode.
+**Why not `getCurrentSampleRate()`** (the reverted attempt): proven a tautology in shared mode (it returns the requested rate). **Why not WASAPI-exclusive open** (the real raw-rails guarantee): JUCE's `"Windows Audio"` type is shared-only (`juce_WASAPI_windows.cpp:1957`); exclusive needs a separate device type and breaks the project's validated shared-mode config. Deferred.
+
+**`HealthFlag::OsResampled` bit:** use the **next free bit in the current `EngineTypes.h` at implementation time** (1u<<9 today). NOTE for the controller: the sibling D6/D8/diag-hosttime/diag-saturation plans each also wrote `1u<<9`; whichever merges must take the next actually-free bit. The implementer MUST read the current enum and pick the next free bit, not hardcode 1u<<9.
 
 ## Global Constraints
 
-- Build (tests): ./tools/dev.cmd cmake --build build --target eb_tests  — run tools/dev.cmd DIRECTLY from Bash, never bare cmake (it loses the MSVC env) and never cmd /c; it wraps Ninja + MSVC.
-- Run a test: ./tools/dev.cmd ctest --test-dir build -R "<regex>" --output-on-failure . Full suite: ./tools/dev.cmd ctest --test-dir build --output-on-failure (must stay green; 98 tests today).
-- RT-safety: code reachable from an audio callback must have NO heap allocation, lock, syscall, logging, or exception — plain locals + std::atomic only.
-- HealthFlag (src/audio/EngineTypes.h) is NOT persisted — append enum values freely. CombineMode IS persisted by index — never change its existing values.
-- No real EARS serial in any file (tests use synthetic buffers).
-- Commit trailer on every commit: Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+- Build (tests): `./tools/dev.cmd cmake --build build --target eb_tests` — run tools/dev.cmd DIRECTLY from Bash, never bare cmake (loses the MSVC env), never cmd /c.
+- Run a test: `./tools/dev.cmd ctest --test-dir build -R "<regex>" --output-on-failure`. Full suite: `./tools/dev.cmd ctest --test-dir build --output-on-failure` (must stay green; 98 tests today).
+- RT-safety: code reachable from an audio callback must have NO heap alloc, lock, syscall, logging, or exception — plain locals + std::atomic only. (Everything in this plan runs on the message thread, NOT the audio callback — but `reportRawRail` writes the shared `flagBits` atomic.)
+- The native COM/CoreAudio query runs on the message thread inside `openInput` (start path), never in a callback.
+- `HealthFlag` (src/audio/EngineTypes.h) is NOT persisted — append the new enum value at the next free bit. CombineMode IS persisted by index — never change its existing values.
+- No real EARS serial in any file (tests use synthetic values).
+- Commit trailer on every commit: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
 - Work on a feature branch, not main.
 
 ## File Structure
 
 | File | Responsibility | Change |
 |---|---|---|
-| `src/audio/DeviceManager.h` | device open + format read-back surface | add `requestedInputRate_`/`grantedInputRate_`/`grantedInputBits_` members + `requestedInputSampleRate()`/`grantedInputSampleRate()`/`grantedInputBitDepth()`/`rawRailVerified()` accessors |
-| `src/audio/DeviceManager.cpp` | `openInput` impl + `closeAll` | record requested input rate; read back granted input rate/depth after open; reset on close |
-| `src/audio/EngineTypes.h` | `HealthFlag` enum + `RawRailState` struct | append `OsResampled` flag (guidance, non-invalidating); add a small `RawRailState` snapshot struct |
-| `src/audio/HealthMonitor.h` | telemetry surface | declare `reportRawRail (bool verified) noexcept` |
-| `src/audio/HealthMonitor.cpp` | telemetry impl + `raise()` mask | implement `reportRawRail`; keep `OsResampled` OUT of the invalidating mask (guidance only) |
-| `src/audio/AudioEngine.h` | engine telemetry surface | add `rawRail()` snapshot accessor |
-| `src/audio/AudioEngine.cpp` | `start()` open path | after open, read `DeviceManager` rail state, latch `OsResampled` when not verified, populate the snapshot |
-| `src/gui/RawRailStatus.h` | **new** — pure flag/state → message helper | testable "raw-rail verified" vs "OS-resampled — approximate" text |
-| `src/gui/MainComponent.cpp` | post-start downgrade-note path | append the raw-rail note to the existing `notes` StringArray |
-| `tests/test_devicemanager.cpp` | DeviceManager unit tests | assert read-back accessors + `rawRailVerified()` semantics in the headless (no-device) case |
-| `tests/test_healthmonitor.cpp` | HealthMonitor unit tests | assert `reportRawRail` raises `OsResampled` only when not verified, and that it does NOT invalidate |
-| `tests/test_rawrailstatus.cpp` | **new** — message helper tests | register in `tests/CMakeLists.txt` |
+| `src/platform/EndpointFormat.h` | **new** — portable endpoint mix-rate query | declare `double endpointMixSampleRateForName(const juce::String&, bool isInput)` |
+| `src/platform/EndpointFormat.cpp` | **new** — Windows WASAPI impl + non-Apple stub | `PKEY_AudioEngine_DeviceFormat` → WAVEFORMATEX::nSamplesPerSec, matched by friendly name (mirrors EndpointUid.cpp); returns 0.0 on any failure |
+| `src/platform/EndpointFormat_mac.mm` | **new** — CoreAudio impl | `kAudioDevicePropertyNominalSampleRate` for the matched device UID; returns 0.0 on failure |
+| `CMakeLists.txt` | engine sources | add `EndpointFormat.cpp` (all platforms) + the APPLE-gated `EndpointFormat_mac.mm`, mirroring the EndpointUid split |
+| `src/audio/DeviceManager.h` | rail surface | members `requestedInRate_`/`endpointMixRate_`; accessors `requestedInputSampleRate()`/`endpointMixSampleRate()`/`rawRailVerified()`; **pure static** `rawRailMatches(double requested, double endpointMixRate)` |
+| `src/audio/DeviceManager.cpp` | openInput + closeAll | record requested rate; after open resolve the endpoint mix rate via `endpointMixSampleRateForName`; reset on close; `rawRailVerified()` delegates to the pure predicate |
+| `src/audio/EngineTypes.h` | HealthFlag + RawRailState | append `OsResampled` (next free bit, guidance/non-invalidating); add `RawRailState{verified,requestedRate,mixRate}` (NO bit depth — JUCE WASAPI hardcodes getCurrentBitDepth to 32, so it carries no signal) |
+| `src/audio/HealthMonitor.{h,cpp}` | telemetry | `reportRawRail(bool verified)`; keep OsResampled OUT of the invalidating mask |
+| `src/audio/AudioEngine.{h,cpp}` | start/stop | `rawRail()` snapshot captured after open, latched after `hm.prepare()`; **reset `rawRail_ = {}` in stop() and onDeviceLost()** |
+| `src/gui/RawRailStatus.h` | **new** — pure note | `rawRailNote(const RawRailState&)`: **empty when verified** (no news), a message only when OS-resampled or unverifiable — so a clean run doesn't put good-news text in the amber warning label |
+| `src/gui/MainComponent.cpp` | post-start note | append the rail note to the existing `notes` StringArray (only fires when there's something to warn about) |
+| `src/gui/ClipStatus.h` | clip caveat | `invalidMeasurementMessage` (juce::String) appends `" (OS-resampled - approximate)"` to a confirmed clip when OsResampled is set |
+| `tests/*` | unit tests | `rawRailMatches` truth table; OsResampled flag non-invalidation; RawRailState defaults; rawRailNote (empty-when-verified / message-when-not); clip caveat; CMake-register `test_rawrailstatus.cpp` |
 
 ---
 
-## Task 1: DeviceManager records the requested input rate and reads back the granted input rate/depth
+## Task 1: Portable endpoint mix-rate query (native; runtime-verified)
 
 **Files:**
-- Modify: `src/audio/DeviceManager.h:72` (openInput already declared), `:75-89` (accessors + members)
-- Modify: `src/audio/DeviceManager.cpp:155-166` (openInput body), `:196-200` (closeAll reset)
+- Create: `src/platform/EndpointFormat.h`, `src/platform/EndpointFormat.cpp`, `src/platform/EndpointFormat_mac.mm`
+- Modify: `CMakeLists.txt` (engine sources — mirror the EndpointUid split: `EndpointUid.cpp` line + the `if(APPLE) ... EndpointUid_mac.mm` block)
+
+**Interfaces:**
+- Produces: `double eb::endpointMixSampleRateForName(const juce::String& deviceName, bool isInput)` — the endpoint's shared mix-format sample rate (Hz), or **0.0** when it can't be resolved (unknown platform, name not matched, COM/CoreAudio failure). `isInput` selects the capture (true) vs render (false) flow on Windows; macOS ignores it.
+
+> Note: the native query is **runtime / on-device** verified (no real audio endpoint in headless CI), exactly like `EndpointUid` was ("VERIFIED LIVE via eb_diag" per project memory). Its *contract* (returns 0.0 on failure → caller treats 0.0 as "unverifiable") is what the later pure-logic tasks unit-test. There is no unit test for the native query itself in this task — only that it compiles and links on all platforms.
+
+- [ ] **Step 1: Create the header**
+
+`src/platform/EndpointFormat.h`:
+```cpp
+#pragma once
+#include <juce_core/juce_core.h>
+
+namespace eb {
+
+// The shared-mode MIX-FORMAT sample rate the OS runs this endpoint at (Hz). In WASAPI shared mode the
+// OS resampler (AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM) converts between OUR requested rate and this mix
+// rate; if our requested rate equals this, the OS did not resample our stream (raw rails). Returns 0.0
+// when it can't be resolved (unknown platform, name not matched, COM/CoreAudio failure) so the caller
+// treats "unknown" as unverifiable, NOT verified. isInput selects capture (true) vs render (false) on
+// Windows; CoreAudio devices are not flow-specific so macOS ignores it.
+double endpointMixSampleRateForName (const juce::String& deviceName, bool isInput);
+
+} // namespace eb
+```
+
+- [ ] **Step 2: Windows impl + non-Apple stub**
+
+`src/platform/EndpointFormat.cpp` (mirror `EndpointUid.cpp`'s enumerate-and-match-by-friendly-name pattern, but read `PKEY_AudioEngine_DeviceFormat` and parse the `WAVEFORMATEX`):
+```cpp
+#include "platform/EndpointFormat.h"
+
+#if JUCE_WINDOWS
+
+#include <objbase.h>
+#include <mmdeviceapi.h>
+#include <mmreg.h>          // WAVEFORMATEX
+
+namespace eb {
+
+double endpointMixSampleRateForName (const juce::String& deviceName, bool isInput) {
+    // PKEY_Device_FriendlyName = {a45c254e-df1c-4efd-8020-67d146a850e0},14 (same string JUCE shows).
+    const PROPERTYKEY kFriendlyName = {
+        { 0xa45c254e, 0xdf1c, 0x4efd, { 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0 } }, 14 };
+    // PKEY_AudioEngine_DeviceFormat = {f19f064d-082c-4e27-bc73-6882a1bb8e4c},0 -> the device's shared
+    // mix format (a WAVEFORMATEX blob). Its nSamplesPerSec is the rate the OS mixer runs the endpoint at.
+    const PROPERTYKEY kDeviceFormat = {
+        { 0xf19f064d, 0x082c, 0x4e27, { 0xbc, 0x73, 0x68, 0x82, 0xa1, 0xbb, 0x8e, 0x4c } }, 0 };
+
+    const HRESULT co = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
+    const bool weInited = SUCCEEDED (co);
+    double result = 0.0;
+
+    IMMDeviceEnumerator* en = nullptr;
+    if (SUCCEEDED (CoCreateInstance (__uuidof (MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                     __uuidof (IMMDeviceEnumerator), (void**) &en)) && en != nullptr) {
+        IMMDeviceCollection* coll = nullptr;
+        const EDataFlow flow = isInput ? eCapture : eRender;
+        if (SUCCEEDED (en->EnumAudioEndpoints (flow, DEVICE_STATE_ACTIVE, &coll)) && coll != nullptr) {
+            UINT count = 0; coll->GetCount (&count);
+            for (UINT i = 0; i < count && result == 0.0; ++i) {
+                IMMDevice* dev = nullptr;
+                if (SUCCEEDED (coll->Item (i, &dev)) && dev != nullptr) {
+                    IPropertyStore* store = nullptr;
+                    if (SUCCEEDED (dev->OpenPropertyStore (STGM_READ, &store)) && store != nullptr) {
+                        PROPVARIANT name = {};
+                        if (SUCCEEDED (store->GetValue (kFriendlyName, &name))
+                            && name.vt == VT_LPWSTR && name.pwszVal != nullptr
+                            && deviceName == juce::String (name.pwszVal)) {
+                            PROPVARIANT fmt = {};
+                            if (SUCCEEDED (store->GetValue (kDeviceFormat, &fmt))
+                                && fmt.vt == VT_BLOB && fmt.blob.pBlobData != nullptr
+                                && fmt.blob.cbSize >= sizeof (WAVEFORMATEX)) {
+                                auto* wfx = reinterpret_cast<const WAVEFORMATEX*> (fmt.blob.pBlobData);
+                                result = (double) wfx->nSamplesPerSec;
+                            }
+                            PropVariantClear (&fmt);
+                        }
+                        if (name.vt == VT_LPWSTR && name.pwszVal != nullptr) CoTaskMemFree (name.pwszVal);
+                        store->Release();
+                    }
+                    dev->Release();
+                }
+            }
+            coll->Release();
+        }
+        en->Release();
+    }
+    if (weInited) CoUninitialize();
+    return result;
+}
+
+} // namespace eb
+
+#elif ! JUCE_MAC   // Linux / other: no mix-rate side channel (macOS impl in EndpointFormat_mac.mm)
+
+namespace eb { double endpointMixSampleRateForName (const juce::String&, bool) { return 0.0; } }
+
+#endif
+```
+
+- [ ] **Step 3: macOS impl**
+
+`src/platform/EndpointFormat_mac.mm` (match the device by UID/name, read its nominal rate):
+```cpp
+#include "platform/EndpointFormat.h"
+#if JUCE_MAC
+#include <CoreAudio/CoreAudio.h>
+
+namespace eb {
+
+// CoreAudio: the device's nominal sample rate. (The aggregate sub-device's true hardware rate; if the
+// requested rate differs, CoreAudio is converting.) Matches the device whose name equals deviceName.
+double endpointMixSampleRateForName (const juce::String& deviceName, bool /*isInput*/) {
+    AudioObjectPropertyAddress devicesAddr {
+        kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize (kAudioObjectSystemObject, &devicesAddr, 0, nullptr, &size) != noErr)
+        return 0.0;
+    const int n = (int) (size / sizeof (AudioDeviceID));
+    if (n <= 0) return 0.0;
+    juce::HeapBlock<AudioDeviceID> ids (n);
+    if (AudioObjectGetPropertyData (kAudioObjectSystemObject, &devicesAddr, 0, nullptr, &size, ids) != noErr)
+        return 0.0;
+
+    for (int i = 0; i < n; ++i) {
+        AudioObjectPropertyAddress nameAddr {
+            kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+        CFStringRef cfName = nullptr; UInt32 ns = sizeof (cfName);
+        if (AudioObjectGetPropertyData (ids[i], &nameAddr, 0, nullptr, &ns, &cfName) != noErr || cfName == nullptr)
+            continue;
+        const juce::String nm = juce::String::fromCFString (cfName);
+        CFRelease (cfName);
+        if (nm != deviceName) continue;
+
+        AudioObjectPropertyAddress rateAddr {
+            kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+        Float64 rate = 0.0; UInt32 rs = sizeof (rate);
+        if (AudioObjectGetPropertyData (ids[i], &rateAddr, 0, nullptr, &rs, &rate) == noErr)
+            return (double) rate;
+    }
+    return 0.0;
+}
+
+} // namespace eb
+#endif
+```
+
+- [ ] **Step 4: Register in CMake (mirror EndpointUid)**
+
+In `CMakeLists.txt`, find the EndpointUid registration:
+```cmake
+target_sources(eb_engine PRIVATE src/platform/EndpointUid.cpp)        # Windows impl + non-Apple stub
+if(APPLE)
+    target_sources(eb_engine PRIVATE src/platform/EndpointUid_mac.mm)
+    set_source_files_properties(src/platform/EndpointUid_mac.mm
+        PROPERTIES COMPILE_FLAGS "-x objective-c++")
+endif()
+```
+Add immediately after it:
+```cmake
+target_sources(eb_engine PRIVATE src/platform/EndpointFormat.cpp)     # Windows impl + non-Apple stub
+if(APPLE)
+    target_sources(eb_engine PRIVATE src/platform/EndpointFormat_mac.mm)
+    set_source_files_properties(src/platform/EndpointFormat_mac.mm
+        PROPERTIES COMPILE_FLAGS "-x objective-c++")
+endif()
+```
+
+- [ ] **Step 5: Build to verify it compiles + links**
+
+Run: `./tools/dev.cmd cmake --build build --target eb_tests` (CMake reconfigures for the new sources).
+Expected: builds + links clean (the symbol resolves on Windows from EndpointFormat.cpp). No test yet — the native query is runtime-verified.
+
+- [ ] **Step 6: Commit**
+```bash
+git add src/platform/EndpointFormat.h src/platform/EndpointFormat.cpp src/platform/EndpointFormat_mac.mm CMakeLists.txt
+git commit -m "feat(platform): endpoint mix-format sample-rate query (WASAPI PKEY_AudioEngine_DeviceFormat / CoreAudio)
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+## Task 2: DeviceManager records requested rate + endpoint mix rate; pure rawRailMatches predicate
+
+**Files:**
+- Modify: `src/audio/DeviceManager.h` (members + accessors + the pure static predicate), `src/audio/DeviceManager.cpp` (openInput + closeAll + rawRailVerified body), `#include "platform/EndpointFormat.h"`
 - Test: `tests/test_devicemanager.cpp`
 
 **Interfaces:**
-- Consumes: `juce::AudioIODevice::getCurrentSampleRate()` / `getCurrentBitDepth()` (already used for output at `DeviceManager.cpp:192` and for input rate at `AudioEngine.cpp:272`).
 - Produces:
-  - `double eb::DeviceManager::requestedInputSampleRate() const` — the rate last passed to `openInput` (0.0 before any open / after `closeAll`).
-  - `double eb::DeviceManager::grantedInputSampleRate() const` — `getCurrentSampleRate()` read back after the last successful `openInput` (0.0 = none/closed).
-  - `int eb::DeviceManager::grantedInputBitDepth() const` — `getCurrentBitDepth()` read back after the last successful `openInput` (0 = unknown/none).
-  - `bool eb::DeviceManager::rawRailVerified() const` — true iff an input is open AND `|granted - requested| <= 0.5` Hz (no OS SRC resampled our stream). False when closed or resampled.
+  - `static bool eb::DeviceManager::rawRailMatches(double requestedRate, double endpointMixRate) noexcept` — **pure, unit-testable**: `endpointMixRate > 0.0 && std::abs(requestedRate - endpointMixRate) <= 0.5`. (0.0 mix rate = unresolved = NOT a match.)
+  - `double requestedInputSampleRate() const` (0.0 = none/closed), `double endpointMixSampleRate() const` (0.0 = unresolved/closed).
+  - `bool rawRailVerified() const` — `inDev != nullptr && rawRailMatches(requestedInRate_, endpointMixRate_)`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing test (pure predicate + closed-state)**
 
 Append to `tests/test_devicemanager.cpp`:
 ```cpp
-TEST_CASE("DeviceManager raw-rail read-back is zeroed before any open and after closeAll") {
+TEST_CASE("DeviceManager::rawRailMatches is a pure no-SRC predicate") {
+    using eb::DeviceManager;
+    CHECK (DeviceManager::rawRailMatches (48000.0, 48000.0));   // requested == mix -> no SRC
+    CHECK (DeviceManager::rawRailMatches (48000.0, 48000.4));   // within 0.5 Hz
+    CHECK_FALSE (DeviceManager::rawRailMatches (96000.0, 48000.0)); // OS resamples 96k<->48k
+    CHECK_FALSE (DeviceManager::rawRailMatches (48000.0, 0.0));     // mix rate unresolved -> not verified
+    CHECK_FALSE (DeviceManager::rawRailMatches (0.0, 0.0));
+}
+
+TEST_CASE("DeviceManager raw-rail read-back is zeroed before open and after closeAll") {
     eb::DeviceManager dm;
     CHECK (dm.requestedInputSampleRate() == 0.0);
-    CHECK (dm.grantedInputSampleRate()   == 0.0);
-    CHECK (dm.grantedInputBitDepth()     == 0);
-    CHECK_FALSE (dm.rawRailVerified());   // nothing open => not verified
+    CHECK (dm.endpointMixSampleRate()    == 0.0);
+    CHECK_FALSE (dm.rawRailVerified());
 
     eb::DeviceId nope; nope.name = "no-such-input-device-xyz";
-    auto err = dm.openInput (nope, 48000.0, 512);   // headless CI: device cannot be created
-    CHECK (err.isNotEmpty());                        // open failed (no real EARS in tests)
-    // A failed open must record the request but grant nothing and stay unverified.
-    CHECK (dm.requestedInputSampleRate() == 48000.0);
-    CHECK (dm.grantedInputSampleRate()   == 0.0);
+    auto err = dm.openInput (nope, 48000.0, 512);   // headless: device can't be created
+    CHECK (err.isNotEmpty());
+    CHECK (dm.requestedInputSampleRate() == 48000.0);   // request recorded even on failure
+    CHECK (dm.endpointMixSampleRate()    == 0.0);        // nothing resolved
     CHECK_FALSE (dm.rawRailVerified());
 
     dm.closeAll();
     CHECK (dm.requestedInputSampleRate() == 0.0);
-    CHECK (dm.grantedInputSampleRate()   == 0.0);
-    CHECK (dm.grantedInputBitDepth()     == 0);
+    CHECK (dm.endpointMixSampleRate()    == 0.0);
     CHECK_FALSE (dm.rawRailVerified());
 }
 ```
@@ -90,109 +288,81 @@ TEST_CASE("DeviceManager raw-rail read-back is zeroed before any open and after 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `./tools/dev.cmd cmake --build build --target eb_tests`
-Expected: FAIL to compile — `requestedInputSampleRate` / `grantedInputSampleRate` / `grantedInputBitDepth` / `rawRailVerified` are undeclared.
+Expected: FAIL to compile — `rawRailMatches` / `requestedInputSampleRate` / `endpointMixSampleRate` / `rawRailVerified` undeclared.
 
-- [ ] **Step 3: Declare accessors + members (header)**
+- [ ] **Step 3: Header — members, accessors, pure predicate**
 
-In `src/audio/DeviceManager.h`, after the existing output read-back accessors (`grantedOutputBitDepth()`, line 76), add:
+In `src/audio/DeviceManager.h`, after the existing output read-back accessors, add:
 ```cpp
-    // ---- Raw-rail (D2) read-back: did the OS SRC resample our INPUT stream? ----
-    // openInput requests the EARS native rate; after a successful open we read getCurrentSampleRate()
-    // back. If granted==requested the OS sample-rate converter (AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM)
-    // did NOT resample our stream, so the float values faithfully represent the device's integer rails
-    // and the confirmed-clip run detector is trustworthy ("raw-rail verified"). A mismatch means the
-    // run was OS-resampled and clip detection is approximate (see docs/EARS_DIRAC_CLIPPING_AUDIT.md D2).
+    // ---- Raw-rail (D2): did the OS sample-rate converter resample our INPUT stream? ----
+    // In WASAPI/CoreAudio shared mode the OS mixer runs the endpoint at its own mix-format rate and
+    // AUTOCONVERTPCM resamples between THAT and our requested rate. We resolve the endpoint mix rate
+    // (EndpointFormat.h) and compare: requested == mix => no SRC on our stream (raw rails). NOTE:
+    // getCurrentSampleRate() is NOT used here — in shared mode JUCE reports the requested rate verbatim
+    // even while the OS resamples (see docs/EARS_DIRAC_CLIPPING_AUDIT.md D2).
     double requestedInputSampleRate() const { return requestedInRate_; }   // 0.0 = none/closed
-    double grantedInputSampleRate()   const { return grantedInRate_; }     // 0.0 = none/closed
-    int    grantedInputBitDepth()     const { return grantedInBits_; }      // 0 = unknown/none
-    bool   rawRailVerified()          const;                                // open AND not OS-resampled
+    double endpointMixSampleRate()    const { return endpointMixRate_; }    // 0.0 = unresolved/closed
+    bool   rawRailVerified()          const;                                // open AND requested==mix
+    // Pure, side-effect-free verdict (unit-tested without a device). 0.0 mix rate = unresolved = false.
+    static bool rawRailMatches (double requestedRate, double endpointMixRate) noexcept;
 ```
-In the private members block, after `grantedOutBits` (line 88), add:
+Private members (after the output read-back members):
 ```cpp
-    double requestedInRate_ = 0.0;    // rate last requested on openInput (0 = none/closed)
-    double grantedInRate_   = 0.0;    // getCurrentSampleRate() read back after the last input open
-    int    grantedInBits_   = 0;      // getCurrentBitDepth() read back after the last input open
+    double requestedInRate_ = 0.0;   // rate last requested on openInput (0 = none/closed)
+    double endpointMixRate_ = 0.0;   // endpoint shared mix-format rate resolved at the last input open
 ```
 
-- [ ] **Step 4: Implement the read-back + reset (cpp)**
+- [ ] **Step 4: Cpp — openInput, closeAll, predicate**
 
-In `src/audio/DeviceManager.cpp`, replace the whole `openInput` body (lines 155-166) with:
+In `src/audio/DeviceManager.cpp`, add `#include "platform/EndpointFormat.h"` near the top includes, and `#include <cmath>` next to `<algorithm>` (for `std::abs(double)`).
+
+At the TOP of `openInput`, record the request and clear the mix rate (so a failed open still reports the request and resolves nothing):
 ```cpp
-juce::String DeviceManager::openInput (const DeviceId& id, double sampleRate, int bufferSize) {
-    // Record the requested native rate up front so a failed open still reports what was asked for
-    // (the raw-rail read-back below only fills in on success).
     requestedInRate_ = sampleRate;
-    grantedInRate_   = 0.0;
-    grantedInBits_   = 0;
-
-    auto* type = findPreferredType();
-    if (type == nullptr) return "No suitable audio driver type (WASAPI/CoreAudio) found";
-    type->scanForDevices();
-    inDev.reset (type->createDevice ({}, id.name));   // input-only
-    if (inDev == nullptr) return "Could not create input device: " + id.name;
-    juce::BigInteger inCh; inCh.setRange (0, 2, true);     // 2 ears
-    juce::BigInteger noOut;
-    auto err = inDev->open (inCh, noOut, sampleRate, bufferSize);
-    if (err.isNotEmpty()) { inDev.reset(); return "Open input failed: " + err; }
-    // Raw-rail (D2): read back what the driver actually granted. In WASAPI/CoreAudio SHARED mode the
-    // OS SRC (AUTOCONVERTPCM) can resample to its endpoint mix format; getCurrentSampleRate() reports
-    // the rate OUR stream actually runs at. granted==requested => no SRC on our stream (raw rails).
-    grantedInRate_ = inDev->getCurrentSampleRate();
-    grantedInBits_ = inDev->getCurrentBitDepth();
-    return {};
-}
+    endpointMixRate_ = 0.0;
 ```
-In `closeAll` (lines 196-200), add the input read-back reset alongside the existing `grantedOutBits = 0;`:
+After a SUCCESSFUL `inDev->open(...)` (past the error return), resolve the endpoint mix rate by name:
 ```cpp
-void DeviceManager::closeAll() {
-    if (inDev)  { inDev->stop();  inDev->close();  inDev.reset(); }
-    if (outDev) { outDev->stop(); outDev->close(); outDev.reset(); }
-    grantedOutBits = 0;
-    requestedInRate_ = 0.0; grantedInRate_ = 0.0; grantedInBits_ = 0;
-}
+    // Raw-rail (D2): resolve the endpoint's shared mix-format rate to detect OS resampling of our stream.
+    endpointMixRate_ = endpointMixSampleRateForName (id.name, true);
 ```
-Add the `rawRailVerified()` body (place it just after `openInput`, before `openOutput`):
+In `closeAll`, reset both alongside the existing output reset:
 ```cpp
+    requestedInRate_ = 0.0; endpointMixRate_ = 0.0;
+```
+Add the predicate + verifier (place after openInput):
+```cpp
+bool DeviceManager::rawRailMatches (double requestedRate, double endpointMixRate) noexcept {
+    return endpointMixRate > 0.0 && std::abs (requestedRate - endpointMixRate) <= 0.5;
+}
 bool DeviceManager::rawRailVerified() const {
-    // Verified only when an input is OPEN and the granted rate matches the request within 0.5 Hz
-    // (so the OS SRC did not resample our stream). A closed/failed input is never "verified".
-    return inDev != nullptr
-        && grantedInRate_ > 0.0
-        && std::abs (grantedInRate_ - requestedInRate_) <= 0.5;
+    return inDev != nullptr && rawRailMatches (requestedInRate_, endpointMixRate_);
 }
 ```
-(`<algorithm>` is already included at `DeviceManager.cpp:4`; `std::abs` for `double` comes via `<cmath>` transitively through JUCE — if the build reports `std::abs` ambiguous, add `#include <cmath>` next to the existing `#include <algorithm>` at line 4.)
 
-- [ ] **Step 5: Run test to verify it passes**
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run: `./tools/dev.cmd cmake --build build --target eb_tests` then
-`./tools/dev.cmd ctest --test-dir build -R "raw-rail read-back" --output-on-failure`
+`./tools/dev.cmd ctest --test-dir build -R "rawRailMatches|raw-rail read-back" --output-on-failure`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
-
 ```bash
 git add src/audio/DeviceManager.h src/audio/DeviceManager.cpp tests/test_devicemanager.cpp
-git commit -m "feat(device): read back granted input rate/depth; rawRailVerified no-SRC predicate
+git commit -m "feat(device): resolve endpoint mix rate + pure rawRailMatches no-SRC predicate (D2)
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 2: A non-invalidating OsResampled flag + HealthMonitor::reportRawRail
+## Task 3: OsResampled guidance flag + HealthMonitor::reportRawRail
 
-**Files:**
-- Modify: `src/audio/EngineTypes.h:15-26` (HealthFlag enum)
-- Modify: `src/audio/HealthMonitor.h:14-25` (declare `reportRawRail`)
-- Modify: `src/audio/HealthMonitor.cpp:8-20` (raise mask — leave OsResampled OUT), add `reportRawRail` body
-- Test: `tests/test_healthmonitor.cpp`
+**Files:** `src/audio/EngineTypes.h` (HealthFlag enum), `src/audio/HealthMonitor.{h,cpp}`; Test: `tests/test_healthmonitor.cpp`
 
 **Interfaces:**
-- Consumes: `HealthFlag` (existing), `HealthMonitor::raise` (existing private helper).
-- Produces:
-  - `HealthFlag::OsResampled` enum value (`1u << 9`) — **guidance, non-invalidating**: the OS SRC resampled our input stream so clip detection is approximate. It is NOT added to the invalidating mask, so `cleanCapture` stays true.
-  - `void eb::HealthMonitor::reportRawRail(bool verified) noexcept` — raises `OsResampled` iff `verified == false`; a no-op when verified. Called once per run from `AudioEngine::start` (message thread), but written through the same atomic `flagBits` as the audio path so it is publication-safe.
+- `HealthFlag::OsResampled` at the **next free bit** (read the current enum — it is `1u << 9` today; do not assume) — guidance, NON-invalidating.
+- `void eb::HealthMonitor::reportRawRail(bool verified) noexcept` — raises OsResampled iff `!verified`; no-op when verified.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -200,110 +370,70 @@ Append to `tests/test_healthmonitor.cpp`:
 ```cpp
 TEST_CASE("HealthMonitor::reportRawRail raises OsResampled only when NOT verified, never invalidates") {
     using eb::HealthFlag; using eb::any;
-
-    SECTION ("verified raw rail => no flag, stays clean") {
+    SECTION ("verified => no flag, clean") {
         eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
         h.reportRawRail (true);
         CHECK_FALSE (any (h.flags() & HealthFlag::OsResampled));
         CHECK (h.cleanCapture());
     }
-    SECTION ("OS-resampled => OsResampled flag, but measurement stays VALID (guidance only)") {
+    SECTION ("not verified => OsResampled, but still VALID (guidance)") {
         eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
         h.reportRawRail (false);
         CHECK (any (h.flags() & HealthFlag::OsResampled));
-        CHECK (h.cleanCapture());   // approximate, not invalid
+        CHECK (h.cleanCapture());
     }
-    SECTION ("reset clears the flag") {
+    SECTION ("reset clears it") {
         eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
         h.reportRawRail (false);
-        CHECK (any (h.flags() & HealthFlag::OsResampled));
         h.reset();
         CHECK_FALSE (any (h.flags() & HealthFlag::OsResampled));
     }
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run test to verify it fails** — `OsResampled`/`reportRawRail` undeclared.
 
-Run: `./tools/dev.cmd cmake --build build --target eb_tests`
-Expected: FAIL to compile — `HealthFlag::OsResampled` and `reportRawRail` are undeclared.
+- [ ] **Step 3: Append the enum value (next free bit)**
 
-- [ ] **Step 3: Append the enum value**
-
-In `src/audio/EngineTypes.h`, extend the `HealthFlag` enum (currently ending at `NonFinite = 1u << 8`):
+Read `src/audio/EngineTypes.h`; append after the current last `HealthFlag` value (today `NonFinite = 1u << 8`), giving it the next free bit with a comment:
 ```cpp
-enum class HealthFlag : unsigned {
-    None        = 0,
-    Xrun        = 1u << 0,
-    Dropout     = 1u << 1,
-    ExcessDrift = 1u << 2,
-    ClipInput   = 1u << 3,   // guidance: near full scale (-1 dBFS); does NOT invalidate
-    LowLevel    = 1u << 4,
-    ClipOutput  = 1u << 5,   // guidance: program output hit the clamp; does NOT invalidate
-    FifoStarved = 1u << 6,
-    ClipConfirmed = 1u << 7, // INVALIDATING: a consecutive near-rail run = confirmed digital clip
-    NonFinite     = 1u << 8, // INVALIDATING: a NaN/Inf sample reached the path
-    OsResampled   = 1u << 9  // guidance: OS SRC resampled the INPUT (D2) -> clip detection approximate; does NOT invalidate
-};
+    OsResampled = 1u << 9   // guidance: OS SRC resampled the INPUT (D2) -> clip detection approximate; NOT invalidating
 ```
+(If the enum already uses 1u<<9 from a sibling slice, use the next free bit instead — verify against the file.)
 
-- [ ] **Step 4: Declare + implement reportRawRail (mask unchanged)**
+- [ ] **Step 4: Declare + implement reportRawRail; leave the invalidating mask unchanged**
 
-In `src/audio/HealthMonitor.h`, in the Plan-2 canonical surface (after `reportOutLevel`, line 21), declare:
+In `HealthMonitor.h` (after `reportOutLevel`):
 ```cpp
-    // Raw-rail (D2): record whether the input opened at its native rate with NO OS resample.
-    // verified==false raises HealthFlag::OsResampled (GUIDANCE, non-invalidating): clip detection is
-    // approximate on an OS-resampled stream. Called once per run from AudioEngine::start.
-    void reportRawRail (bool verified) noexcept;
+    void reportRawRail (bool verified) noexcept;   // D2: raises OsResampled (guidance) when !verified
 ```
-In `src/audio/HealthMonitor.cpp`, add the body (place it just after `reportOutLevel`, before `scanAndFlagNonFinite`):
+In `HealthMonitor.cpp` (after `reportOutLevel`):
 ```cpp
 void HealthMonitor::reportRawRail (bool verified) noexcept {
-    if (! verified) raise (HealthFlag::OsResampled);   // guidance only; raise() does NOT clear clean for it
+    if (! verified) raise (HealthFlag::OsResampled);   // guidance only; not in the invalidating mask
 }
 ```
-**Do NOT** add `OsResampled` to the `invalidating` mask in `raise()` (lines 11-17) — it is guidance, exactly like `ClipInput`/`ClipOutput`/`LowLevel`. Confirm the mask still reads:
-```cpp
-    const unsigned invalidating =
-        static_cast<unsigned> (HealthFlag::Xrun)          |
-        static_cast<unsigned> (HealthFlag::Dropout)       |
-        static_cast<unsigned> (HealthFlag::ExcessDrift)   |
-        static_cast<unsigned> (HealthFlag::FifoStarved)   |
-        static_cast<unsigned> (HealthFlag::ClipConfirmed) |
-        static_cast<unsigned> (HealthFlag::NonFinite);
-```
-(`reset()` already does `flagBits.store(0)` at `HealthMonitor.cpp:37`, so the reset section of the test passes with no change.)
+Confirm `raise()`'s invalidating mask still = {Xrun, Dropout, ExcessDrift, FifoStarved, ClipConfirmed, NonFinite} — do NOT add OsResampled.
 
-- [ ] **Step 5: Run tests to verify they pass**
-
-Run: `./tools/dev.cmd cmake --build build --target eb_tests` then
-`./tools/dev.cmd ctest --test-dir build -R "reportRawRail" --output-on-failure`
-Expected: PASS (all three sections).
+- [ ] **Step 5: Run tests** — `./tools/dev.cmd ctest --test-dir build -R "reportRawRail" --output-on-failure` → PASS.
 
 - [ ] **Step 6: Commit**
-
 ```bash
 git add src/audio/EngineTypes.h src/audio/HealthMonitor.h src/audio/HealthMonitor.cpp tests/test_healthmonitor.cpp
-git commit -m "feat(health): OsResampled guidance flag + reportRawRail (non-invalidating)
+git commit -m "feat(health): OsResampled guidance flag + reportRawRail (non-invalidating) (D2)
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 3: AudioEngine exposes a RawRailState snapshot and latches OsResampled on start
+## Task 4: AudioEngine RawRailState snapshot; latch on start; reset on stop
 
-**Files:**
-- Modify: `src/audio/EngineTypes.h:35-42` (add `RawRailState` struct after `Health`)
-- Modify: `src/audio/AudioEngine.h:86-88` (declare `rawRail()` near `grantedSampleRate()`)
-- Modify: `src/audio/AudioEngine.cpp:270-278` (post-open, before `graph.prepare`) and add the accessor body
-- Test: `tests/test_audioengine.cpp`
+**Files:** `src/audio/EngineTypes.h` (RawRailState), `src/audio/AudioEngine.{h,cpp}`; Test: `tests/test_audioengine.cpp`
 
 **Interfaces:**
-- Consumes: `DeviceManager::rawRailVerified()`, `grantedInputSampleRate()`, `requestedInputSampleRate()`, `grantedInputBitDepth()` (Task 1); `HealthMonitor::reportRawRail` (Task 2).
-- Produces:
-  - `struct eb::RawRailState { bool verified=false; double requestedRate=0.0; double grantedRate=0.0; int grantedBits=0; }` — a plain value snapshot.
-  - `eb::RawRailState eb::AudioEngine::rawRail() const noexcept` — the rail state captured at the last successful `start()` (default-constructed = unverified before any run). Set after the input opens, before the streams start.
+- `struct eb::RawRailState { bool verified=false; double requestedRate=0.0; double mixRate=0.0; }` (NO bit depth — JUCE WASAPI hardcodes getCurrentBitDepth()=32, so it carries no signal; the previous attempt's grantedBits was dead plumbing).
+- `eb::RawRailState eb::AudioEngine::rawRail() const noexcept` — captured at the last successful start(); default = unverified; **reset to `{}` in stop() and onDeviceLost()** so a stale snapshot never outlives its device.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -313,146 +443,122 @@ TEST_CASE("AudioEngine::rawRail defaults to unverified before any run") {
     eb::AudioEngine e;
     auto rr = e.rawRail();
     CHECK_FALSE (rr.verified);
-    CHECK (rr.grantedRate == 0.0);
     CHECK (rr.requestedRate == 0.0);
-    CHECK (rr.grantedBits == 0);
+    CHECK (rr.mixRate == 0.0);
 }
 ```
-(`tests/test_audioengine.cpp` already includes `"audio/AudioEngine.h"` and `<vector>`; `RawRailState` lives in `audio/EngineTypes.h`, transitively included.)
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run test to verify it fails** — `AudioEngine::rawRail` / `RawRailState` undeclared.
 
-Run: `./tools/dev.cmd cmake --build build --target eb_tests`
-Expected: FAIL to compile — `AudioEngine::rawRail` / `eb::RawRailState` are undeclared.
-
-- [ ] **Step 3: Add the snapshot struct (EngineTypes.h)**
-
-In `src/audio/EngineTypes.h`, after the `Health` struct (closing brace at line 42), add:
+- [ ] **Step 3: Struct (EngineTypes.h)** — after `Health`:
 ```cpp
-// --- D2 addition: raw-rail capture state, captured once per run by AudioEngine::start ---
-// verified == true means the EARS input opened at the requested native rate with no OS SRC, so the
-// float samples faithfully represent the device's integer rails and the confirmed-clip detector is
-// trustworthy. verified == false means the OS resampled our stream -> clip detection is approximate.
+// --- D2: raw-rail capture state, captured once per run by AudioEngine::start ---
+// verified == true => the EARS input ran at the endpoint mix rate (no OS SRC on our stream), so the
+// float samples faithfully represent the device's integer rails. verified == false => OS-resampled or
+// the mix rate could not be resolved -> clip detection is approximate.
 struct RawRailState {
     bool   verified      = false;
     double requestedRate = 0.0;
-    double grantedRate   = 0.0;
-    int    grantedBits   = 0;
+    double mixRate       = 0.0;
 };
 ```
 
-- [ ] **Step 4: Declare + implement the accessor; latch on start**
+- [ ] **Step 4: Accessor, member, latch on start, reset on stop**
 
-In `src/audio/AudioEngine.h`, after `grantedOutputBitDepth()` (line 88), declare:
+In `AudioEngine.h` (after `grantedOutputBitDepth()`):
 ```cpp
-    // The raw-rail (D2) capture state captured at the last successful start(): did the EARS open at
-    // its native rate with no OS resample? The GUI shows "raw-rail verified" vs an "approximate" note.
     RawRailState rawRail() const noexcept;
 ```
-Add a private member after `grantedRate_` (line 133):
+Private member:
 ```cpp
-    RawRailState rawRail_;   // D2: captured once per successful start(); default = unverified
+    RawRailState rawRail_;   // D2: captured once per successful start(); reset in stop()/onDeviceLost()
 ```
-In `src/audio/AudioEngine.cpp`, add the accessor body next to the other one-liners (after `grantedOutputBitDepth`, line 176):
+In `AudioEngine.cpp`, accessor:
 ```cpp
 RawRailState AudioEngine::rawRail() const noexcept { return rawRail_; }
 ```
-In `AudioEngine::start`, in the block that already reads the granted capture rate (lines 270-278), capture the rail state and latch the flag **right after** `grantedRate_ = capRate;` and before `graph.prepare(...)`. The `hm.prepare(...)` at line 293 resets `flagBits`, so `reportRawRail` MUST be called *after* that prepare; do it there. Concretely:
-
-Replace lines 270-274:
+In `start()`, after the input opens and on the converged success path (near `grantedRate_ = capRate;`), capture the snapshot — but call `hm.reportRawRail` AFTER `hm.prepare()` (which resets flagBits):
 ```cpp
-    auto* inD  = devices.inputDevice();
-    auto* outD = devices.outputDevice();
-    const double capRate = inD->getCurrentSampleRate();
-    const double renRate = outD->getCurrentSampleRate();
-    grantedRate_ = capRate;   // what the EARS actually runs at (may differ from the user's selection)
-```
-with:
-```cpp
-    auto* inD  = devices.inputDevice();
-    auto* outD = devices.outputDevice();
-    const double capRate = inD->getCurrentSampleRate();
-    const double renRate = outD->getCurrentSampleRate();
-    grantedRate_ = capRate;   // what the EARS actually runs at (may differ from the user's selection)
-    // Raw-rail (D2): capture whether the EARS input opened at its native rate with no OS SRC. On the
-    // aggregate path the aggregate device is the "input", so this still reflects the real open. The
-    // flag is latched AFTER hm.prepare() below (which clears flagBits), not here.
     rawRail_ = RawRailState { devices.rawRailVerified(),
                               devices.requestedInputSampleRate(),
-                              devices.grantedInputSampleRate(),
-                              devices.grantedInputBitDepth() };
+                              devices.endpointMixSampleRate() };
 ```
-Then immediately after the existing `hm.prepare (inputId.model, cap, capRate / juce::jmax (1.0, renRate));` line (line 293), add:
+Immediately after the existing `hm.prepare (...)` line:
 ```cpp
-    hm.reportRawRail (rawRail_.verified);   // guidance OsResampled flag if the OS resampled our input
+    hm.reportRawRail (rawRail_.verified);
+```
+In `stop()` and `onDeviceLost()`, reset the snapshot (mirroring how devices/state are torn down):
+```cpp
+    rawRail_ = RawRailState {};
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
-
-Run: `./tools/dev.cmd cmake --build build --target eb_tests` then
-`./tools/dev.cmd ctest --test-dir build -R "rawRail defaults" --output-on-failure`
-Expected: PASS. Then the full suite (no behavior change for existing runs — verified-by-default snapshot is empty until a real start):
-`./tools/dev.cmd ctest --test-dir build --output-on-failure`
-Expected: all green.
+- [ ] **Step 5: Run tests** — `./tools/dev.cmd ctest --test-dir build -R "rawRail defaults" --output-on-failure` → PASS; then full suite green.
 
 - [ ] **Step 6: Commit**
-
 ```bash
 git add src/audio/EngineTypes.h src/audio/AudioEngine.h src/audio/AudioEngine.cpp tests/test_audioengine.cpp
-git commit -m "feat(engine): RawRailState snapshot + latch OsResampled on start (D2)
+git commit -m "feat(engine): RawRailState snapshot; latch on start, reset on stop/device-loss (D2)
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 4: Pure RawRailStatus message helper + GUI note
+## Task 5: GUI note (silent when verified) + confirmed-clip caveat
 
-**Files:**
-- Create: `src/gui/RawRailStatus.h`
-- Modify: `src/gui/MainComponent.cpp` (the post-start `notes` StringArray, lines 576-585)
-- Create + register test: `tests/test_rawrailstatus.cpp`, `tests/CMakeLists.txt:1-21`
+**Files:** Create `src/gui/RawRailStatus.h`; Modify `src/gui/MainComponent.cpp` (post-start notes), `src/gui/ClipStatus.h`; Create+register `tests/test_rawrailstatus.cpp`; append to `tests/test_clipstatus.cpp`.
 
 **Interfaces:**
-- Consumes: `eb::RawRailState` (`AudioEngine::rawRail()`).
-- Produces: `juce::String eb::rawRailNote(const eb::RawRailState&)` — empty when nothing useful to say (no run yet), `"Raw-rail verified: EARS at NN.N kHz, no OS resampling."` when verified, or `"OS-resampled to NN.N kHz (requested MM.M kHz) - clip detection approximate."` when not. Header-only + pure so it is unit-testable without the GUI (mirrors `gui/ClipStatus.h`).
+- `juce::String eb::rawRailNote(const RawRailState&)` — **EMPTY when verified** (good news doesn't belong in the amber warning label) and empty before any run (mixRate==0 AND requestedRate==0); a message only when OS-resampled (`requestedRate` and `mixRate` both > 0 and differ) or unverifiable (mixRate==0 after a run).
+- `invalidMeasurementMessage(HealthFlag) -> juce::String` appends `" (OS-resampled - approximate)"` to the confirmed-clip message when OsResampled is set.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 Create `tests/test_rawrailstatus.cpp`:
 ```cpp
 #include <catch2/catch_test_macros.hpp>
 #include "gui/RawRailStatus.h"
-#include <string>
 
-TEST_CASE("rawRailNote reports verified vs OS-resampled honestly") {
+TEST_CASE("rawRailNote is silent when verified, warns only when resampled/unverifiable") {
     using eb::RawRailState; using eb::rawRailNote;
-
-    SECTION ("no run yet (granted 0) => empty note") {
-        CHECK (rawRailNote (RawRailState{}).isEmpty());
-    }
-    SECTION ("verified => positive confirmation with the rate") {
-        RawRailState rr; rr.verified = true; rr.requestedRate = 48000.0; rr.grantedRate = 48000.0; rr.grantedBits = 24;
-        CHECK (rawRailNote (rr)
-               == juce::String ("Raw-rail verified: EARS at 48.0 kHz, no OS resampling."));
+    SECTION ("no run yet => empty") { CHECK (rawRailNote (RawRailState{}).isEmpty()); }
+    SECTION ("verified => empty (no news is good news)") {
+        RawRailState rr; rr.verified = true; rr.requestedRate = 48000.0; rr.mixRate = 48000.0;
+        CHECK (rawRailNote (rr).isEmpty());
     }
     SECTION ("OS-resampled => approximate caveat naming both rates") {
-        RawRailState rr; rr.verified = false; rr.requestedRate = 96000.0; rr.grantedRate = 48000.0; rr.grantedBits = 32;
+        RawRailState rr; rr.verified = false; rr.requestedRate = 96000.0; rr.mixRate = 48000.0;
         CHECK (rawRailNote (rr)
-               == juce::String ("OS-resampled to 48.0 kHz (requested 96.0 kHz) - clip detection approximate."));
+               == juce::String ("OS-resampled to 48.0 kHz (endpoint mix rate) vs the requested 96.0 kHz "
+                                "- clip detection approximate."));
+    }
+    SECTION ("unverifiable (mix rate unknown) => honest caveat") {
+        RawRailState rr; rr.verified = false; rr.requestedRate = 48000.0; rr.mixRate = 0.0;
+        CHECK (rawRailNote (rr)
+               == juce::String ("Could not confirm the EARS endpoint rate - clip detection approximate."));
     }
 }
 ```
-Register it in `tests/CMakeLists.txt` by adding `    test_rawrailstatus.cpp` to the `add_executable(eb_tests ...)` list, after `test_clipstatus.cpp` (line 21 — change `test_clipstatus.cpp)` to `test_clipstatus.cpp\n    test_rawrailstatus.cpp)`).
+Register `test_rawrailstatus.cpp` in `tests/CMakeLists.txt` (after `test_clipstatus.cpp`).
+Append to `tests/test_clipstatus.cpp` (note: existing cases wrap the result in `.toStdString()` already if a prior slice changed the return type; if `invalidMeasurementMessage` still returns `const char*` here, this task changes it to `juce::String` and you MUST convert any `std::string(invalidMeasurementMessage(...))` wrapper to `.toStdString()`):
+```cpp
+TEST_CASE("invalidMeasurementMessage qualifies a confirmed clip as approximate when OS-resampled") {
+    using eb::HealthFlag; using eb::invalidMeasurementMessage;
+    CHECK (invalidMeasurementMessage (HealthFlag::ClipConfirmed).toStdString()
+           == "Input reached digital full scale - this measurement is invalid. Lower the level and repeat.");
+    CHECK (invalidMeasurementMessage (HealthFlag::ClipConfirmed | HealthFlag::OsResampled).toStdString()
+           == "Input reached digital full scale - this measurement is invalid. Lower the level and repeat. "
+              "(OS-resampled - approximate)");
+    CHECK (invalidMeasurementMessage (HealthFlag::Dropout | HealthFlag::OsResampled).toStdString()
+           == "Dropouts detected - this measurement is invalid.");
+}
+```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run to verify it fails** — header missing / caveat absent.
 
-Run: `./tools/dev.cmd cmake --build build --target eb_tests`
-Expected: FAIL to compile — `gui/RawRailStatus.h` does not exist.
+- [ ] **Step 3: Create the note helper**
 
-- [ ] **Step 3: Create the pure helper**
-
-Create `src/gui/RawRailStatus.h`:
+`src/gui/RawRailStatus.h`:
 ```cpp
 #pragma once
 #include <juce_core/juce_core.h>
@@ -460,102 +566,36 @@ Create `src/gui/RawRailStatus.h`:
 
 namespace eb {
 
-// Maps the raw-rail (D2) capture state to an honest one-line note for the post-start status area.
-// Empty when there is nothing to report (no run yet => grantedRate == 0). Header-only + pure so it is
-// unit-testable without the GUI (mirrors gui/ClipStatus.h). See docs/EARS_DIRAC_CLIPPING_AUDIT.md D2.
+// Honest post-start note for the raw-rail (D2) state. SILENT when verified or before a run (so a clean
+// run leaves the warning label blank); speaks only when the OS resampled our stream or the endpoint
+// rate could not be confirmed. Header-only + pure (mirrors gui/ClipStatus.h). See AUDIT D2.
 [[nodiscard]] inline juce::String rawRailNote (const RawRailState& rr) {
-    if (rr.grantedRate <= 0.0) return {};   // nothing opened yet
-    if (rr.verified)
-        return "Raw-rail verified: EARS at " + juce::String (rr.grantedRate / 1000.0, 1)
-             + " kHz, no OS resampling.";
-    return "OS-resampled to " + juce::String (rr.grantedRate / 1000.0, 1) + " kHz (requested "
-         + juce::String (rr.requestedRate / 1000.0, 1) + " kHz) - clip detection approximate.";
+    if (rr.verified) return {};                       // no SRC on our stream -> no warning
+    if (rr.requestedRate <= 0.0) return {};           // no run yet
+    if (rr.mixRate > 0.0)
+        return "OS-resampled to " + juce::String (rr.mixRate / 1000.0, 1)
+             + " kHz (endpoint mix rate) vs the requested " + juce::String (rr.requestedRate / 1000.0, 1)
+             + " kHz - clip detection approximate.";
+    return "Could not confirm the EARS endpoint rate - clip detection approximate.";
 }
 
 } // namespace eb
 ```
 
-- [ ] **Step 4: Append the note in the GUI start path**
+- [ ] **Step 4: Wire the GUI note + the clip caveat**
 
-In `src/gui/MainComponent.cpp`, add the include near the other `gui/` includes (next to `#include "gui/ClipStatus.h"`):
+In `src/gui/MainComponent.cpp`, add `#include "gui/RawRailStatus.h"` by `gui/ClipStatus.h`, and in the post-start `notes` block append:
 ```cpp
-#include "gui/RawRailStatus.h"
+    const auto railNote = eb::rawRailNote (engine.rawRail());
+    if (railNote.isNotEmpty()) notes.add (railNote);
 ```
-In `onStartStop()`, in the successful-start branch that builds the `notes` StringArray (lines 576-585), append the raw-rail note just before `preflightLabel.setText (notes.joinIntoString (" "), ...)` at line 585:
-```cpp
-            // Raw-rail (D2): tell the user whether the EARS opened at its native rate with no OS
-            // resampling (clip detection trustworthy) or was OS-resampled (clip detection approximate).
-            const auto railNote = eb::rawRailNote (engine.rawRail());
-            if (railNote.isNotEmpty()) notes.add (railNote);
-```
-The existing rate-downgrade note (lines 578-580) already covers the *value* of the resample; this adds the explicit raw-rail *verdict* so the user knows whether to trust the clip result.
-
-- [ ] **Step 5: Run tests + build the app**
-
-Run: `./tools/dev.cmd cmake --build build --target eb_tests` then
-`./tools/dev.cmd ctest --test-dir build -R "rawRailNote" --output-on-failure`
-Expected: PASS (all three sections).
-Then confirm the app still builds: `./tools/dev.cmd cmake --build build --target EarsBridge`
-Expected: builds clean.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/gui/RawRailStatus.h src/gui/MainComponent.cpp tests/test_rawrailstatus.cpp tests/CMakeLists.txt
-git commit -m "feat(ui): surface raw-rail verified vs OS-resampled note on start (D2)
-
-Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
-```
-
----
-
-## Task 5: ClipStatus appends the approximate caveat to a confirmed-clip verdict
-
-**Files:**
-- Modify: `src/gui/ClipStatus.h:8-14` (`invalidMeasurementMessage`)
-- Modify: `src/gui/MainComponent.cpp` (the `updateStatusLine` invalid branch — wherever `invalidMeasurementMessage(h.flags)` is rendered)
-- Test: `tests/test_clipstatus.cpp`
-
-**Interfaces:**
-- Consumes: `HealthFlag::OsResampled` (Task 2), `HealthFlag::ClipConfirmed` (merged slice).
-- Produces: `invalidMeasurementMessage(HealthFlag)` now appends `" (OS-resampled - approximate)"` to the *confirmed-clip* message when `OsResampled` is also set, so an invalidating clip detected on a resampled stream does not overclaim certainty. Non-clip invalid messages (NonFinite, Dropout) are unchanged.
-
-- [ ] **Step 1: Write the failing test**
-
-Append to `tests/test_clipstatus.cpp`:
-```cpp
-TEST_CASE("invalidMeasurementMessage qualifies a confirmed clip as approximate when OS-resampled") {
-    using eb::HealthFlag; using eb::invalidMeasurementMessage;
-    // Confirmed clip on a raw-rail-verified stream: the plain, confident message.
-    CHECK (std::string (invalidMeasurementMessage (HealthFlag::ClipConfirmed))
-           == "Input reached digital full scale - this measurement is invalid. Lower the level and repeat.");
-    // Same clip but the OS resampled our input: append the approximate caveat.
-    CHECK (std::string (invalidMeasurementMessage (HealthFlag::ClipConfirmed | HealthFlag::OsResampled))
-           == "Input reached digital full scale - this measurement is invalid. Lower the level and repeat. "
-              "(OS-resampled - approximate)");
-    // OsResampled alone is guidance, never reaches this helper as an invalid cause -> NonFinite/Dropout
-    // messages are unchanged when OsResampled co-occurs.
-    CHECK (std::string (invalidMeasurementMessage (HealthFlag::Dropout | HealthFlag::OsResampled))
-           == "Dropouts detected - this measurement is invalid.");
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `./tools/dev.cmd cmake --build build --target eb_tests` then
-`./tools/dev.cmd ctest --test-dir build -R "qualifies a confirmed clip" --output-on-failure`
-Expected: FAIL — the current helper returns the plain confirmed-clip message with no caveat.
-
-- [ ] **Step 3: Append the caveat in the helper**
-
-In `src/gui/ClipStatus.h`, change the return type to `juce::String` (so the caveat can be appended) and add the `OsResampled` branch. The header currently returns `const char*`; switch it to `juce::String` and update the include. Replace the whole helper body (lines 8-14):
+In `src/gui/ClipStatus.h`, make `invalidMeasurementMessage` return `juce::String` (if not already) and append the caveat in the ClipConfirmed branch:
 ```cpp
 [[nodiscard]] inline juce::String invalidMeasurementMessage (HealthFlag flags) {
     if (any (flags & HealthFlag::ClipConfirmed)) {
         juce::String msg = "Input reached digital full scale - this measurement is invalid. "
                            "Lower the level and repeat.";
-        if (any (flags & HealthFlag::OsResampled))   // D2: clip was detected on an OS-resampled stream
-            msg += " (OS-resampled - approximate)";
+        if (any (flags & HealthFlag::OsResampled)) msg += " (OS-resampled - approximate)";
         return msg;
     }
     if (any (flags & HealthFlag::NonFinite))
@@ -563,36 +603,14 @@ In `src/gui/ClipStatus.h`, change the return type to `juce::String` (so the cave
     return "Dropouts detected - this measurement is invalid.";
 }
 ```
-At the top of `src/gui/ClipStatus.h`, ensure `<juce_core/juce_core.h>` is included for `juce::String` (the file currently only includes `"audio/EngineTypes.h"`, which itself includes `<juce_core/juce_core.h>` at `EngineTypes.h:2`, so `juce::String` already resolves — add the explicit include only if the build complains):
-```cpp
-#pragma once
-#include <juce_core/juce_core.h>
-#include "audio/EngineTypes.h"
-```
+If the return type changed from `const char*`, fix the call site (`statusLine.setText(... , ...)` binds a juce::String fine) and convert any `std::string(invalidMeasurementMessage(...))` test wrappers to `.toStdString()`.
 
-- [ ] **Step 4: Fix the call site (return type changed)**
+- [ ] **Step 5: Run tests + build app** — focused `rawRailNote|qualifies a confirmed clip`, then full suite, then `./tools/dev.cmd cmake --build build --target EarsBridge`.
 
-The merged slice renders this helper in `updateStatusLine` via `statusLine.setText (eb::invalidMeasurementMessage (h.flags), juce::dontSendNotification);`. `juce::Label::setText` already takes a `juce::String`, and a `juce::String` binds to it directly, so the call site compiles unchanged. Confirm by grepping the GUI:
+- [ ] **Step 6: Commit**
 ```bash
-git grep -n "invalidMeasurementMessage" src/gui
-```
-If any caller stored the result in a `const char*` (it should not — the merged plan passed it straight into `setText`), change that local to `juce::String`. No `std::string` wrapping is needed at the call site (the unit test wraps it explicitly).
-
-- [ ] **Step 5: Run tests + build the app**
-
-Run: `./tools/dev.cmd cmake --build build --target eb_tests` then
-`./tools/dev.cmd ctest --test-dir build -R "invalidMeasurementMessage|qualifies a confirmed clip" --output-on-failure`
-Expected: PASS — the pre-existing `invalidMeasurementMessage` cases (from the merged slice) still pass because the `std::string(...)` wrapper in those tests accepts a `juce::String` via `juce::String::toStdString()`... **note:** `std::string (juce::String)` does NOT compile. If the merged `test_clipstatus.cpp` wraps the result in `std::string(...)`, update those wrappers to `(eb::invalidMeasurementMessage(...)).toStdString()` (or compare against `juce::String` directly). Apply the same `.toStdString()` form in the new test from Step 1. Re-run until green.
-Then build the app: `./tools/dev.cmd cmake --build build --target EarsBridge`
-Expected: builds clean.
-
-- [ ] **Step 6: Run the full suite + commit**
-
-Run: `./tools/dev.cmd ctest --test-dir build --output-on-failure`
-Expected: all green (≥ 98 + the new cases).
-```bash
-git add src/gui/ClipStatus.h src/gui/MainComponent.cpp tests/test_clipstatus.cpp
-git commit -m "feat(ui): qualify a confirmed clip as approximate when OS-resampled (D2)
+git add src/gui/RawRailStatus.h src/gui/ClipStatus.h src/gui/MainComponent.cpp tests/test_rawrailstatus.cpp tests/test_clipstatus.cpp tests/CMakeLists.txt
+git commit -m "feat(ui): silent-when-verified raw-rail note + approximate clip caveat (D2)
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
@@ -601,26 +619,20 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ## Final verification (run before finishing)
 
-- [ ] Full suite green: `./tools/dev.cmd ctest --test-dir build --output-on-failure` (expect ≥ 98 + the new cases, 0 failed).
+- [ ] Full suite green: `./tools/dev.cmd ctest --test-dir build --output-on-failure`.
 - [ ] App builds: `./tools/dev.cmd cmake --build build --target EarsBridge`.
-- [ ] Manual smoke (optional, real hardware): start with the EARS selected at its native rate (e.g. 48 kHz) -> the post-start note reads **"Raw-rail verified: EARS at 48.0 kHz, no OS resampling."** Select a non-native rate the OS must convert -> the note reads **"OS-resampled to …"** and the status light stays green (guidance, not invalid). An over-driven sweep on a resampled stream shows the confirmed-clip invalid message **with** the "(OS-resampled - approximate)" caveat.
+- [ ] **On-device smoke (required — the native query is not headless-testable):** with the EARS endpoint at its native rate in Windows Sound and the app requesting that rate → no rail note (silent = verified). Set the EARS endpoint to a *different* rate in Windows Sound (forcing AUTOCONVERTPCM) → the note reads "OS-resampled to NN.N kHz (endpoint mix rate) vs the requested MM.M kHz - clip detection approximate" and a confirmed clip shows the "(OS-resampled - approximate)" caveat; the status light stays green (guidance, not invalid). Optionally print `endpointMixSampleRateForName` via an eb_diag temp line to confirm it resolves a non-requested rate (the bug the reverted attempt could not see).
 
-Then use **superpowers:finishing-a-development-branch** to verify and integrate.
-
----
+Then use **superpowers:finishing-a-development-branch**.
 
 ## Self-review
 
-**Spec coverage (against `docs/EARS_DIRAC_CLIPPING_AUDIT.md` finding D2 / requirement R2, §7 step 1):**
-- R2 / D2 "see exact integer PCM rails" — **native-rate pin + no-SRC assert.** Task 1 reads `getCurrentSampleRate()` back in `openInput` and `rawRailVerified()` asserts `granted == requested` so no SRC engaged on our stream; §7 step 1 "request the EARS native rate and assert `getCurrentSampleRate()==requested`." ✓
-- "store the granted depth" (§7 step 1) — Task 1 records `grantedInputBitDepth()` via `getCurrentBitDepth()`. ✓
-- "refuse/flag the run as 'OS-resampled — clip detection approximate' rather than silently trusting it" (finding goal) — Task 2 adds the non-invalidating `OsResampled` flag + `reportRawRail`; Task 3 latches it on start; Task 5 appends "(OS-resampled - approximate)" to a confirmed clip. ✓
-- "Surface a raw-rail verified vs approximate state to the engine/GUI" — Task 3 `AudioEngine::rawRail()` (engine) + Task 4 `rawRailNote` / MainComponent note (GUI). ✓
-- Named alternative documented — WASAPI-exclusive open is stated in the Design decision with why it is deferred (JUCE "Windows Audio" is shared-only; breaks the validated shared-mode config). ✓
-- **Deferred (named follow-ups, by design):** D5 sweep-session machine, D6 frozen SRC ratio during the sweep, D7 combine gating, D8 per-block runtime-format revalidation, exclusive-mode open. These do not block the D2 deliverable; the no-clipping claim still needs D5/D6 to be fully defensible. The residual shared-mixer endpoint-volume caveat (D2 nuance) is acknowledged in the wording rather than eliminated — exclusive mode is the only full fix and is explicitly deferred.
+**Spec coverage (audit D2 / R2 / §7 step 1):** detects OS SRC by the endpoint mix rate (the signal that actually differs when AUTOCONVERTPCM engages), not `getCurrentSampleRate()` (proven a no-op in shared mode by the xhigh review that reverted the first attempt). Verified vs approximate surfaced to engine (OsResampled flag, RawRailState) and GUI (silent-when-verified note, clip caveat). Native query mirrors the validated EndpointUid portable split; runtime-verified like EndpointUid. ✓
 
-**Placeholder scan:** every code step contains complete, compilable content grounded in the real files (`DeviceManager.{h,cpp}`, `AudioEngine.{h,cpp}`, `HealthMonitor.{h,cpp}`, `EngineTypes.h`, `ClipStatus.h`, `MainComponent.cpp`, `tests/CMakeLists.txt`); no "TBD"/"add error handling"/"handle edge cases"/"similar to Task N".
+**Review-fix coverage (from the reverted attempt's /code-review):** (1) tautology root cause → replaced with the mix-rate compare; (2) duplicate resample note → the note is now silent when verified and the resampled case keys on requested-vs-mix (distinct from the existing granted-downgrade note); (3) good-news in the amber warning label → rawRailNote returns empty when verified; (4) dead grantedBits plumbing → removed (no bit depth in RawRailState); (5) rawRail_ stale after stop → reset in stop()/onDeviceLost(); (6) bit-9 collision → use the next free bit, with a controller note that the sibling D-track plans must each take a distinct bit. ✓
 
-**Type consistency:** `rawRailVerified()`/`requestedInputSampleRate()`/`grantedInputSampleRate()`/`grantedInputBitDepth()` (DeviceManager), `reportRawRail(bool)` (HealthMonitor), `RawRailState{verified,requestedRate,grantedRate,grantedBits}` + `AudioEngine::rawRail()`, `rawRailNote(const RawRailState&)`, and `invalidMeasurementMessage(HealthFlag)->juce::String` are used identically in every task that references them. `HealthFlag::OsResampled` (`1u << 9`) is appended once (Task 2), kept OUT of the invalidating mask, and consumed consistently in Tasks 3 and 5.
+**Placeholder scan:** every code step is complete + grounded in the real files (EndpointUid.cpp pattern, DeviceManager/AudioEngine/HealthMonitor/EngineTypes/ClipStatus/MainComponent, CMake EndpointUid split). No TBD/"add error handling"/"similar to Task N".
 
-**RT-safety:** the only audio-thread-reachable addition is `HealthMonitor::reportRawRail` (a single `raise()` into an atomic, no alloc/lock/log). `analyzeInputBlock`/`scanAndFlagNonFinite` are unchanged. `DeviceManager::openInput`, `AudioEngine::start`, and the GUI note all run on the message thread, not the audio callback.
+**Type consistency:** `endpointMixSampleRateForName(juce::String,bool)->double`, `rawRailMatches(double,double)->bool` (static), `requestedInputSampleRate()/endpointMixSampleRate()/rawRailVerified()`, `reportRawRail(bool)`, `RawRailState{verified,requestedRate,mixRate}` + `AudioEngine::rawRail()`, `rawRailNote(const RawRailState&)->juce::String`, `invalidMeasurementMessage(HealthFlag)->juce::String` are used identically across tasks. `HealthFlag::OsResampled` appended once at the next free bit, kept OUT of the invalidating mask.
+
+**RT-safety:** no audio-thread additions except `reportRawRail` (a single atomic `raise()`); the native query, snapshot, and GUI note all run on the message thread.
