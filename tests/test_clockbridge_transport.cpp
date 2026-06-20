@@ -113,3 +113,60 @@ TEST_CASE("ClockBridge transport: 96k->48k conserves the impulse count (2:1 deci
     CHECK (impulses > expected / 2 + expected / 4);     // > ~159: NOT halved/dropped (rules out a real loss)
     CHECK (std::abs (impulses - expected) <= 12);       // count conserved within the warm-up edge
 }
+
+// Transparency metric reused from the transport runs: frequency/phase-invariant resonator-residual
+// (a clean unit-amplitude tone obeys r[i+1]+r[i-1] == 2cos(w)*r[i]); returns max(|peak-1|, residual/peak).
+static double toneCleanliness (const std::vector<float>& r, int warm) {
+    const int n = (int) r.size();
+    double peak = 0.0;
+    for (int i = warm; i < n; ++i) peak = std::max (peak, std::abs ((double) r[(size_t) i]));
+    double num = 0.0, den = 0.0;
+    for (int i = warm + 1; i < n - 1; ++i) {
+        const double ri = (double) r[(size_t) i];
+        num += ((double) r[(size_t) i+1] + (double) r[(size_t) i-1]) * ri;
+        den += ri * ri;
+    }
+    const double k = (den > 1.0e-12) ? num / den : 0.0;
+    double resid = 0.0;
+    for (int i = warm + 1; i < n - 1; ++i)
+        resid = std::max (resid, std::abs ((double) r[(size_t) i+1] + (double) r[(size_t) i-1] - k * (double) r[(size_t) i]));
+    return std::max (std::abs (peak - 1.0), resid / std::max (peak, 1.0e-6));
+}
+
+TEST_CASE("ClockBridge transport: a small injected drift stays within the ASRC drift tolerance") {
+    // Bridge nominal = 1:1, but the producer is FED at 48000/48010 (~0.02% slow). The PI loop must
+    // trim to hold the FIFO; over a long run the published ratio stays within kDriftRatioTol and the
+    // FIFO never runs away (no under/overrun) -- a real sub-tolerance drift the loop absorbs cleanly.
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 8192);
+    const double f0 = 997.0, fed = 48010.0;
+    double ph = 0.0; const double d = 2.0 * juce::MathConstants<double>::pi * f0 / fed;
+    auto capSample = [&] (long long) { const float s = (float) std::sin (ph); ph += d; return s; };
+
+    int u = 0, o = 0;
+    auto r = runTransport (cb, 48010.0, 48000.0, 256, 256, 800, capSample, u, o);
+    INFO ("ratio=" << cb.currentRatio() << " fill=" << cb.fifoFill() << " u=" << u << " o=" << o);
+    CHECK (u == 0);
+    CHECK (o == 0);
+    CHECK (cb.fifoFill() > 0.05);
+    CHECK (cb.fifoFill() < 0.95);
+    CHECK (std::abs (cb.currentRatio() - 1.0) < eb::HealthMonitor::kDriftRatioTol);
+}
+
+TEST_CASE("ClockBridge transport: long soak -- sub-tolerance creep does not corrupt the stream") {
+    // 4000 render blocks of 256 = ~21 s at 48k. With a ~0.02% feed offset the PI loop continuously
+    // micro-trims the ratio; the audit's failure mode is that this continuous retiming smears the
+    // stream while staying under the drift latch. Assert the rendered tone stays transparent
+    // (steady amplitude, no clicks) over the whole soak -- i.e. creep does NOT silently corrupt it.
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 16384);
+    const double f0 = 997.0, fed = 48008.0;
+    double ph = 0.0; const double d = 2.0 * juce::MathConstants<double>::pi * f0 / fed;
+    auto capSample = [&] (long long) { const float s = (float) std::sin (ph); ph += d; return s; };
+
+    int u = 0, o = 0;
+    auto r = runTransport (cb, 48008.0, 48000.0, 256, 256, 4000, capSample, u, o);
+    const double clean = toneCleanliness (r, juce::jmin ((int) r.size() / 2, 24 * 256));
+    INFO ("soak cleanliness=" << clean << " u=" << u << " o=" << o << " fill=" << cb.fifoFill());
+    CHECK (u == 0);
+    CHECK (o == 0);
+    CHECK (clean < 0.05);     // transparent across the full soak: no creep-induced retiming corruption
+}
