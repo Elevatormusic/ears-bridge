@@ -25,7 +25,11 @@ void ProcessingGraph::clearFir (int channel) {
     recomputeHeadroom();   // keep peaks + headroomGain in sync (setFir/clearFir are the only writers)
 }
 
-void ProcessingGraph::setFir (int channel, juce::AudioBuffer<float> ir) {
+// Measure this ear's FIR peak and load it into the matching convolution. Does NOT recompute headroom
+// -- the caller does that once (so setFirPair can install both ears under a single recompute). Shared
+// by setFir + setFirPair so the "measure peak BEFORE the IR is moved + load with the canonical flags"
+// logic lives in exactly one place (DRY). Message-thread only; sole writer of the peaks + convolutions.
+void ProcessingGraph::loadIrInto (int channel, juce::AudioBuffer<float>&& ir) {
     const float pk = peakGainOfIr (ir);               // measure BEFORE the IR is moved into the conv
     if (channel == 0) peakGainL_ = pk; else peakGainR_ = pk;
     auto& conv = (channel == 0) ? convL : convR;
@@ -33,7 +37,33 @@ void ProcessingGraph::setFir (int channel, juce::AudioBuffer<float> ir) {
         juce::dsp::Convolution::Stereo::no,
         juce::dsp::Convolution::Trim::no,
         juce::dsp::Convolution::Normalise::no);
+}
+
+void ProcessingGraph::setFir (int channel, juce::AudioBuffer<float> ir) {
+    loadIrInto (channel, std::move (ir));
     recomputeHeadroom();
+}
+
+void ProcessingGraph::setFirPair (juce::AudioBuffer<float> leftIr, juce::AudioBuffer<float> rightIr) {
+    // Install BOTH ears, then recompute the shared headroom EXACTLY ONCE, so peakGainL_/peakGainR_ and
+    // headroomGain are updated as one batch -- the audio thread can read a one-block-stale headroom (as
+    // for setFir) but never a left-from-the-new-pair / right-from-the-old-pair mix. Same sole-writer
+    // invariant as setFir/clearFir; this is just both ears under a single recompute (not two).
+    loadIrInto (0, std::move (leftIr));
+    loadIrInto (1, std::move (rightIr));
+    recomputeHeadroom();   // ONCE for the pair (reads both peaks) -- not once per ear
+}
+
+bool ProcessingGraph::convolutionsLoaded (int taps) const {
+    // We compare against `taps`, not just > 0, because juce::dsp::Convolution is constructed with a
+    // DEFAULT 1-sample unit-impulse IR -- so getCurrentIRSize() is 1 (not 0) the moment prepare() runs,
+    // before any setFir/setFirPair. A bare > 0 would read "loaded" for that passthrough default. The
+    // real cal FIRs are always >> 1 tap (8 in tests, thousands in production), so >= taps cleanly
+    // excludes the default. getCurrentIRSize() reports the EXACT loaded size here (load SR == prepared
+    // SR, Trim::no, Normalise::no => JUCE neither resamples nor trims), and it only reaches that size
+    // once the async background load completes AND a process() block swaps the new engine into
+    // currentEngine -- so this reads true only after both ears are genuinely installed and a block ran.
+    return convL.getCurrentIRSize() >= taps && convR.getCurrentIRSize() >= taps;
 }
 
 void ProcessingGraph::setCombineMode (CombineMode mode) {

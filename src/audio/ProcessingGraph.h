@@ -8,7 +8,24 @@ class ProcessingGraph {
 public:
     void prepare (double sampleRate, int maxBlockSize);
     void setFir  (int channel, juce::AudioBuffer<float> ir);
+    // Install BOTH ear FIRs and recompute the shared headroom in ONE message-thread call, so the
+    // audio thread never observes a mixed (new-left/old-right or new-FIR/old-headroom) pair. This is
+    // the GUI build path; setFir stays for clearFir's unity path and single-ear tests. Same sole-writer
+    // invariant as setFir/clearFir (convL/convR/peaks/headroomGain), just batched into one update.
+    void setFirPair (juce::AudioBuffer<float> leftIr, juce::AudioBuffer<float> rightIr);
     void clearFir (int channel);   // load a unit-impulse (passthrough) IR + reset that ear's headroom
+
+    // Best-effort confirmation that BOTH convolutions have the cal FIR loaded (the JUCE async background
+    // load has completed AND a process() block has swapped the new engine in). Used by the engine's
+    // calibrationApplied() readiness check; not the sole gate (the generation-id match owns that).
+    // `taps` is the expected FIR length: we require getCurrentIRSize() >= taps, NOT just > 0, because a
+    // freshly prepared() Convolution already holds JUCE's DEFAULT 1-sample passthrough IR (size 1 before
+    // any setFir/setFirPair) -- a > 0 check would wrongly report that default as "loaded". In our usage
+    // (load SR == prepared SR, Trim::no, Normalise::no) JUCE neither resamples nor trims, so it reports
+    // the EXACT loaded size and >= taps is precise. getCurrentIRSize() only reaches that size after a
+    // process() block has run, so this returns false until the graph has processed at least one block
+    // post-install (the tests settle by processing, mirroring the audio thread).
+    bool convolutionsLoaded (int taps) const;
     void setCombineMode (CombineMode mode);
     void setOutputGain (float linear);   // applied to the mono output (the "Output trim" control)
     // Returns true if it replaced any non-finite sample (in the input scratch before convolution, or in
@@ -30,6 +47,10 @@ private:
     // from the louder ear's FIR peak), so the measured L/R balance is preserved. (Sum's intentional
     // +6 dB is left alone -- it owns the clip-risk warning.) Recomputed off-thread on every setFir().
     void  recomputeHeadroom();
+    // Single-ear "measure peak + load into a conv" WITHOUT recomputing headroom. Shared by setFir and
+    // setFirPair (DRY): each caller recomputes once afterwards (setFir once, setFirPair once for the pair),
+    // so setFirPair can batch both ears under one recompute. Message-thread only (sole peaks/conv writer).
+    void  loadIrInto (int channel, juce::AudioBuffer<float>&& ir);
     static float peakGainOfIr (const juce::AudioBuffer<float>& ir);   // max |H(f)| of an IR
 
     juce::dsp::Convolution convL, convR;

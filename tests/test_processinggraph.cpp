@@ -219,6 +219,57 @@ TEST_CASE("ProcessingGraph clearFir restores unity passthrough and resets the au
     CHECK_THAT (out[N - 1], WithinAbs (1.0f, 1e-2f));     // input passes through unchanged
 }
 
+TEST_CASE("ProcessingGraph::setFirPair installs both ears + shared headroom atomically") {
+    const int N = 64;
+    eb::ProcessingGraph g; g.prepare (48000.0, N);
+
+    // Before any IR is loaded, neither convolution reports a loaded IR.
+    CHECK_FALSE (g.convolutionsLoaded (8));
+
+    // Two frequency-flat FIRs of different peak gain; the SHARED headroom must reflect the
+    // LOUDER ear, so a 0 dBFS input cannot exceed full scale on either ear after the makeup.
+    const float gL = 1.0f, gR = 4.0f;                 // R cal boosts +12 dB, L is unity
+    const float headroom = 1.0f / juce::jmax (gL, gR);   // bound by the louder (right) ear
+    g.setFirPair (scaledImpulse (8, gL), scaledImpulse (8, gR));   // ONE atomic install
+
+    std::vector<float> inL (N, 1.0f), inR (N, 1.0f), out (N, 0.0f);   // 0 dBFS input
+    auto wu = warmUp (g, inL, inR, out, N, gL * headroom, gR * headroom);
+    INFO ("setFirPair warmUp reps=" << wu.reps << " L=" << wu.lVal << " R=" << wu.rVal);
+    REQUIRE (wu.settled);
+
+    // Both convolutions report a loaded IR after the install + settle (Task 4).
+    CHECK (g.convolutionsLoaded (8));
+
+    // (a) Shared headroom is derived from BOTH peaks (the louder ear bounds it): the +12 dB
+    //     right FIR alone would put a 0 dBFS input at 4.0; the shared makeup pulls it to exactly
+    //     the input level and never above. If setFirPair had recomputed from the left (unity)
+    //     peak only, the right ear would read 4.0 here.
+    g.setCombineMode (eb::CombineMode::RightOnly);
+    g.process (inL.data(), inR.data(), out.data(), N);
+    const float outR = out[N - 1];
+    CHECK (outR <= 1.0f + 1e-3f);
+    CHECK_THAT (outR, WithinAbs (1.0f, 1e-2f));
+
+    // (b) The same shared makeup is applied to both ears, so the measured L/R balance is preserved.
+    g.setCombineMode (eb::CombineMode::LeftOnly);
+    g.process (inL.data(), inR.data(), out.data(), N);
+    const float outL = out[N - 1];
+    CHECK_THAT (outL / outR, WithinAbs (gL / gR, 1e-2f));
+}
+
+TEST_CASE("ProcessingGraph::convolutionsLoaded is false before any IR, true after a settled load") {
+    const int N = 64;
+    eb::ProcessingGraph g; g.prepare (48000.0, N);
+    CHECK_FALSE (g.convolutionsLoaded (8));   // no IR loaded yet -> currentEngine has nothing
+
+    g.setFir (0, unitImpulse (8));
+    g.setFir (1, unitImpulse (8));
+    std::vector<float> inL (N, 0.5f), inR (N, 0.3f), out (N, 0.0f);
+    auto wu = warmUp (g, inL, inR, out, N, inL[0], inR[0]);   // settles via process() swaps
+    REQUIRE (wu.settled);
+    CHECK (g.convolutionsLoaded (8));         // both IRs swapped in after the process() warm-up
+}
+
 TEST_CASE("Real R_HPN cal cuts the ~4 kHz EARS resonance after convolution") {
     auto f = juce::File (EB_TEST_DATA_DIR).getChildFile ("R_HPN_0000000.txt");
     REQUIRE(f.existsAsFile());
