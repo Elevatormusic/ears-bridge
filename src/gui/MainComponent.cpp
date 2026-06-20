@@ -1,5 +1,6 @@
 #include "gui/MainComponent.h"
 #include "gui/ClipStatus.h"
+#include "gui/RawRailStatus.h"
 #include "platform/DiracCompat.h"
 #include <algorithm>
 #include <cmath>
@@ -582,6 +583,8 @@ void MainComponent::onStartStop() {
             if (gb > 0 && gb != settings.outputBitDepth())
                 notes.add ("Cable opened " + juce::String (gb) + "-bit, not the selected "
                            + juce::String (settings.outputBitDepth()) + "-bit.");
+            const auto railNote = eb::rawRailNote (engine.rawRail());
+            if (railNote.isNotEmpty()) notes.add (railNote);
             preflightLabel.setText (notes.joinIntoString (" "), juce::dontSendNotification);
         } else {
             preflightLabel.setText ("Start failed: " + err, juce::dontSendNotification);

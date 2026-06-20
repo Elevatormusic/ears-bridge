@@ -1,16 +1,22 @@
 #pragma once
+#include <juce_core/juce_core.h>
 #include "audio/EngineTypes.h"
 
 namespace eb {
 
 // Maps the flags of an INVALID capture (cleanCapture == false) to an honest, specific message.
 // Order = most actionable first. Pure + header-only so it is unit-testable without the GUI.
-[[nodiscard]] inline const char* invalidMeasurementMessage (HealthFlag flags) noexcept {
-    if (any (flags & HealthFlag::ClipConfirmed))
-        return "Input reached digital full scale - this measurement is invalid. Lower the level and repeat.";
+// Returns juce::String (not const char*) because the confirmed-clip branch may append a D2 caveat.
+[[nodiscard]] inline juce::String invalidMeasurementMessage (HealthFlag flags) {
+    if (any (flags & HealthFlag::ClipConfirmed)) {
+        juce::String msg = "Input reached digital full scale - this measurement is invalid. "
+                           "Lower the level and repeat.";
+        if (any (flags & HealthFlag::OsResampled)) msg += " (OS-resampled - approximate)";
+        return msg;
+    }
     if (any (flags & HealthFlag::NonFinite))
         return "Measurement invalidated by a corrupted audio sample.";
-    if (any (flags & HealthFlag::ExcessDrift))
+    if (any (flags & HealthFlag::ExcessDrift))            // preserved from the clipping-review-fixes slice
         return "Sample-clock drift detected - this measurement is invalid.";
     return "Dropouts detected - this measurement is invalid.";
 }
