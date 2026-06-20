@@ -110,6 +110,18 @@ public:
     // which sits ABOVE the -50 dBFS no-signal floor and so reads as "clean" today) from a good one.
     bool reachedGoodLevel() const noexcept { return reachedGood_.load(); }
 
+    // ---- D8 addition: runtime format revalidation ----
+    // Call once from RenderCallback::audioDeviceAboutToStart with the device's granted format.
+    // Stores the reference snapshot. RT-safe (atomic stores). A zero rate sentinel means
+    // checkFormatChange is a no-op until notifyPreparedFormat is called.
+    void notifyPreparedFormat(double sampleRate, int bitDepth, int numChannels) noexcept;
+
+    // Call at the top of each render block with the live device format.
+    // Raises HealthFlag::FormatChanged (invalidating) on any mismatch vs the stored snapshot.
+    // No-op if notifyPreparedFormat has not yet been called (prepared rate == 0).
+    // RT-safe: three atomic loads + compare; no allocation.
+    void checkFormatChange(double sampleRate, int bitDepth, int numChannels) noexcept;
+
 private:
     void raise (HealthFlag f) noexcept;   // OR into flags; clear cleanCapture for invalidating flags
 
@@ -140,6 +152,15 @@ private:
 
     std::atomic<int> driftRun { 0 };     // consecutive out-of-tol blocks
     std::atomic<int> blockCount { 0 };   // for the low-level grace window
+
+    // D8: prepared-format snapshot. preparedRateHz_ = 0 means "not set yet" (no-op sentinel).
+    // Written once per run from notifyPreparedFormat (called on the message thread before streaming
+    // begins). Read every render block from checkFormatChange (audio thread). The window between
+    // the write and the first audio block is safe because JUCE starts the callback AFTER
+    // audioDeviceAboutToStart returns, which is where we write.
+    std::atomic<int> preparedRateHz_   { 0 };    // rate rounded to nearest Hz, 0 = sentinel "not set"
+    std::atomic<int> preparedBitDepth_ { 0 };
+    std::atomic<int> preparedChannels_ { 0 };
 };
 
 } // namespace eb

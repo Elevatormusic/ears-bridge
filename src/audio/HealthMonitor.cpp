@@ -15,7 +15,8 @@ void HealthMonitor::raise (HealthFlag f) noexcept {
         static_cast<unsigned> (HealthFlag::FifoStarved)   |
         static_cast<unsigned> (HealthFlag::ClipConfirmed) |
         static_cast<unsigned> (HealthFlag::NonFinite)     |
-        static_cast<unsigned> (HealthFlag::SweepRetimed);
+        static_cast<unsigned> (HealthFlag::SweepRetimed)  |
+        static_cast<unsigned> (HealthFlag::FormatChanged);
     if ((static_cast<unsigned> (f) & invalidating) != 0u)
         clean.store (false);
 }
@@ -43,6 +44,9 @@ void HealthMonitor::reset() {
     railSamplesL_.store (0); railSamplesR_.store (0); longestRunA_.store (0);
     clipConfirmed_.store (false);
     driftRun.store (0); blockCount.store (0);
+    preparedRateHz_.store (0);          // D8: zero-sentinel -> checkFormatChange is a no-op until re-armed
+    preparedBitDepth_.store (0);
+    preparedChannels_.store (0);
 }
 
 // ---- D5 addition: re-scope measurement validity on the sweep-onset edge ----------------
@@ -231,6 +235,28 @@ void HealthMonitor::observeRenderBlock (int framesWanted, int framesGot,
         } else {
             driftRun.store (0);
         }
+    }
+}
+
+// ---- D8 addition: runtime format revalidation -----------------------------------------
+void HealthMonitor::notifyPreparedFormat (double sampleRate, int bitDepth, int numChannels) noexcept {
+    // Store rate rounded to nearest Hz (exact for all standard rates: 44100, 48000, 88200,
+    // 96000, 176400, 192000), avoiding a float atomic. A rate of 0.0 stores as 0, preserving
+    // the "not set" sentinel; real rates are >= 8000 Hz so they never collide with it.
+    preparedRateHz_.store (static_cast<int> (std::lround (sampleRate)));
+    preparedBitDepth_.store (bitDepth);
+    preparedChannels_.store (numChannels);
+}
+
+void HealthMonitor::checkFormatChange (double sampleRate, int bitDepth, int numChannels) noexcept {
+    const int refRate = preparedRateHz_.load();
+    if (refRate == 0) return;   // notifyPreparedFormat not called yet (or reset) -> no-op
+    const int liveRate = static_cast<int> (std::lround (sampleRate));
+    if (liveRate    != refRate
+        || bitDepth    != preparedBitDepth_.load()
+        || numChannels != preparedChannels_.load())
+    {
+        raise (HealthFlag::FormatChanged);   // INVALIDATING: latches cleanCapture=false
     }
 }
 

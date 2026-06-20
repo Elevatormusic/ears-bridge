@@ -422,3 +422,64 @@ TEST_CASE("HealthMonitor: a FROZEN held off-nominal ratio does not trip ExcessDr
         CHECK (eb::any (h.flags() & eb::HealthFlag::ExcessDrift));
     }
 }
+
+// ---- D8: runtime format revalidation ----
+TEST_CASE("HealthMonitor: format stable across blocks -> FormatChanged not raised") {
+    eb::HealthMonitor h;
+    h.prepare(eb::EarsModel::Ears, 4096);
+    h.notifyPreparedFormat(48000.0, 32, 2);
+    for (int i = 0; i < 16; ++i)
+        h.checkFormatChange(48000.0, 32, 2);
+    CHECK_FALSE(eb::any(h.flags() & eb::HealthFlag::FormatChanged));
+    CHECK(h.cleanCapture());
+}
+
+TEST_CASE("HealthMonitor: sample rate change mid-run raises FormatChanged and invalidates") {
+    eb::HealthMonitor h;
+    h.prepare(eb::EarsModel::Ears, 4096);
+    h.notifyPreparedFormat(48000.0, 32, 2);
+    h.checkFormatChange(48000.0, 32, 2);   // first block: clean
+    CHECK_FALSE(eb::any(h.flags() & eb::HealthFlag::FormatChanged));
+    CHECK(h.cleanCapture());
+    h.checkFormatChange(44100.0, 32, 2);   // rate changed
+    CHECK(eb::any(h.flags() & eb::HealthFlag::FormatChanged));
+    CHECK_FALSE(h.cleanCapture());
+    // Flag is sticky after the event
+    h.checkFormatChange(48000.0, 32, 2);   // even if it "recovers", latch stays
+    CHECK(eb::any(h.flags() & eb::HealthFlag::FormatChanged));
+    CHECK_FALSE(h.cleanCapture());
+}
+
+TEST_CASE("HealthMonitor: bit-depth change mid-run raises FormatChanged") {
+    eb::HealthMonitor h;
+    h.prepare(eb::EarsModel::Ears, 4096);
+    h.notifyPreparedFormat(48000.0, 32, 2);
+    h.checkFormatChange(48000.0, 16, 2);   // depth downgraded
+    CHECK(eb::any(h.flags() & eb::HealthFlag::FormatChanged));
+    CHECK_FALSE(h.cleanCapture());
+}
+
+TEST_CASE("HealthMonitor: channel count change mid-run raises FormatChanged") {
+    eb::HealthMonitor h;
+    h.prepare(eb::EarsModel::Ears, 4096);
+    h.notifyPreparedFormat(48000.0, 32, 2);
+    h.checkFormatChange(48000.0, 32, 1);   // channel count dropped
+    CHECK(eb::any(h.flags() & eb::HealthFlag::FormatChanged));
+    CHECK_FALSE(h.cleanCapture());
+}
+
+TEST_CASE("HealthMonitor: reset clears prepared format; notifyPreparedFormat after reset re-arms") {
+    eb::HealthMonitor h;
+    h.prepare(eb::EarsModel::Ears, 4096);
+    h.notifyPreparedFormat(48000.0, 32, 2);
+    h.checkFormatChange(96000.0, 32, 2);   // trigger invalidation
+    CHECK_FALSE(h.cleanCapture());
+    h.reset();
+    // After reset the prepared-format snapshot is zeroed; a zero-sentinel means
+    // checkFormatChange is a no-op until notifyPreparedFormat is called again.
+    h.checkFormatChange(96000.0, 32, 2);
+    CHECK(h.cleanCapture());   // no notification yet -> no comparison -> no flag
+    h.notifyPreparedFormat(96000.0, 32, 2);
+    h.checkFormatChange(96000.0, 32, 2);   // matches
+    CHECK(h.cleanCapture());
+}
