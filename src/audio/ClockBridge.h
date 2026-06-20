@@ -18,6 +18,13 @@ public:
     // for seconds (ExcessDrift). Single-sourced here so the two sites can never silently diverge.
     static constexpr double kTargetFill = 0.5;
 
+    // Hard FIFO-fill band tolerated WHILE FROZEN (raw fill, not the steering smoother). Tied to
+    // kTargetFill so a future setpoint change keeps the band balanced. Outside it the held ratio can no
+    // longer hold the FIFO and a real drop/insert is imminent -> emergency correction.
+    static constexpr double kFreezeBand  = 0.40;                      // ± headroom around the setpoint
+    static constexpr double kFreezeFloor = kTargetFill - kFreezeBand; // 0.10: near-empty (interpolator starve)
+    static constexpr double kFreezeCeil  = kTargetFill + kFreezeBand; // 0.90: near-full (producer overrun)
+
     void prepare (double captureRate, double renderRate, int channels, int capacityFrames);
     void pushCapture (const float* mono, int numFrames);  // producer
     int  pullRender  (float* out, int numFrames);          // consumer; returns frames written
@@ -30,6 +37,19 @@ public:
     // setup thread before start(); the write is lock-free and allocation-free (ring already sized).
     void prime (int silentFrames);
     void primeToTarget();   // prime to kTargetFill * capacity (the PI setpoint); use this in the engine
+
+    // ---- D6: freeze the SRC ratio during a Dirac sweep --------------------------------------
+    // The PI fill-controller normally re-trims the resample ratio every render block; during a sweep
+    // that continuous sub-0.5% creep nonuniformly retimes Dirac's log sweep (smears the recovered IR)
+    // while staying under the drift latch -> reads "clean". While the sweep is active we HOLD the
+    // converged trim (publishedRatio stops moving), absorb short-term clock drift with the FIFO
+    // headroom, and recenter only between sweeps. If drift outruns the headroom (raw FIFO fill crosses a
+    // hard near-empty/near-full bound) a real retiming is forced; we latch that as an emergency edge so
+    // the engine can invalidate, rather than silently steer through it. Driven live by D5's session via
+    // AudioEngine (setSweepActive(session_.sweepActive()) each capture block).
+    void setSweepActive (bool active) noexcept;   // any thread; consumer reads it
+    bool sweepActive() const noexcept;
+    bool consumeEmergencyCorrection() noexcept;   // read-and-clear: true once if a hard bound crossed while frozen
 
     double fifoFill()  const;   // 0..1 fraction of capacity currently buffered (smoothed)
     int    underruns() const;
@@ -58,6 +78,13 @@ private:
     std::atomic<long long> droppedFrameCount { 0 };   // producer frames lost to FIFO-full (cumulative)
     std::atomic<double> publishedFill  { 0.5 };
     std::atomic<double> publishedRatio { 1.0 };   // last trimmed capture:render ratio (for currentRatio())
+
+    // D6 freeze state. sweepActive_/emergencyCorrection_ are cross-thread atomics; frozenRatio_/
+    // freezeArmed_ are CONSUMER-THREAD-ONLY scratch (written/read only inside pullRender).
+    std::atomic<bool>   sweepActive_ { false };
+    std::atomic<bool>   emergencyCorrection_ { false };   // edge, drained by consumeEmergencyCorrection()
+    bool   freezeArmed_  = false;   // false until the first frozen block snapshots the trim
+    double frozenRatio_  = 1.0;     // the held capture:render ratio while frozen
 };
 
 } // namespace eb

@@ -13,6 +13,8 @@ void ClockBridge::prepare (double capRate, double renRate, int /*channels*/, int
     srcInput.assign ((size_t) capacity, 0.0f);
     src.reset();
     smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0;
+    sweepActive_.store (false); emergencyCorrection_.store (false);
+    freezeArmed_ = false; frozenRatio_ = captureRate / juce::jmax (1.0, renderRate);
     underrunCount.store (0); overrunCount.store (0); droppedFrameCount.store (0);
     publishedFill.store (kTargetFill);
     publishedRatio.store (captureRate / juce::jmax (1.0, renderRate));
@@ -25,6 +27,8 @@ void ClockBridge::reset() {
     std::fill (ring.begin(), ring.end(), 0.0f);
     src.reset();
     smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0;
+    sweepActive_.store (false); emergencyCorrection_.store (false);
+    freezeArmed_ = false; frozenRatio_ = captureRate / juce::jmax (1.0, renderRate);
     underrunCount.store (0); overrunCount.store (0); droppedFrameCount.store (0);
     publishedFill.store (kTargetFill);
     publishedRatio.store (captureRate / juce::jmax (1.0, renderRate));
@@ -66,18 +70,30 @@ void ClockBridge::pushCapture (const float* mono, int numFrames) {
 }
 
 int ClockBridge::pullRender (float* out, int numFrames) {
-    // --- PI fill-control: target half-full; trim the SRC ratio slowly. ---
+    // --- Fill observation (always current, even while frozen, so fifoFill() stays honest). ---
     const double fillFrac = (double) fifo.getNumReady() / (double) capacity;
-    smoothedFill += 0.01 * (fillFrac - smoothedFill);        // 1-pole smoother
-    const double errFill = smoothedFill - kTargetFill;       // steer fill toward the prime target
-    integ = juce::jlimit (-0.02, 0.02, integ + 1.0e-4 * errFill);
-    // If fill is high, consume faster (ratio up); if low, slower. Bound the trim tightly.
-    ratioTrim = juce::jlimit (0.97, 1.03, 1.0 + (2.0e-2 * errFill + integ));
+    smoothedFill += 0.01 * (fillFrac - smoothedFill);        // 1-pole smoother (steering only)
     publishedFill.store (smoothedFill);
 
-    const double nominal = captureRate / renderRate;          // input samples per output sample (== speedRatio)
-    const double ratio   = nominal * ratioTrim;
-    publishedRatio.store (ratio);                              // expose to currentRatio() (lock-free)
+    const double nominal = captureRate / renderRate;          // input samples per output sample
+    double ratio;
+    if (sweepActive_.load()) {
+        // --- D6 FROZEN: hold the converged trim; do NOT advance the PI integrator (no creep). ---
+        if (! freezeArmed_) { frozenRatio_ = nominal * ratioTrim; freezeArmed_ = true; }   // snapshot once
+        ratio = frozenRatio_;
+        // RAW fill (not the lagged smoother) for the imminence check: the held ratio can no longer keep
+        // the FIFO and a real drop/insert is imminent -> flag NOW. Do NOT steer (that is the creep D6 forbids).
+        if (fillFrac < kFreezeFloor || fillFrac > kFreezeCeil)
+            emergencyCorrection_.store (true);
+    } else {
+        // --- FREE: normal PI fill-control, steering fill toward kTargetFill. ---
+        freezeArmed_ = false;                                 // re-arm for the next sweep
+        const double errFill = smoothedFill - kTargetFill;
+        integ = juce::jlimit (-0.02, 0.02, integ + 1.0e-4 * errFill);
+        ratioTrim = juce::jlimit (0.97, 1.03, 1.0 + (2.0e-2 * errFill + integ));
+        ratio = nominal * ratioTrim;
+    }
+    publishedRatio.store (ratio);                             // expose to currentRatio() (lock-free)
 
     // Input samples the interpolator MAY need for numFrames outputs (upper bound).
     int needIn = (int) std::ceil (ratio * numFrames) + 4;
@@ -107,5 +123,9 @@ int    ClockBridge::underruns() const { return underrunCount.load(); }
 int    ClockBridge::overruns()  const { return overrunCount.load(); }
 long long ClockBridge::droppedCaptureFrames() const { return droppedFrameCount.load(); }
 double ClockBridge::currentRatio() const { return publishedRatio.load(); }
+
+void ClockBridge::setSweepActive (bool active) noexcept { sweepActive_.store (active); }
+bool ClockBridge::sweepActive() const noexcept { return sweepActive_.load(); }
+bool ClockBridge::consumeEmergencyCorrection() noexcept { return emergencyCorrection_.exchange (false); }
 
 } // namespace eb

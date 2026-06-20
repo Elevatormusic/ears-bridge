@@ -208,3 +208,71 @@ TEST_CASE("ClockBridge overrun surfaces dropped frames into a HealthMonitor (cle
     // The forwarded total equals the bridge's accounted frames (no double counting, no loss).
     CHECK (hm.snapshot().droppedFrames == cb.droppedCaptureFrames());
 }
+
+TEST_CASE("ClockBridge: frozen ratio is held constant during a sweep") {
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 16384);
+    cb.primeToTarget();
+    std::vector<float> blk (256, 0.25f), out (256, 0.0f);
+    for (int i = 0; i < 8; ++i) { cb.pushCapture (blk.data(), 256); cb.pullRender (out.data(), 256); }
+    cb.setSweepActive (true);
+    cb.pushCapture (blk.data(), 256); cb.pullRender (out.data(), 256);   // first frozen block snapshots
+    const double frozen = cb.currentRatio();
+    REQUIRE (cb.sweepActive());
+    for (int i = 0; i < 200; ++i) {
+        cb.pushCapture (blk.data(), 256); cb.pullRender (out.data(), 256);
+        CHECK (cb.currentRatio() == frozen);                 // ratio frozen: zero creep
+    }
+    CHECK_FALSE (cb.consumeEmergencyCorrection());           // balanced feed => no forced correction
+}
+
+TEST_CASE("ClockBridge: freeze absorbs small drift with FIFO headroom (no emergency, no creep)") {
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 16384);
+    cb.primeToTarget();
+    std::vector<float> blk (256, 0.1f), out (256, 0.0f);
+    for (int i = 0; i < 8; ++i) { cb.pushCapture (blk.data(), 256); cb.pullRender (out.data(), 256); }
+    cb.setSweepActive (true);
+    const double feed = 48024.0 / 48000.0;   // +0.05% fast producer
+    double credit = 0.0; double held = 0.0;
+    for (int b = 0; b < 300; ++b) {
+        credit += 256.0 * feed;
+        while (credit >= 256.0) { cb.pushCapture (blk.data(), 256); credit -= 256.0; }
+        cb.pullRender (out.data(), 256);
+        if (b == 0) held = cb.currentRatio();
+        CHECK (cb.currentRatio() == held);                   // still frozen across the whole sweep
+    }
+    CHECK_FALSE (cb.consumeEmergencyCorrection());           // small drift absorbed by headroom
+}
+
+TEST_CASE("ClockBridge: freeze raises an emergency correction when drift outruns the headroom") {
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 8192);
+    cb.primeToTarget();
+    std::vector<float> blk (256, 0.1f), out (256, 0.0f);
+    for (int i = 0; i < 4; ++i) { cb.pushCapture (blk.data(), 256); cb.pullRender (out.data(), 256); }
+    cb.setSweepActive (true);
+    bool raised = false;
+    for (int i = 0; i < 40 && ! raised; ++i) {               // pull with no new capture -> FIFO drains
+        cb.pullRender (out.data(), 256);
+        raised = cb.consumeEmergencyCorrection();
+    }
+    CHECK (raised);                                          // raw near-empty crossing forced a correction
+}
+
+TEST_CASE("ClockBridge: unfreezing resumes PI steering and recenters") {
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 16384);
+    cb.primeToTarget();
+    std::vector<float> blk (256, 0.1f), out (256, 0.0f);
+    for (int i = 0; i < 8; ++i) { cb.pushCapture (blk.data(), 256); cb.pullRender (out.data(), 256); }
+    cb.setSweepActive (true);
+    const double frozen = cb.currentRatio();
+    for (int i = 0; i < 20; ++i) { cb.pushCapture (blk.data(), 256); cb.pullRender (out.data(), 256); }
+    CHECK (cb.currentRatio() == frozen);
+    cb.setSweepActive (false);                              // recenter only between sweeps / in silence
+    REQUIRE_FALSE (cb.sweepActive());
+    bool moved = false;
+    for (int i = 0; i < 50; ++i) {
+        cb.pushCapture (blk.data(), 256); cb.pushCapture (blk.data(), 256);   // overfeed -> fill rises
+        cb.pullRender (out.data(), 256);
+        if (cb.currentRatio() != frozen) { moved = true; break; }
+    }
+    CHECK (moved);                                          // steering resumed
+}
