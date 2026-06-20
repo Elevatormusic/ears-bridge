@@ -392,3 +392,14 @@ TEST_CASE("HealthMonitor::reportRawRail raises OsResampled only when NOT verifie
         CHECK_FALSE (any (h.flags() & HealthFlag::OsResampled));
     }
 }
+
+TEST_CASE("HealthMonitor: reportSweepRetimed invalidates and flags, distinct from Dropout") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    REQUIRE (h.cleanCapture());
+    REQUIRE_FALSE (eb::any (h.flags() & eb::HealthFlag::SweepRetimed));
+    h.reportSweepRetimed();
+    CHECK_FALSE (h.cleanCapture());                                   // invalidating
+    CHECK (eb::any (h.flags() & eb::HealthFlag::SweepRetimed));       // its own flag
+    CHECK_FALSE (eb::any (h.flags() & eb::HealthFlag::Dropout));      // NOT folded into the dropout class
+    CHECK_FALSE (eb::any (h.flags() & eb::HealthFlag::OsResampled));  // and NOT aliased onto OsResampled (1u<<9)
+}

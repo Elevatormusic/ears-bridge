@@ -16,6 +16,7 @@ public:
 
     void reportXrun();                       // a device xrun / dropped callback
     void reportDroppedFrames (long long n);  // frames lost at the bridge (under/overrun)
+    void reportSweepRetimed() noexcept;      // a forced mid-sweep SRC correction (D6): invalidating
     void setFifoFill (double frac);
     void setCaptureToRenderRatio (double r);
     void reportInLevels (float peakL, float peakR, bool clipL, bool clipR);

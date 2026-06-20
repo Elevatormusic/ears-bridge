@@ -14,7 +14,8 @@ void HealthMonitor::raise (HealthFlag f) noexcept {
         static_cast<unsigned> (HealthFlag::ExcessDrift)   |
         static_cast<unsigned> (HealthFlag::FifoStarved)   |
         static_cast<unsigned> (HealthFlag::ClipConfirmed) |
-        static_cast<unsigned> (HealthFlag::NonFinite);
+        static_cast<unsigned> (HealthFlag::NonFinite)     |
+        static_cast<unsigned> (HealthFlag::SweepRetimed);
     if ((static_cast<unsigned> (f) & invalidating) != 0u)
         clean.store (false);
 }
@@ -76,6 +77,13 @@ void HealthMonitor::reportDroppedFrames (long long n) {
         // overrun-only run latched cleanCapture=false but surfaced NO flag to explain why.
         raise (HealthFlag::Dropout);
     }
+}
+
+void HealthMonitor::reportSweepRetimed() noexcept {
+    // A held (frozen) SRC ratio could no longer absorb the clock drift, so a real drop/insert was
+    // forced mid-sweep -> the sweep was nonuniformly retimed and the measurement is invalid. Kept as
+    // its own flag (NOT Dropout) so the GUI can name the cause honestly (see ClipStatus.h).
+    raise (HealthFlag::SweepRetimed);
 }
 
 void HealthMonitor::setFifoFill (double frac) {
