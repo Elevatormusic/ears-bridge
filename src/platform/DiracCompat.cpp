@@ -18,9 +18,14 @@ bool enableDiracSharedMode (juce::String& messageOut) {
     }
     // Tell already-running apps (notably Explorer, which spawns Start-menu launches) that the
     // environment changed, so the NEXT Dirac Live launch inherits the variable -- no reboot needed.
-    DWORD_PTR result = 0;
-    ::SendMessageTimeoutW (HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM) L"Environment",
-                           SMTO_ABORTIFHUNG, 5000, &result);
+    // Broadcast off the message thread so the click handler returns immediately; nothing reads
+    // the broadcast result.
+    juce::Thread::launch ([]
+    {
+        DWORD_PTR result = 0;
+        ::SendMessageTimeoutW (HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM) L"Environment",
+                               SMTO_ABORTIFHUNG, 5000, &result);
+    });
     messageOut = "Now fully close and reopen Dirac Live (no reboot needed).";
     return true;
 }
