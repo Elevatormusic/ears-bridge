@@ -258,3 +258,47 @@ TEST_CASE("AudioEngine: calibrationApplied requires a valid generation with matc
     CHECK_FALSE (e.calibrationApplied());
     CHECK (e.calibrationDiagnostic().containsIgnoreCase ("HEQ"));
 }
+
+TEST_CASE("AudioEngine: reconfigAllowed() reflects the live-capture (Running) state") {
+    eb::AudioEngine e;
+    // Fresh engine is Stopped -> reconfiguration is allowed (the normal pre-start apply path).
+    CHECK (e.status() == eb::EngineStatus::Stopped);
+    CHECK (e.reconfigAllowed());
+
+    // Drive the engine to Running via the callback test seam (no real device).
+    e.prepareCallbacksForTest (48000.0, 8, 1024);
+    CHECK (e.status() == eb::EngineStatus::Running);
+    CHECK_FALSE (e.reconfigAllowed());
+}
+
+TEST_CASE("AudioEngine: applyCalibrationGeneration is a no-op while Running (engine backstop)") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 512);
+
+    // Apply a valid generation while Stopped -> the normal path WORKS and the gate opens.
+    eb::CalibrationGeneration g1;
+    g1.id = 11; g1.sampleRate = 48000.0; g1.taps = 8; g1.valid = true;
+    g1.leftFir  = unitImpulse (8);
+    g1.rightFir = unitImpulse (8);
+    e.setRequestedGeneration (11);
+    e.applyCalibrationGeneration (g1);
+    CHECK (e.appliedGeneration() == 11);
+    CHECK (e.builtGeneration()   == 11);
+    CHECK (e.calibrationApplied());
+
+    // Go live. While Running the engine must refuse to swap FIRs mid-capture.
+    e.prepareCallbacksForTest (48000.0, 8, 1024);
+    CHECK (e.status() == eb::EngineStatus::Running);
+
+    eb::CalibrationGeneration g2;
+    g2.id = 22; g2.sampleRate = 48000.0; g2.taps = 8; g2.valid = true;
+    g2.leftFir  = unitImpulse (8);
+    g2.rightFir = unitImpulse (8);
+    e.setRequestedGeneration (22);
+    e.applyCalibrationGeneration (g2);   // BLOCKED: status() == Running
+
+    // No state was mutated by the blocked apply: built/applied still point at gen 11, not 22.
+    CHECK (e.builtGeneration()   == 11);
+    CHECK (e.appliedGeneration() == 11);
+    CHECK (e.calibrationDiagnostic().isEmpty());   // appliedGen_ (gen 11, valid) was not overwritten
+}

@@ -62,6 +62,11 @@ public:
     // install the FIR pair (graph.setFirPair) and advance appliedGenId_ — an invalid generation leaves
     // the graph at its prior state and keeps the gate closed. Message thread only.
     void applyCalibrationGeneration (CalibrationGeneration gen);
+    // Defensive engine backstop (P0-02): reconfiguration (a FIR/cal swap) is only safe when the audio
+    // callback is NOT actively processing. True while Stopped/Error; false only while Running (live
+    // capture). applyCalibrationGeneration() consults this and no-ops while Running so an in-flight Dirac
+    // measurement can never be corrupted by a mid-sweep FIR swap (the GUI also freezes the controls).
+    bool reconfigAllowed() const noexcept { return status() != EngineStatus::Running; }
     int  requestedGeneration() const noexcept;
     int  builtGeneration()     const noexcept;
     int  appliedGeneration()   const noexcept;

@@ -197,6 +197,13 @@ void AudioEngine::setRequestedGeneration (int id) noexcept {
 }
 
 void AudioEngine::applyCalibrationGeneration (CalibrationGeneration gen) {
+    // Engine backstop (P0-02): never swap FIRs while the audio callback is live-capturing. A cal change
+    // mid-sweep would corrupt the in-flight Dirac measurement. The GUI freezes the controls so this is
+    // never requested, but we guarantee it here: while Running we mutate NOTHING (no builtGenId_, no
+    // appliedGen_, no setFirPair) and return. Stopped/Error (and any pre-start config) proceed normally.
+    if (! reconfigAllowed())
+        return;
+
     // Read out the fields we still need BEFORE we move gen into appliedGen_ (move leaves it valid but
     // unspecified). builtGenId_ records EVERY processed generation (valid or not) so the diagnostic
     // surfaces and the gate can tell "built but invalid" from "never built".
