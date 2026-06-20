@@ -100,6 +100,17 @@ if(APPLE)
         PROPERTIES COMPILE_FLAGS "-x objective-c++")
 endif()
 
+# ---- Endpoint shared mix-format sample-rate query (WASAPI PKEY_AudioEngine_DeviceFormat / CoreAudio) ----
+# Same portable split as EndpointUid: the .cpp carries the Windows impl + a non-Apple fallback (0.0 on
+# macOS); the .mm carries the CoreAudio impl (Apple only). Lets a later task detect whether the OS
+# resampled the EARS capture stream (requested rate vs. endpoint mix rate); 0.0 means unverifiable.
+target_sources(eb_engine PRIVATE src/platform/EndpointFormat.cpp)     # Windows impl + non-Apple stub
+if(APPLE)
+    target_sources(eb_engine PRIVATE src/platform/EndpointFormat_mac.mm)
+    set_source_files_properties(src/platform/EndpointFormat_mac.mm
+        PROPERTIES COMPILE_FLAGS "-x objective-c++")
+endif()
+
 # ---- GUI + state library (components, theme, persistence) ----
 add_library(eb_gui STATIC
     src/state/Settings.cpp
