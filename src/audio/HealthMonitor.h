@@ -40,6 +40,11 @@ public:
     static constexpr float kRailCeiling = 0.9999f;   // -0.00087 dBFS
     static constexpr int   kRailRunMin  = 3;         // consecutive rail samples => confirmed clip
 
+    // A real digital clip flat-tops at the exact rail code (consecutive samples equal); a smooth
+    // full-scale sine peak varies sample-to-sample. Require the rail run to be FLAT within this epsilon
+    // so a clean loud low-frequency tone doesn't false-positive as a confirmed clip.
+    static constexpr float kFlatRunEps = 1.0e-5f;
+
     // Configure per-run: stores the model (for gainProfile) + capacity + the NOMINAL
     // capture:render ratio (drift is measured against this, not 1.0), then reset()s all state.
     void prepare (EarsModel model, int fifoCapacityFrames, double nominalRatio = 1.0) noexcept;
@@ -107,6 +112,7 @@ private:
     // Confirmed-clip detection. railRun*_ / longestRun_ are CAPTURE-THREAD-ONLY scratch (written only
     // in analyzeInputBlock); the *_A_ atomics publish to the GUI thread.
     int  railRunL_ = 0, railRunR_ = 0, longestRun_ = 0;
+    float prevL_ = 0.0f, prevR_ = 0.0f;   // previous raw sample per channel (capture-thread scratch)
     std::atomic<int>  railSamplesL_ { 0 }, railSamplesR_ { 0 }, longestRunA_ { 0 };
     std::atomic<bool> clipConfirmed_ { false };
 

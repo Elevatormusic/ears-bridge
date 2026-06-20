@@ -307,3 +307,24 @@ TEST_CASE("Input meter CLIP latches at the rail, not at the -1 dBFS guidance thr
     h2.analyzeInputBlock (l2.data(), r2.data(), 16);
     CHECK (h2.levels().clipL);
 }
+
+TEST_CASE("Confirmed clip requires a FLAT rail run, not a smooth full-scale peak") {
+    using eb::HealthFlag; using eb::any;
+    SECTION ("flat-topped clip (equal rail samples) -> confirmed") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+        std::vector<float> l { 0.5f, 1.0f, 1.0f, 1.0f, 0.5f };   // flat top, delta == 0
+        std::vector<float> r (l.size(), 0.0f);
+        h.analyzeInputBlock (l.data(), r.data(), (int) l.size());
+        CHECK (h.clipConfirmed());
+        CHECK_FALSE (h.cleanCapture());
+    }
+    SECTION ("smooth full-scale sine peak (varying rail samples) -> NOT confirmed") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+        // Three consecutive samples above kRailCeiling but each differs by ~1.5e-4 (a sine peak).
+        std::vector<float> l { 0.99980f, 0.99993f, 1.00000f, 0.99993f, 0.99980f };
+        std::vector<float> r (l.size(), 0.0f);
+        h.analyzeInputBlock (l.data(), r.data(), (int) l.size());
+        CHECK_FALSE (h.clipConfirmed());
+        CHECK (h.cleanCapture());
+    }
+}

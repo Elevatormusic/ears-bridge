@@ -38,6 +38,7 @@ void HealthMonitor::reset() {
     recentClip_.store (false);
     reachedGood_.store (false);         // a fresh run has not yet reached a healthy capture level
     railRunL_ = railRunR_ = longestRun_ = 0;
+    prevL_ = prevR_ = 0.0f;
     railSamplesL_.store (0); railSamplesR_.store (0); longestRunA_.store (0);
     clipConfirmed_.store (false);
     driftRun.store (0); blockCount.store (0);
@@ -78,18 +79,24 @@ void HealthMonitor::analyzeInputBlock (const float* l, const float* r, int n) no
         if (fa) {
             const float ma = std::abs (a);
             pkL = juce::jmax (pkL, ma);
-            railRunL_ = (ma >= kRailCeiling) ? railRunL_ + 1 : 0;
-            if (ma >= kRailCeiling) ++railL;
+            const bool atRail = ma >= kRailCeiling;
+            const bool flat   = std::abs (a - prevL_) <= kFlatRunEps;   // a true clip is flat; a sine peak isn't
+            railRunL_ = atRail ? (flat ? railRunL_ + 1 : 1) : 0;        // not-flat starts a fresh length-1 run
+            if (atRail) ++railL;
+            prevL_ = a;
         } else {
-            railRunL_ = 0;                 // a non-finite sample breaks THIS channel's run only
+            railRunL_ = 0; prevL_ = 0.0f;  // a non-finite sample breaks THIS channel's run only
         }
         if (fb) {
             const float mb = std::abs (b);
             pkR = juce::jmax (pkR, mb);
-            railRunR_ = (mb >= kRailCeiling) ? railRunR_ + 1 : 0;
-            if (mb >= kRailCeiling) ++railR;
+            const bool atRail = mb >= kRailCeiling;
+            const bool flat   = std::abs (b - prevR_) <= kFlatRunEps;   // a true clip is flat; a sine peak isn't
+            railRunR_ = atRail ? (flat ? railRunR_ + 1 : 1) : 0;        // not-flat starts a fresh length-1 run
+            if (atRail) ++railR;
+            prevR_ = b;
         } else {
-            railRunR_ = 0;
+            railRunR_ = 0; prevR_ = 0.0f;
         }
         longestRun_ = juce::jmax (longestRun_, juce::jmax (railRunL_, railRunR_));
         if (railRunL_ >= kRailRunMin || railRunR_ >= kRailRunMin) confirmed = true;
