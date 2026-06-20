@@ -68,7 +68,7 @@ struct AudioEngine::RenderCallback : juce::AudioIODeviceCallback {
         const int got = e.bridge.pullRender (mono.data(), numSamples);   // capture frames written
         float pk = 0;
         for (int i = 0; i < got; ++i) pk = juce::jmax (pk, std::abs (mono[i]));
-        e.hm.reportOutLevel (pk, pk >= HealthMonitor::kClipLinear);      // unified near-rail threshold
+        e.hm.reportOutLevel (pk, pk >= HealthMonitor::kRailCeiling);     // meter CLIP latches at the rail; reportOutLevel still raises ClipOutput guidance at kClipLinear (-1 dBFS)
         // pullRender ALWAYS returns numSamples (it zero-pads on starvation), so `got` alone never signals
         // a shortfall. The LIVE starvation signal is the ClockBridge underrun delta: a NEW underrun this
         // block means the FIFO starved and the interpolator zero-padded -> report 0 delivered so

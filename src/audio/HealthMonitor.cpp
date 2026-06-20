@@ -99,8 +99,11 @@ void HealthMonitor::analyzeInputBlock (const float* l, const float* r, int n) no
     longestRunA_.store (longestRun_);
     if (nonFinite)  raise (HealthFlag::NonFinite);
     if (confirmed) { clipConfirmed_.store (true); raise (HealthFlag::ClipConfirmed); }
-    // Guidance path (peak meter + near-rail ClipInput + low-level + reached-good), unified on kClipLinear.
-    reportInLevels (pkL, pkR, pkL >= kClipLinear, pkR >= kClipLinear);
+    // Meter CLIP LED latches at the rail (kRailCeiling, ~full scale) so a clean sweep peaking between
+    // -1 and 0 dBFS does not read red before any sample is clamped. reportInLevels still raises the
+    // ClipInput GUIDANCE flag at kClipLinear (-1 dBFS) via its internal `|| peak >= kClipLinear` check,
+    // so only the visual latch moves to the rail; guidance is unchanged.
+    reportInLevels (pkL, pkR, pkL >= kRailCeiling, pkR >= kRailCeiling);
 }
 
 void HealthMonitor::reportInLevels (float peakL, float peakR, bool clipL, bool clipR) {

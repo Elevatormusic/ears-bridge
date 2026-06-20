@@ -292,3 +292,18 @@ TEST_CASE("HealthMonitor: a consecutive near-rail run is a confirmed clip; an is
         CHECK (h.clipConfirmed());
     }
 }
+
+TEST_CASE("Input meter CLIP latches at the rail, not at the -1 dBFS guidance threshold") {
+    using eb::HealthFlag; using eb::any;
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    // -0.4 dBFS (0.95): above the guidance threshold (-1 dBFS) but NOT at the rail.
+    std::vector<float> l (16, 0.95f), r (16, 0.0f);
+    h.analyzeInputBlock (l.data(), r.data(), 16);
+    CHECK_FALSE (h.levels().clipL);                              // meter LED off below the rail
+    CHECK (any (h.flags() & HealthFlag::ClipInput));             // guidance still fires at -1 dBFS
+    // At the rail (0.9999): meter LED on.
+    eb::HealthMonitor h2; h2.prepare (eb::EarsModel::Ears, 4096);
+    std::vector<float> l2 (16, 0.9999f), r2 (16, 0.0f);
+    h2.analyzeInputBlock (l2.data(), r2.data(), 16);
+    CHECK (h2.levels().clipL);
+}
