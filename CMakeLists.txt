@@ -61,7 +61,6 @@ add_library(eb_engine STATIC
     src/audio/HealthMonitor.cpp
     src/audio/DeviceManager.cpp
     src/audio/AudioEngine.cpp)
-target_sources(eb_engine PRIVATE src/audio/CalBinder.cpp)
 target_sources(eb_engine PRIVATE src/audio/AsioFallback.cpp)
 target_sources(eb_engine PRIVATE src/audio/LrVerify.cpp)
 target_sources(eb_engine PRIVATE src/audio/MeasurementSession.cpp)

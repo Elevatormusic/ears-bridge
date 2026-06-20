@@ -15,7 +15,6 @@ add_executable(eb_tests
     test_settings.cpp
     test_plotmath.cpp
     test_ratemenu.cpp
-    test_calbinder.cpp
     test_asiofallback.cpp
     test_lrverify.cpp
     test_levelmeter.cpp
