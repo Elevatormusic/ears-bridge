@@ -4,6 +4,10 @@
 #include <vector>
 #include <cmath>
 #include <limits>
+#include <atomic>
+#include <cstddef>
+#include <cstdlib>
+#include <new>
 
 using Catch::Matchers::WithinAbs;
 
@@ -121,4 +125,47 @@ TEST_CASE("AudioEngine callbacks: a single-channel capture block reports an Xrun
     CHECK (eb::any (e.health().flags & eb::HealthFlag::Xrun));
     CHECK_FALSE (e.cleanCapture());
     CHECK (e.health().xruns >= 1);
+}
+
+// --- Allocation counter: armed only inside the measured region, so it never perturbs other TUs. ---
+namespace {
+    std::atomic<bool>     g_countAllocs { false };
+    std::atomic<long long> g_allocCount { 0 };
+}
+void* operator new (std::size_t sz) {
+    if (g_countAllocs.load (std::memory_order_relaxed)) g_allocCount.fetch_add (1, std::memory_order_relaxed);
+    if (auto* p = std::malloc (sz ? sz : 1)) return p;
+    throw std::bad_alloc();
+}
+void operator delete (void* p) noexcept { std::free (p); }
+void operator delete (void* p, std::size_t) noexcept { std::free (p); }
+
+TEST_CASE("AudioEngine callbacks: steady-state capture+render are allocation-free") {
+    eb::AudioEngine e;
+    const int N = 256, cap = 8192;
+    e.prepareCallbacksForTest (48000.0, N, cap);
+    e.setLeftCalFir  (unitImpulse (8));
+    e.setRightCalFir (unitImpulse (8));
+    e.setCombineMode (eb::CombineMode::AutoPerEar);
+
+    std::vector<float> inL (N, 0.25f), inR (N, 0.25f);
+    std::vector<float> outL (N, 0.0f), outR (N, 0.0f);
+
+    // Warm-up OUTSIDE the measured region: settle the async Convolution IR load / gain ramp.
+    for (int b = 0; b < 256; ++b) {
+        e.driveCaptureCallback (inL.data(), inR.data(), N);
+        e.driveRenderCallback  (outL.data(), outR.data(), N);
+        juce::Thread::sleep (1);
+    }
+
+    g_allocCount.store (0);
+    g_countAllocs.store (true);
+    for (int b = 0; b < 500; ++b) {
+        e.driveCaptureCallback (inL.data(), inR.data(), N);
+        e.driveRenderCallback  (outL.data(), outR.data(), N);
+    }
+    g_countAllocs.store (false);
+
+    INFO ("alloc count in 500 capture+render blocks = " << g_allocCount.load());
+    CHECK (g_allocCount.load() == 0);
 }
