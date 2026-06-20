@@ -31,6 +31,7 @@ list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 # ---- Core DSP library (no devices, no GUI) ----
 add_library(eb_core STATIC
     src/cal/CalFile.cpp
+    src/cal/CalibrationPairValidator.cpp
     src/cal/FirDesigner.cpp
     src/audio/ProcessingGraph.cpp)
 target_include_directories(eb_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
