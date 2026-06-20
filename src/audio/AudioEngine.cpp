@@ -438,6 +438,12 @@ void AudioEngine::driveCaptureCallback (const float* inL, const float* inR, int 
     captureCb->audioDeviceIOCallbackWithContext (in, 2, nullptr, 0, numSamples, ctx);
 }
 
+void AudioEngine::driveCaptureCallbackMono (const float* in0, int numSamples) {
+    const float* in[1] = { in0 };
+    juce::AudioIODeviceCallbackContext ctx;
+    captureCb->audioDeviceIOCallbackWithContext (in, 1, nullptr, 0, numSamples, ctx);
+}
+
 void AudioEngine::driveRenderCallback (float* outL, float* outR, int numSamples) {
     float* out[2] = { outL, outR };
     juce::AudioIODeviceCallbackContext ctx;

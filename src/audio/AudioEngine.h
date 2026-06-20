@@ -125,6 +125,8 @@ public:
     // bodies with synthetic buffers. No device I/O, no new thread. nominalRatio is sampleRate:sampleRate (1.0).
     void prepareCallbacksForTest (double sampleRate, int blockSize, int fifoCapacity);
     void driveCaptureCallback (const float* inL, const float* inR, int numSamples);
+    // Drive the capture callback with a single input channel to exercise the numIn<2 Xrun guard.
+    void driveCaptureCallbackMono (const float* in0, int numSamples);
     void driveRenderCallback  (float* outL, float* outR, int numSamples);
 
 private:

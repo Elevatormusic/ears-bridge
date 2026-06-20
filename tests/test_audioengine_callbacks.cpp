@@ -79,3 +79,46 @@ TEST_CASE("AudioEngine callbacks: a NaN in the raw input invalidates and is not 
     CHECK_FALSE (e.cleanCapture());
     for (int i = 0; i < N; ++i) CHECK (std::isfinite (outL[i]));   // no NaN reaches the cable
 }
+
+TEST_CASE("AudioEngine callbacks: over-feeding capture overruns the FIFO and invalidates") {
+    eb::AudioEngine e;
+    const int N = 1024, cap = 1024;          // each capture block is the whole FIFO; render never drains here
+    e.prepareCallbacksForTest (48000.0, N, cap);
+
+    std::vector<float> inL (N, 0.2f), inR (N, 0.2f);
+    for (int b = 0; b < 8; ++b) e.driveCaptureCallback (inL.data(), inR.data(), N);   // push, never pull
+
+    CHECK (e.health().droppedFrames > 0);                 // bridge overrun frames surfaced into Health
+    CHECK (eb::any (e.health().flags & eb::HealthFlag::Dropout));
+    CHECK_FALSE (e.cleanCapture());
+}
+
+TEST_CASE("AudioEngine callbacks: a starved render underruns and invalidates") {
+    eb::AudioEngine e;
+    const int N = 512, cap = 8192;
+    e.prepareCallbacksForTest (48000.0, N, cap);
+
+    // Drain the primed FIFO without ever feeding capture: ~cap/2 primed / N pulls then it starves.
+    std::vector<float> outL (N, 0.0f), outR (N, 0.0f);
+    bool starved = false;
+    for (int b = 0; b < 64 && ! starved; ++b) {
+        e.driveRenderCallback (outL.data(), outR.data(), N);
+        if (eb::any (e.health().flags & eb::HealthFlag::FifoStarved)) starved = true;
+    }
+    CHECK (starved);
+    CHECK (eb::any (e.health().flags & eb::HealthFlag::Dropout));
+    CHECK_FALSE (e.cleanCapture());
+}
+
+TEST_CASE("AudioEngine callbacks: a single-channel capture block reports an Xrun") {
+    eb::AudioEngine e;
+    const int N = 64;
+    e.prepareCallbacksForTest (48000.0, N, 8192);
+    std::vector<float> in0 (N, 0.1f);
+
+    e.driveCaptureCallbackMono (in0.data(), N);     // numIn == 1 -> the numIn<2 guard fires
+
+    CHECK (eb::any (e.health().flags & eb::HealthFlag::Xrun));
+    CHECK_FALSE (e.cleanCapture());
+    CHECK (e.health().xruns >= 1);
+}
