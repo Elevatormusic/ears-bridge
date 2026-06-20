@@ -117,6 +117,7 @@ public:
     void prepareForTest (double sampleRate, int blockSize);
     void processCaptureBlockForTest (const float* inL, const float* inR,
                                      float* outMono, int numSamples);
+    bool bridgeSweepFrozen() const noexcept { return bridge.sweepActive(); }   // D6 test accessor
 
 private:
     void rescanDevices();

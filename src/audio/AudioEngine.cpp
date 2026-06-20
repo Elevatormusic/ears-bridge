@@ -40,6 +40,7 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
         const float pk = eb::HealthMonitor::blockPeak (l, r, numSamples);
         e.session_.observeBlockPeak (pk);
         if (e.session_.consumeSweepStarted()) e.hm.resetMeasurementLatches();
+        e.bridge.setSweepActive (e.session_.sweepActive());   // D6: freeze the SRC ratio during the sweep, release between sweeps
 
         e.hm.analyzeInputBlock (l, r, numSamples);             // detection (raw input): peak, run, NaN
         // In-measurement only: an invalidating flag (clip/NaN/dropout/drift) latches the session Invalid
@@ -96,6 +97,12 @@ struct AudioEngine::RenderCallback : juce::AudioIODeviceCallback {
         // ratio/fill -- the aggregate's own drift-correction wobble must not trip the drift latch.
         if (e.usingAggregate_) e.hm.observeRenderBlock (numSamples, numSamples, 1.0, 0.5);
         else                   e.hm.observeRenderBlock (numSamples, effGot, e.bridge.currentRatio(), e.bridge.fifoFill());
+        // D6: while frozen the held SRC ratio absorbs short-term drift with FIFO headroom; if drift
+        // outran the headroom the bridge flagged a forced retiming -> invalidate. Drain the edge every
+        // block. Skip the macOS aggregate path: there the FIFO is clock-locked 1:1, the freeze is inert,
+        // and the aggregate's own drift wobble must not be mistaken for a forced sweep correction.
+        if (! e.usingAggregate_ && e.bridge.consumeEmergencyCorrection())
+            e.hm.reportSweepRetimed();
         for (int ch = 0; ch < numOut; ++ch)                             // duplicate mono to both channels
             if (out[ch] != nullptr) {
                 for (int i = 0; i < got; ++i)        out[ch][i] = mono[i];
@@ -329,6 +336,7 @@ bool AudioEngine::start (juce::String& errorOut) {
     // prime depth and the setpoint can never drift apart. It absorbs the startup gap and starts fill
     // AT target (no drift).
     bridge.primeToTarget();
+    bridge.setSweepActive (false);   // D6: a fresh run starts free-running; the session arms the sweep later
     // Reset the per-callback diff baselines: bridge.reset() zeroed the bridge's under/over/dropped
     // counters, so the callbacks' "last seen" baselines must also return to 0 or a stale-high value
     // from a prior run would suppress detection (underruns) / inject a spurious negative delta
@@ -390,6 +398,7 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
     const float pk = eb::HealthMonitor::blockPeak (inL, inR, numSamples);
     session_.observeBlockPeak (pk);
     if (session_.consumeSweepStarted()) hm.resetMeasurementLatches();
+    bridge.setSweepActive (session_.sweepActive());                  // D6: mirror the capture-callback freeze sync
     hm.analyzeInputBlock (inL, inR, numSamples);                      // same analysis as the capture callback
     if (session_.inMeasurement() && ! hm.cleanCapture()) session_.markInvalid();
     if (graph.process (inL, inR, outMono, numSamples)) hm.reportNonFinite();

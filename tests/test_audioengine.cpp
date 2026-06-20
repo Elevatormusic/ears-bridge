@@ -198,3 +198,17 @@ TEST_CASE("AudioEngine seam: the RIGHT-earcup sweep after a gap is still scored 
     CHECK_FALSE (e.cleanCapture());
     CHECK (e.health().session == eb::SessionPhase::Invalid);
 }
+
+TEST_CASE("AudioEngine: a sustained loud sweep freezes the ClockBridge ratio, the gap releases it") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 512);
+    std::vector<float> loud (512, 0.3f), mono (512, 0.0f), quiet (512, 0.0f);  // 0.3 > kSweepStartLinear (-24 dBFS)
+    CHECK_FALSE (e.bridgeSweepFrozen());
+    // kArmSustainBlocks (3) sustained loud blocks arm SweepActive -> the capture sync freezes the bridge.
+    for (int b = 0; b < 4; ++b) e.processCaptureBlockForTest (loud.data(), loud.data(), mono.data(), 512);
+    CHECK (e.bridgeSweepFrozen());
+    CHECK (e.sweepActive());
+    // Sustained silence completes the segment -> session leaves SweepActive -> the bridge releases.
+    for (int b = 0; b < 200; ++b) e.processCaptureBlockForTest (quiet.data(), quiet.data(), mono.data(), 512);
+    CHECK_FALSE (e.bridgeSweepFrozen());
+}
