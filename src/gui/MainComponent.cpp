@@ -524,6 +524,7 @@ void MainComponent::onCombineChosen() {
             break;
     }
     combineHint.setText (h, juce::dontSendNotification);
+    updateStartGate();   // D7: re-evaluate Start gate immediately on mode change
 }
 
 void MainComponent::onLeftCalLoaded (const juce::File& f) {
