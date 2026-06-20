@@ -16,6 +16,8 @@ namespace eb {
     }
     if (any (flags & HealthFlag::NonFinite))
         return "Measurement invalidated by a corrupted audio sample.";
+    if (any (flags & HealthFlag::SweepRetimed))           // D6: clock-retiming is a more specific cause than generic drift
+        return "Clock drift retimed the sweep - this measurement is invalid. Repeat the measurement.";
     if (any (flags & HealthFlag::ExcessDrift))            // preserved from the clipping-review-fixes slice
         return "Sample-clock drift detected - this measurement is invalid.";
     return "Dropouts detected - this measurement is invalid.";

@@ -40,3 +40,14 @@ TEST_CASE("invalidMeasurementMessage qualifies a confirmed clip as approximate w
     CHECK (invalidMeasurementMessage (HealthFlag::ExcessDrift).toStdString()       // drift branch survives the migration
            == "Sample-clock drift detected - this measurement is invalid.");
 }
+
+TEST_CASE("invalidMeasurementMessage: SweepRetimed names the clock-retiming cause") {
+    using eb::HealthFlag; using eb::invalidMeasurementMessage;
+    CHECK (invalidMeasurementMessage (HealthFlag::SweepRetimed).containsIgnoreCase ("retim"));
+    // ClipConfirmed and NonFinite still take precedence.
+    CHECK (invalidMeasurementMessage (HealthFlag::ClipConfirmed | HealthFlag::SweepRetimed)
+               .containsIgnoreCase ("full scale"));
+    // SweepRetimed outranks the generic ExcessDrift wording.
+    CHECK (invalidMeasurementMessage (HealthFlag::SweepRetimed | HealthFlag::ExcessDrift).toStdString()
+               == "Clock drift retimed the sweep - this measurement is invalid. Repeat the measurement.");
+}
