@@ -34,7 +34,9 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
 
         // D5: feed the session the CURRENT block's peak; on the genuine sweep onset re-scope validity
         // BEFORE analyzing this block (so a pre-sweep room event is dropped and a clip ON the onset
-        // block is re-detected fresh by analyzeInputBlock below).
+        // block is re-detected fresh by analyzeInputBlock below). The arm needs kArmSustainBlocks
+        // sustained blocks, so a clip during the brief pre-arm ramp is intentionally inside the dropped
+        // pre-sweep region; a clip on the block that COMPLETES the arm still latches.
         const float pk = eb::HealthMonitor::blockPeak (l, r, numSamples);
         e.session_.observeBlockPeak (pk);
         if (e.session_.consumeSweepStarted()) e.hm.resetMeasurementLatches();
@@ -359,6 +361,7 @@ void AudioEngine::stop() {
         aggregate_.destroy();      // idempotent: tear down any aggregate even from a non-Running state
         usingAggregate_ = false;
         rawRail_ = RawRailState {};   // D2: clear any snapshot left from a prior run
+        session_.reset();             // D5: clear the measurement session too
         return;
     }
     // Flip out of Running BEFORE closing so our own audioDeviceStopped() doesn't latch deviceDied_
@@ -369,6 +372,7 @@ void AudioEngine::stop() {
     usingAggregate_ = false;
     bridge.reset();
     rawRail_ = RawRailState {};    // D2: stopped -- the snapshot must not outlive the device
+    session_.reset();              // D5: clear the measurement session (symmetry with rawRail_)
 }
 
 // ---- Headless test seam ---------------------------------------------------------------
