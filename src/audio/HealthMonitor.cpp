@@ -203,7 +203,8 @@ Levels HealthMonitor::levels() const {
 
 // ---- Plan 4 addition: per-render-block observer (folds onto the Plan-2 setters) --------
 void HealthMonitor::observeRenderBlock (int framesWanted, int framesGot,
-                                        double captureToRenderRatio, double fifoFillFrac) noexcept {
+                                        double captureToRenderRatio, double fifoFillFrac,
+                                        bool frozen) noexcept {
     blockCount.fetch_add (1);
     setCaptureToRenderRatio (captureToRenderRatio);   // reuse the Plan-2 setter (one copy of state)
     setFifoFill (fifoFillFrac);                        // reuse the Plan-2 setter
@@ -216,13 +217,20 @@ void HealthMonitor::observeRenderBlock (int framesWanted, int framesGot,
 
     // Sustained drift state machine: count consecutive ratios deviating from the NOMINAL
     // capture:render ratio (not from 1.0 — a 96k->48k run has nominal ~2.0); latch at threshold.
-    const double drift = (nominal_ > 0.0) ? std::abs (captureToRenderRatio / nominal_ - 1.0)
-                                          : std::abs (captureToRenderRatio - 1.0);
-    if (drift > kDriftRatioTol) {
-        const int run = driftRun.fetch_add (1) + 1;
-        if (run >= kDriftSustainBlocks) raise (HealthFlag::ExcessDrift);
-    } else {
+    // While the SRC ratio is FROZEN for a sweep (D6), the held ratio is INTENTIONAL, not drift: a
+    // slightly off-nominal converged trim held constant would otherwise self-trip ExcessDrift every
+    // block. The emergency/SweepRetimed path is the frozen-mode drift detector, so don't accumulate here.
+    if (frozen) {
         driftRun.store (0);
+    } else {
+        const double drift = (nominal_ > 0.0) ? std::abs (captureToRenderRatio / nominal_ - 1.0)
+                                              : std::abs (captureToRenderRatio - 1.0);
+        if (drift > kDriftRatioTol) {
+            const int run = driftRun.fetch_add (1) + 1;
+            if (run >= kDriftSustainBlocks) raise (HealthFlag::ExcessDrift);
+        } else {
+            driftRun.store (0);
+        }
     }
 }
 

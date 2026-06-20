@@ -96,7 +96,7 @@ struct AudioEngine::RenderCallback : juce::AudioIODeviceCallback {
         // On the macOS aggregate path (Task 7) the FIFO runs at a clock-locked 1:1, so report a NOMINAL
         // ratio/fill -- the aggregate's own drift-correction wobble must not trip the drift latch.
         if (e.usingAggregate_) e.hm.observeRenderBlock (numSamples, numSamples, 1.0, 0.5);
-        else                   e.hm.observeRenderBlock (numSamples, effGot, e.bridge.currentRatio(), e.bridge.fifoFill());
+        else                   e.hm.observeRenderBlock (numSamples, effGot, e.bridge.currentRatio(), e.bridge.fifoFill(), e.bridge.sweepActive());
         // D6: while frozen the held SRC ratio absorbs short-term drift with FIFO headroom; if drift
         // outran the headroom the bridge flagged a forced retiming -> invalidate. Drain the edge every
         // block. Skip the macOS aggregate path: there the FIFO is clock-locked 1:1, the freeze is inert,

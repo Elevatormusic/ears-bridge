@@ -62,7 +62,8 @@ public:
     // fill => Dropout + FifoStarved); ratio + fill are forwarded to the existing setters so there
     // is exactly one copy of that state. Advances the block counter (low-level grace window).
     void observeRenderBlock (int framesWanted, int framesGot,
-                             double captureToRenderRatio, double fifoFillFrac) noexcept;
+                             double captureToRenderRatio, double fifoFillFrac,
+                             bool frozen = false) noexcept;   // D6: frozen => held ratio is intentional, skip drift accrual
 
     HealthFlag     flags() const noexcept;        // latched sticky condition flags
     bool           cleanCapture() const noexcept; // latched false on a measurement-invalidating condition

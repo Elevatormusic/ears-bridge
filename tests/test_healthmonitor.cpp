@@ -403,3 +403,22 @@ TEST_CASE("HealthMonitor: reportSweepRetimed invalidates and flags, distinct fro
     CHECK_FALSE (eb::any (h.flags() & eb::HealthFlag::Dropout));      // NOT folded into the dropout class
     CHECK_FALSE (eb::any (h.flags() & eb::HealthFlag::OsResampled));  // and NOT aliased onto OsResampled (1u<<9)
 }
+
+TEST_CASE("HealthMonitor: a FROZEN held off-nominal ratio does not trip ExcessDrift; an unfrozen one does") {
+    // D6: while the SRC ratio is frozen for a sweep, the held ratio is intentional - the frozen-mode
+    // drift detector is the emergency/SweepRetimed path, not ExcessDrift. An off-nominal held ratio
+    // (e.g. a converged trim 1% off) must NOT self-invalidate the sweep via ExcessDrift.
+    SECTION ("frozen: a held 1%-off ratio is intentional -> no ExcessDrift, stays clean") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);   // nominal_ = 1.0
+        for (int i = 0; i < eb::HealthMonitor::kDriftSustainBlocks + 4; ++i)
+            h.observeRenderBlock (256, 256, 1.01, 0.5, /*frozen*/ true);
+        CHECK_FALSE (eb::any (h.flags() & eb::HealthFlag::ExcessDrift));
+        CHECK (h.cleanCapture());
+    }
+    SECTION ("free (default): the same sustained 1%-off ratio still trips ExcessDrift") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+        for (int i = 0; i < eb::HealthMonitor::kDriftSustainBlocks + 4; ++i)
+            h.observeRenderBlock (256, 256, 1.01, 0.5);              // frozen defaults false
+        CHECK (eb::any (h.flags() & eb::HealthFlag::ExcessDrift));
+    }
+}
