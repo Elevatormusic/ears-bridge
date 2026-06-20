@@ -1,0 +1,66 @@
+name: CI
+
+# Build the app + run the full test suite on every push to main and every PR.
+# This is the gate the Release workflow's build steps mirror, so an installer can
+# never publish from a tree whose tests don't pass.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:   # let release.yml reuse this exact build+test matrix as its gate
+
+# Cancel an in-progress run when a newer commit lands on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Match the local + release build: MSVC toolchain + Ninja, version-agnostic
+      # (the runner image dropped a fixed "Visual Studio 17 2022" generator).
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # Cache the FetchContent deps (JUCE + Catch2) keyed on the CMake lists so a
+      # dependency bump invalidates it; the source clones are the slow part.
+      - name: Cache CMake deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-windows-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt') }}
+
+      - name: Configure (Release)
+        run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build app + tests
+        run: cmake --build build --target EarsBridge eb_tests
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache CMake deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-macos-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt') }}
+
+      - name: Configure (Release)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build app + tests
+        run: cmake --build build --target EarsBridge eb_tests
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure

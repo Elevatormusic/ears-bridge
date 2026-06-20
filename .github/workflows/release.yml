@@ -1,8 +1,13 @@
 name: Release
 
-# Build the self-contained Windows app and a signed-style Inno Setup installer.
-# - Push a tag like v0.2.0  -> builds the installer AND attaches it to a GitHub Release.
-# - Run manually (workflow_dispatch) -> builds the installer and uploads it as an artifact.
+# Build the self-contained Windows app + Inno Setup installer and the macOS DMG.
+# - Push a tag like v0.2.0  -> builds the installers AND attaches them to a GitHub Release.
+# - Run manually (workflow_dispatch) -> builds the installers and uploads them as artifacts.
+#
+# GATES (a release can never publish an untested or mislabelled build):
+#   - version-check: on a tag, the tag MUST equal the CMakeLists PROJECT_VERSION.
+#   - tests: the full CI build+test matrix (Windows + macOS) must pass first.
+# Both installer jobs `needs:` both gates, so a red test or a version mismatch blocks publish.
 
 on:
   push:
@@ -13,7 +18,32 @@ permissions:
   contents: write   # needed to create the Release on a tag
 
 jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Tag must match CMakeLists PROJECT_VERSION (tags only)
+        shell: bash
+        run: |
+          ref="${{ github.ref }}"
+          if [[ "$ref" == refs/tags/v* ]]; then
+            tag="${ref#refs/tags/v}"
+            proj=$(grep -oE 'project\(EarsBridge VERSION [0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+            echo "tag=$tag  CMakeLists=$proj"
+            if [[ "$tag" != "$proj" ]]; then
+              echo "::error::Release tag v$tag does not match CMakeLists project(EarsBridge VERSION $proj). Bump one to match before tagging."
+              exit 1
+            fi
+          else
+            echo "Not a tag ref (manual dispatch) - skipping the version check."
+          fi
+
+  # Reuse the exact CI build+test matrix (Windows + macOS) as the release gate.
+  tests:
+    uses: ./.github/workflows/ci.yml
+
   windows-installer:
+    needs: [version-check, tests]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -58,6 +88,7 @@ jobs:
           generate_release_notes: true
 
   macos-installer:
+    needs: [version-check, tests]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
