@@ -10,6 +10,8 @@ namespace eb {
         return "Input reached digital full scale - this measurement is invalid. Lower the level and repeat.";
     if (any (flags & HealthFlag::NonFinite))
         return "Measurement invalidated by a corrupted audio sample.";
+    if (any (flags & HealthFlag::ExcessDrift))
+        return "Sample-clock drift detected - this measurement is invalid.";
     return "Dropouts detected - this measurement is invalid.";
 }
 
