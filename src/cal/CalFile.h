@@ -4,12 +4,22 @@
 #include <stdexcept>
 namespace eb {
 enum class CalType { Unknown, Raw, Hpn, Heq, Idf };
+enum class CalSide { Unknown, Left, Right };
 struct CalPoint { double freqHz; double splDb; double phaseDeg; };
 struct CalParseError : std::runtime_error { using std::runtime_error::runtime_error; };
 struct CalFile {
     juce::String serial;
     CalType type = CalType::Unknown;
+    CalSide side = CalSide::Unknown;
+    juce::String contentHash;
+    juce::StringArray parseWarnings;
     std::vector<CalPoint> points;
-    static CalFile parse (const juce::String& text);   // throws CalParseError
+
+    // points are stored in ascending freq order (file order); the parser flags
+    // any out-of-order row in parseWarnings, so front()/back() give the range.
+    double minFreqHz() const { return points.empty() ? 0.0 : points.front().freqHz; }
+    double maxFreqHz() const { return points.empty() ? 0.0 : points.back().freqHz; }
+
+    static CalFile parse (const juce::String& text);   // throws CalParseError on no data rows
 };
 }

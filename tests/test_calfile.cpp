@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "cal/CalFile.h"
 
@@ -41,10 +42,12 @@ TEST_CASE("CalFile detects HEQ type") {
     CHECK(cal.type == eb::CalType::Heq);
 }
 
-TEST_CASE("CalFile rejects non-monotonic frequency") {
+TEST_CASE("CalFile records a non-monotonic frequency as a parse warning") {
     juce::String t =
         "* Freq SPL Phase\n   100.0 0.0 0.0\n   50.0 0.0 0.0\n";
-    REQUIRE_THROWS_AS (eb::CalFile::parse (t), eb::CalParseError);
+    auto cal = eb::CalFile::parse (t);
+    CHECK (cal.points.size() == 2);          // permissive: both rows kept
+    CHECK (cal.parseWarnings.size() >= 1);   // out-of-order recorded
 }
 
 TEST_CASE("CalFile reads the real R_HPN fixture") {
@@ -56,4 +59,29 @@ TEST_CASE("CalFile reads the real R_HPN fixture") {
     REQUIRE(cal.points.size() >= 130);
     CHECK_THAT(cal.points.front().freqHz, Catch::Matchers::WithinAbs(10.0, 1e-9));
     CHECK_THAT(cal.points.back().freqHz, Catch::Matchers::WithinAbs(20000.0, 1e-9));
+}
+
+TEST_CASE("CalFile: parses side + serial from header, hashes content, exposes freq range") {
+    juce::String txt =
+        "* Serial 000-0000 Left\n"
+        "20 -1.0 0.0\n"
+        "1000 0.5 0.0\n"
+        "20000 -2.0 0.0\n";
+    auto c = eb::CalFile::parse (txt);
+    CHECK (c.side == eb::CalSide::Left);
+    CHECK (c.serial == "000-0000");
+    CHECK (c.points.size() == 3);
+    CHECK (c.minFreqHz() == Catch::Approx (20.0));
+    CHECK (c.maxFreqHz() == Catch::Approx (20000.0));
+    CHECK (c.contentHash.isNotEmpty());
+    // Same content -> same hash; one char change -> different hash.
+    CHECK (eb::CalFile::parse (txt).contentHash == c.contentHash);
+    CHECK (eb::CalFile::parse (txt + " ").contentHash != c.contentHash);
+}
+
+TEST_CASE("CalFile: a non-finite data row is skipped and recorded as a parse warning") {
+    juce::String txt = "20 -1.0 0.0\n1000 nan 0.0\n20000 -2.0 0.0\n";
+    auto c = eb::CalFile::parse (txt);
+    CHECK (c.points.size() == 2);                 // the nan row dropped
+    CHECK (c.parseWarnings.size() >= 1);
 }

@@ -45,7 +45,10 @@ target_link_libraries(eb_core
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
     PRIVATE
-        juce::juce_core)
+        juce::juce_core
+        # juce_cryptography supplies juce::SHA256 used only inside CalFile.cpp (content-hash);
+        # implementation-only -> PRIVATE so it does not leak into eb_core's public interface.
+        juce::juce_cryptography)
 target_compile_definitions(eb_core PUBLIC
     JUCE_STANDALONE_APPLICATION=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 
