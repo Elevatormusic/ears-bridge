@@ -651,9 +651,16 @@ void MainComponent::updateStatusLine() {
     const auto st = engine.status();
     if (st == EngineStatus::Running) {
         const auto h = engine.health();
+        // An invalidating condition is reported the instant it latches, regardless of phase.
         if (! h.cleanCapture) {
             statusLine.setText (eb::invalidMeasurementMessage (h.flags), juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::danger());
+        } else if (h.session == SessionPhase::Idle || h.session == SessionPhase::Preflight) {
+            // Before the sweep arms: validity isn't scoped to anything yet, so don't claim "clean" and
+            // suppress the in-sweep warnings below (output-clip / silent / low-level), which are only
+            // meaningful once Dirac is actually driving the sweep.
+            statusLine.setText ("Running - waiting for the Dirac sweep...", juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::textDim());
         } else if (any (h.flags & HealthFlag::ClipOutput)) {
             // The output hit full scale (e.g. Sum's uncompensated +6 dB drove past the clamp). The
             // clamp stops a cable over, but it distorts the sweep -- flag it, don't pass it as "clean".
@@ -671,8 +678,16 @@ void MainComponent::updateStatusLine() {
             // Point the user at the meter target band, not an absolute dB they can't read.
             statusLine.setText ("Running - level low: turn your amp up to the green band", juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::warn());
+        } else if (h.session == SessionPhase::Complete) {
+            // Sweep finished clean: an honest sweep-scoped all-clear (no dropouts / clipping seen during
+            // the captured sweep), with the OS-resampled caveat when the input ran through OS SRC.
+            juce::String msg = "Sweep captured - no clipping or dropouts detected";
+            if (any (h.flags & HealthFlag::OsResampled)) msg += " (OS-resampled - approximate)";
+            statusLine.setText (msg, juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::ok());
         } else {
-            statusLine.setText ("Running - clean", juce::dontSendNotification);
+            // In-sweep (SweepActive), no warning latched: clean so far.
+            statusLine.setText ("Capturing the Dirac sweep - clean so far", juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::ok());
         }
     } else if (st == EngineStatus::Error) {
