@@ -73,6 +73,10 @@ struct AudioEngine::RenderCallback : juce::AudioIODeviceCallback {
     void audioDeviceAboutToStart (juce::AudioIODevice* dev) override {
         mono.assign ((size_t) juce::jmax (1, dev->getCurrentBufferSizeSamples()), 0.0f);
         e.bridge.setRenderRate (dev->getCurrentSampleRate());
+        // D8: register the granted render format as the reference snapshot. checkFormatChange
+        // compares every render block against this; a mid-run mismatch raises FormatChanged.
+        e.hm.notifyPreparedFormat (dev->getCurrentSampleRate(), dev->getCurrentBitDepth(),
+                                   dev->getActiveOutputChannels().countNumberOfSetBits());
     }
     void audioDeviceStopped() override { if (e.status() == EngineStatus::Running) e.deviceDied_.store (true); }
 
@@ -81,6 +85,13 @@ struct AudioEngine::RenderCallback : juce::AudioIODeviceCallback {
                                            int numSamples,
                                            const juce::AudioIODeviceCallbackContext&) override {
         if ((int) mono.size() < numSamples) { e.hm.reportXrun(); return; }
+        // D8: re-read the render device's live format every block. On WASAPI shared mode the
+        // getCurrent* accessors return cached values (no syscall). A sleep/wake or OS shared-mode
+        // renegotiation changes them and mismatches the prepared snapshot, raising FormatChanged.
+        // RT-safe: a trivial raw-pointer getter + atomic loads/compares (see DeviceManager::outputDevice).
+        if (auto* outD = e.devices.outputDevice())
+            e.hm.checkFormatChange (outD->getCurrentSampleRate(), outD->getCurrentBitDepth(),
+                                    outD->getActiveOutputChannels().countNumberOfSetBits());
         const int got = e.bridge.pullRender (mono.data(), numSamples);   // capture frames written
         float pk = 0;
         for (int i = 0; i < got; ++i) pk = juce::jmax (pk, std::abs (mono[i]));
@@ -390,6 +401,7 @@ void AudioEngine::prepareForTest (double sampleRate, int block) {
     hm.prepare (eb::EarsModel::Ears, juce::jmax (8192, block * 4));   // reset + size so the seam mirrors a run
     session_.configure (block, sampleRate);
     session_.reset();
+    hm.notifyPreparedFormat (sampleRate, 32, 2);   // D8: register the test format so simulateFormatChangeForTest has a reference
 }
 void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR,
                                               float* outMono, int numSamples) {
@@ -402,6 +414,10 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
     hm.analyzeInputBlock (inL, inR, numSamples);                      // same analysis as the capture callback
     if (session_.inMeasurement() && ! hm.cleanCapture()) session_.markInvalid();
     if (graph.process (inL, inR, outMono, numSamples)) hm.reportNonFinite();
+}
+
+void AudioEngine::simulateFormatChangeForTest (double sampleRate, int bitDepth, int numChannels) noexcept {
+    hm.checkFormatChange (sampleRate, bitDepth, numChannels);   // D8: drive the render-side check directly
 }
 
 // ---- R22 callback-level test seam -----------------------------------------------------

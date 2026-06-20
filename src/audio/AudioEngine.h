@@ -119,6 +119,11 @@ public:
                                      float* outMono, int numSamples);
     bool bridgeSweepFrozen() const noexcept { return bridge.sweepActive(); }   // D6 test accessor
 
+    // D8: directly call hm.checkFormatChange with the given values, simulating a mid-run OS
+    // format renegotiation, so tests can verify that AudioEngine::health() surfaces FormatChanged.
+    // No device I/O. Only valid after prepareForTest() or start() (which register the prepared format).
+    void simulateFormatChangeForTest (double sampleRate, int bitDepth, int numChannels) noexcept;
+
     // ---- R22 callback-level test seam ----
     // Prepares the SAME engine state start() builds (graph + ClockBridge primed to target + HealthMonitor),
     // sizes the production callbacks' scratch, and lets a test drive the REAL CaptureCallback/RenderCallback

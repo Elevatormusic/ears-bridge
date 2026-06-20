@@ -212,3 +212,20 @@ TEST_CASE("AudioEngine: a sustained loud sweep freezes the ClockBridge ratio, th
     for (int b = 0; b < 200; ++b) e.processCaptureBlockForTest (quiet.data(), quiet.data(), mono.data(), 512);
     CHECK_FALSE (e.bridgeSweepFrozen());
 }
+
+TEST_CASE("AudioEngine seam: format change after prepare raises FormatChanged and invalidates") {
+    // The headless seam (prepareForTest) calls notifyPreparedFormat internally with 48k/32-bit/2ch.
+    // We then call checkFormatChange (via simulateFormatChangeForTest) to simulate a mid-run OS
+    // renegotiation. This tests that the wiring between HealthMonitor and AudioEngine::health() is live.
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 8);
+    // A clean block: no format change.
+    std::vector<float> inL (8, 0.1f), inR (8, 0.1f), mono (8, 0.0f);
+    e.processCaptureBlockForTest (inL.data(), inR.data(), mono.data(), 8);
+    CHECK (e.cleanCapture());
+    CHECK_FALSE (eb::any (e.health().flags & eb::HealthFlag::FormatChanged));
+    // Simulate a mid-run device format renegotiation (96k vs the prepared 48k).
+    e.simulateFormatChangeForTest (96000.0, 32, 2);
+    CHECK (eb::any (e.health().flags & eb::HealthFlag::FormatChanged));
+    CHECK_FALSE (e.cleanCapture());
+}
