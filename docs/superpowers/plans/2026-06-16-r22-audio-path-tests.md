@@ -11,7 +11,8 @@
 ## Global Constraints
 
 - Build (tests): ./tools/dev.cmd cmake --build build --target eb_tests  — run tools/dev.cmd DIRECTLY from Bash, never bare cmake (it loses the MSVC env) and never cmd /c; it wraps Ninja + MSVC.
-- Run a test: ./tools/dev.cmd ctest --test-dir build -R "<regex>" --output-on-failure . Full suite: ./tools/dev.cmd ctest --test-dir build --output-on-failure (must stay green; 98 tests today).
+- Run a test: ./tools/dev.cmd ctest --test-dir build -R "<regex>" --output-on-failure . Full suite: ./tools/dev.cmd ctest --test-dir build --output-on-failure (must stay green; **133 tests today** — the suite grows by the new R22 cases).
+- **NEVER `git add -A` / `git add .`** — two untracked docs (docs/EARS_BRIDGE_FULL_AUDIT.md, docs/GuidedCalibration.md) live in the worktree and must NEVER be committed; stage only the files each task names.
 - RT-safety: code reachable from an audio callback must have NO heap allocation, lock, syscall, logging, or exception — plain locals + std::atomic only.
 - HealthFlag (src/audio/EngineTypes.h) is NOT persisted — append enum values freely. CombineMode IS persisted by index — never change its existing values.
 - No real EARS serial in any file (tests use synthetic buffers).
@@ -132,7 +133,7 @@ TEST_CASE("AudioEngine callbacks: capture forwards a clean block; render pulls i
     void driveRenderCallback  (float* outL, float* outR, int numSamples);
 ```
 
-- [ ] Implement the seam in `src/audio/AudioEngine.cpp`. Append after `processCaptureBlockForTest` (after line 357, before the closing `} // namespace eb`):
+- [ ] Implement the seam in `src/audio/AudioEngine.cpp`. Append after `processCaptureBlockForTest`'s body (match by CONTENT — it ends near line 405; insert before the closing `} // namespace eb`):
 
 ```cpp
 // ---- R22 callback-level test seam -----------------------------------------------------
@@ -142,10 +143,13 @@ void AudioEngine::prepareCallbacksForTest (double sampleRate, int block, int fif
     const int cap = juce::jmax (1024, fifoCapacity);
 
     graph.prepare (sampleRate, block);
-    bridge.prepare (sampleRate, sampleRate, 1, cap);
-    hm.prepare (eb::EarsModel::Ears, cap, 1.0);   // nominal capture:render ratio == 1.0 (equal rates)
+    bridge.prepare (sampleRate, sampleRate, 1, cap);   // clears the D6 freeze state
+    hm.prepare (eb::EarsModel::Ears, cap, 1.0);        // nominal capture:render ratio == 1.0 (equal rates)
+    session_.configure (block, sampleRate);            // D5: size the silence window for this block/rate
+    session_.reset();                                  // D5: fresh session each run (Idle -> Preflight -> ...)
     bridge.reset();
-    bridge.primeToTarget();                       // mirror start(): prime to the PI setpoint, no startup underrun
+    bridge.primeToTarget();                            // mirror start(): prime to the PI setpoint, no startup underrun
+    bridge.setSweepActive (false);                     // D6: a fresh run free-runs; the session arms the sweep later
 
     // Reset the per-callback diff baselines exactly as start() does (a stale value would suppress
     // underrun detection or inject a spurious dropped-frame delta on the first driven block).
@@ -175,7 +179,7 @@ void AudioEngine::driveRenderCallback (float* outL, float* outR, int numSamples)
 
 - [ ] Run it to pass: `./tools/dev.cmd cmake --build build --target eb_tests` then `./tools/dev.cmd ctest --test-dir build -R "AudioEngine callbacks" --output-on-failure`. Confirm the new test passes and the full suite is unaffected.
 
-- [ ] Commit: `git add -A && git commit` with message `R22: add callback-level test seam to drive the real Capture/Render callbacks` and the required trailer.
+- [ ] Commit (stage ONLY these files — never `git add -A`): `git add src/audio/AudioEngine.h src/audio/AudioEngine.cpp tests/test_audioengine_callbacks.cpp tests/CMakeLists.txt && git commit` with message `R22: add callback-level test seam to drive the real Capture/Render callbacks` and the required trailer.
 
 ---
 
@@ -245,9 +249,9 @@ TEST_CASE("AudioEngine callbacks: a NaN in the raw input invalidates and is not 
 
 - [ ] Add `#include <limits>` at the top of `tests/test_audioengine_callbacks.cpp` (for `quiet_NaN`).
 
-- [ ] Run it to see it fail/pass: `./tools/dev.cmd cmake --build build --target eb_tests` then `./tools/dev.cmd ctest --test-dir build -R "AudioEngine callbacks" --output-on-failure`. These exercise existing `analyzeInputBlock`/`scanAndFlagNonFinite` behavior through the real callback; if any case fails it indicates the callback wiring differs from the headless seam — investigate before proceeding (do NOT change production behavior in this plan).
+- [ ] Run it to see it fail/pass: `./tools/dev.cmd cmake --build build --target eb_tests` then `./tools/dev.cmd ctest --test-dir build -R "AudioEngine callbacks" --output-on-failure`. These exercise the merged behavior through the real callback: `analyzeInputBlock` raises `NonFinite` from a raw-input NaN, and the fix-slice `if (graph.process(...)) reportNonFinite()` sanitizes in+out so no NaN reaches the cable (there is NO separate `scanAndFlagNonFinite` call in the callback). If any case fails it indicates the callback wiring differs from `processCaptureBlockForTest` — investigate before proceeding (do NOT change production behavior in this plan).
 
-- [ ] Commit: `git add -A && git commit` with message `R22: confirmed-clip + NaN/Inf invalidation tests through the real capture callback` and the required trailer.
+- [ ] Commit (stage ONLY this file — never `git add -A`): `git add tests/test_audioengine_callbacks.cpp && git commit` with message `R22: confirmed-clip + NaN/Inf invalidation tests through the real capture callback` and the required trailer.
 
 ---
 
@@ -335,7 +339,7 @@ TEST_CASE("AudioEngine callbacks: a single-channel capture block reports an Xrun
 
 - [ ] Run it to pass: `./tools/dev.cmd cmake --build build --target eb_tests` then `./tools/dev.cmd ctest --test-dir build -R "AudioEngine callbacks" --output-on-failure`.
 
-- [ ] Commit: `git add -A && git commit` with message `R22: FIFO overrun/underrun + channel-drop coverage through the real callbacks` and the required trailer.
+- [ ] Commit (stage ONLY these files — never `git add -A`): `git add src/audio/AudioEngine.h src/audio/AudioEngine.cpp tests/test_audioengine_callbacks.cpp && git commit` with message `R22: FIFO overrun/underrun + channel-drop coverage through the real callbacks` and the required trailer.
 
 ---
 
@@ -408,7 +412,7 @@ TEST_CASE("AudioEngine callbacks: steady-state capture+render are allocation-fre
 
 - [ ] Run the full suite once to confirm the global `operator new` override hasn't disturbed other tests: `./tools/dev.cmd ctest --test-dir build --output-on-failure`.
 
-- [ ] Commit: `git add -A && git commit` with message `R22: assert the steady-state capture+render callbacks are allocation-free` and the required trailer.
+- [ ] Commit (stage ONLY this file — never `git add -A`): `git add tests/test_audioengine_callbacks.cpp && git commit` with message `R22: assert the steady-state capture+render callbacks are allocation-free` and the required trailer.
 
 ---
 
@@ -536,7 +540,7 @@ TEST_CASE("ClockBridge transport: 96k->48k conserves the impulse count (2:1 deci
 
 - [ ] Run it to pass: `./tools/dev.cmd cmake --build build --target eb_tests` then `./tools/dev.cmd ctest --test-dir build -R "ClockBridge transport" --output-on-failure`.
 
-- [ ] Commit: `git add -A && git commit` with message `R22: golden sample-accurate cross-clock transport tests for ClockBridge` and the required trailer.
+- [ ] Commit (stage ONLY these files — never `git add -A`): `git add tests/test_clockbridge_transport.cpp tests/CMakeLists.txt && git commit` with message `R22: golden sample-accurate cross-clock transport tests for ClockBridge` and the required trailer.
 
 ---
 
@@ -621,7 +625,7 @@ TEST_CASE("ClockBridge transport: long soak -- sub-tolerance creep does not corr
 
 - [ ] Run the FULL suite to confirm everything stays green and the count grew by the new cases: `./tools/dev.cmd ctest --test-dir build --output-on-failure`.
 
-- [ ] Commit: `git add -A && git commit` with message `R22: injected-drift tolerance + long-soak no-creep transport tests` and the required trailer.
+- [ ] Commit (stage ONLY this file — never `git add -A`): `git add tests/test_clockbridge_transport.cpp && git commit` with message `R22: injected-drift tolerance + long-soak no-creep transport tests` and the required trailer.
 
 ---
 
