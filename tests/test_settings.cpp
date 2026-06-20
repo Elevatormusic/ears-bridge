@@ -60,6 +60,23 @@ TEST_CASE("Settings returns sane defaults on a fresh store") {
     dir.deleteRecursively();
 }
 
+TEST_CASE("Settings round-trips a non-default output bit depth") {
+    // The DEPTH selector is a persisted *preference* (relabelled "PREFERRED DEPTH" in the UI;
+    // WASAPI shared mode delivers float regardless). The schema/key/default must be untouched:
+    // a fresh store reads 24, and a chosen 16 survives a write-through + reload.
+    auto dir = makeTempDir();
+    {
+        eb::Settings s (dir);
+        CHECK (s.outputBitDepth() == 24);   // default unchanged by the relabel
+        s.setOutputBitDepth (16);
+        CHECK (s.outputBitDepth() == 16);   // in-memory round-trip
+        s.flush();
+    }
+    eb::Settings reloaded (dir);            // re-open same folder -> reads back the file
+    CHECK (reloaded.outputBitDepth() == 16);
+    dir.deleteRecursively();
+}
+
 TEST_CASE("Settings persists update-check preferences", "[update]") {
     auto dir = makeTempDir();
     {

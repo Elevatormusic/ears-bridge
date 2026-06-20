@@ -143,7 +143,7 @@ MainComponent::MainComponent() {
     rateWarn.setColour (juce::Label::textColourId, Theme::warn());
     rateWarn.setFont (juce::Font (juce::FontOptions (12.0f)));
     addAndMakeVisible (rateWarn);
-    styleEyebrow (bitLabel, "DEPTH");
+    styleEyebrow (bitLabel, "PREFERRED DEPTH");
     addAndMakeVisible (bitLabel);
     bitBox.onChange = [this] { onBitDepthChosen(); };
     addAndMakeVisible (bitBox);
@@ -601,8 +601,8 @@ void MainComponent::onStartStop() {
                            + juce::String (settings.sampleRate() / 1000.0, 1) + " kHz (resampled).");
             const int gb = engine.grantedOutputBitDepth();
             if (gb > 0 && gb != settings.outputBitDepth())
-                notes.add ("Cable opened " + juce::String (gb) + "-bit, not the selected "
-                           + juce::String (settings.outputBitDepth()) + "-bit.");
+                notes.add ("Output running " + juce::String (gb) + "-bit float (shared mode); your "
+                           + juce::String (settings.outputBitDepth()) + "-bit setting is a preference only.");
             const auto railNote = eb::rawRailNote (engine.rawRail());
             if (railNote.isNotEmpty()) notes.add (railNote);
             preflightLabel.setText (notes.joinIntoString (" "), juce::dontSendNotification);
@@ -667,7 +667,7 @@ void MainComponent::applyTextColours() {
     versionLabel.setColour (juce::Label::textColourId, Theme::textFaint());
     styleEyebrow (combineLabel,  "COMBINE MODE");
     styleEyebrow (rateLabel,     "RATE");
-    styleEyebrow (bitLabel,      "DEPTH");
+    styleEyebrow (bitLabel,      "PREFERRED DEPTH");
     styleEyebrow (firLenLabel,   "FIR LENGTH");
     styleEyebrow (trimLabel,     "OUTPUT TRIM (dB)");
     styleEyebrow (calEyebrow,    "CALIBRATION");
