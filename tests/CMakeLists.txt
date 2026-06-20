@@ -6,6 +6,7 @@ add_executable(eb_tests
     test_deviceid.cpp
     test_modeldetect.cpp
     test_clockbridge.cpp
+    test_clockbridge_transport.cpp
     test_healthmonitor.cpp
     test_devicemanager.cpp
     test_audioengine.cpp
