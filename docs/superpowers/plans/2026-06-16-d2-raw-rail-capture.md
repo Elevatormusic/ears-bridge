@@ -551,6 +551,8 @@ TEST_CASE("invalidMeasurementMessage qualifies a confirmed clip as approximate w
               "(OS-resampled - approximate)");
     CHECK (invalidMeasurementMessage (HealthFlag::Dropout | HealthFlag::OsResampled).toStdString()
            == "Dropouts detected - this measurement is invalid.");
+    CHECK (invalidMeasurementMessage (HealthFlag::ExcessDrift).toStdString()       // drift branch survives the migration
+           == "Sample-clock drift detected - this measurement is invalid.");
 }
 ```
 
@@ -589,8 +591,12 @@ In `src/gui/MainComponent.cpp`, add `#include "gui/RawRailStatus.h"` by `gui/Cli
     const auto railNote = eb::rawRailNote (engine.rawRail());
     if (railNote.isNotEmpty()) notes.add (railNote);
 ```
-In `src/gui/ClipStatus.h`, make `invalidMeasurementMessage` return `juce::String` (if not already) and append the caveat in the ClipConfirmed branch:
+In `src/gui/ClipStatus.h`, change `invalidMeasurementMessage` from `const char*` to `juce::String` and append the caveat in the ClipConfirmed branch. **IMPORTANT — the current function (post clipping-review-fixes slice) has FOUR cases: ClipConfirmed → NonFinite → `ExcessDrift` → Dropout fallthrough. PRESERVE the `ExcessDrift` branch** (do not drop it) and add `#include <juce_core/juce_core.h>` (the header currently includes only `audio/EngineTypes.h`, which is not enough for `juce::String`):
 ```cpp
+#pragma once
+#include <juce_core/juce_core.h>
+#include "audio/EngineTypes.h"
+// ...
 [[nodiscard]] inline juce::String invalidMeasurementMessage (HealthFlag flags) {
     if (any (flags & HealthFlag::ClipConfirmed)) {
         juce::String msg = "Input reached digital full scale - this measurement is invalid. "
@@ -600,10 +606,12 @@ In `src/gui/ClipStatus.h`, make `invalidMeasurementMessage` return `juce::String
     }
     if (any (flags & HealthFlag::NonFinite))
         return "Measurement invalidated by a corrupted audio sample.";
+    if (any (flags & HealthFlag::ExcessDrift))            // preserved from the clipping-review-fixes slice
+        return "Sample-clock drift detected - this measurement is invalid.";
     return "Dropouts detected - this measurement is invalid.";
 }
 ```
-If the return type changed from `const char*`, fix the call site (`statusLine.setText(... , ...)` binds a juce::String fine) and convert any `std::string(invalidMeasurementMessage(...))` test wrappers to `.toStdString()`.
+(The function loses its `noexcept` — `juce::String` construction allocates; that's expected.) The return-type change from `const char*` to `juce::String` breaks the TWO existing tests in `tests/test_clipstatus.cpp` that wrap the result — **"invalidMeasurementMessage names the most specific cause"** and **"invalidMeasurementMessage names clock drift distinctly from dropouts"** — both use `std::string(invalidMeasurementMessage(...))`, which won't compile against `juce::String`. Convert every such wrapper in those tests to `.toStdString()`. The call site `statusLine.setText(invalidMeasurementMessage(...), ...)` binds a `juce::String` fine.
 
 - [ ] **Step 5: Run tests + build app** — focused `rawRailNote|qualifies a confirmed clip`, then full suite, then `./tools/dev.cmd cmake --build build --target EarsBridge`.
 
