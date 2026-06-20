@@ -4,6 +4,7 @@
 #include "cal/FirDesigner.h"
 #include <vector>
 #include <cmath>
+#include <limits>
 using Catch::Matchers::WithinAbs;
 
 TEST_CASE("firTapsForRate scales 8192@48k to power-of-two per rate") {
@@ -86,4 +87,20 @@ TEST_CASE("AudioEngine: real R_HPN cal designed at 96k cuts the 4 kHz resonance"
     double r200 = rms (200.0), r4k = rms (4000.0);
     INFO ("rms200=" << r200 << " rms4k=" << r4k);
     CHECK (r4k < 0.4 * r200);   // ~4 kHz resonance inverted -> strong cut
+}
+
+TEST_CASE("AudioEngine seam: a NaN input is sanitized and does NOT poison the FIR for later blocks") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 8);
+    std::vector<float> bad (8, 0.3f); bad[3] = std::numeric_limits<float>::quiet_NaN();
+    std::vector<float> r0  (8, 0.0f), mono (8, 0.0f);
+    e.processCaptureBlockForTest (bad.data(), r0.data(), mono.data(), 8);
+    for (float v : mono) CHECK (std::isfinite (v));               // output never non-finite
+    CHECK (eb::any (e.health().flags & eb::HealthFlag::NonFinite));
+    CHECK_FALSE (e.cleanCapture());
+
+    // A subsequent CLEAN block must produce finite output (proves the convolution wasn't poisoned).
+    std::vector<float> clean (8, 0.4f), r1 (8, 0.0f), mono2 (8, 0.0f);
+    e.processCaptureBlockForTest (clean.data(), r1.data(), mono2.data(), 8);
+    for (float v : mono2) CHECK (std::isfinite (v));
 }

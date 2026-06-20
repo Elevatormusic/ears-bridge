@@ -30,11 +30,11 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
                                            const juce::AudioIODeviceCallbackContext&) override {
         if (numIn < 2 || (int) mono.size() < numSamples) { e.hm.reportXrun(); return; }
         const float* l = in[0]; const float* r = in[1];
-        e.hm.analyzeInputBlock (l, r, numSamples);             // peak + confirmed-clip-run + NaN/Inf (RAW input)
+        if (l == nullptr || r == nullptr) { e.hm.reportXrun(); return; }   // per-pointer guard (cf. render cb)
+        e.hm.analyzeInputBlock (l, r, numSamples);             // detection (raw input): peak, run, NaN
 
-        e.graph.process (l, r, mono.data(), numSamples);       // per-ear FIR + combine
-        if (e.hm.scanAndFlagNonFinite (mono.data(), numSamples))   // a non-finite sample would corrupt Dirac
-            juce::FloatVectorOperations::clear (mono.data(), numSamples);
+        if (e.graph.process (l, r, mono.data(), numSamples))   // sanitizes in+out; true => non-finite seen
+            e.hm.reportNonFinite();                            // flag a FIR-produced non-finite too
         e.bridge.pushCapture (mono.data(), numSamples);
 
         // Surface producer-side FIFO-full losses into Health (the render callback handles the
@@ -351,9 +351,7 @@ void AudioEngine::prepareForTest (double sampleRate, int block) {
 void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR,
                                               float* outMono, int numSamples) {
     hm.analyzeInputBlock (inL, inR, numSamples);                      // same analysis as the capture callback
-    graph.process (inL, inR, outMono, numSamples);
-    if (hm.scanAndFlagNonFinite (outMono, numSamples))
-        juce::FloatVectorOperations::clear (outMono, numSamples);
+    if (graph.process (inL, inR, outMono, numSamples)) hm.reportNonFinite();
 }
 
 } // namespace eb

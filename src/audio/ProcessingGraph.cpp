@@ -77,12 +77,25 @@ void ProcessingGraph::setOutputGain (float linear) {
     outGain.store (juce::jlimit (0.0f, 4.0f, linear));   // clamp; 0 = mute, 1 = unity
 }
 
-void ProcessingGraph::process (const float* inL, const float* inR,
+// Replace any non-finite sample with 0 in place; return whether any were found. RT-safe (plain loop,
+// no alloc/lock/log/throw) -- runs on the audio thread.
+static bool sanitizeNonFinite (float* buf, int n) noexcept {
+    bool bad = false;
+    for (int i = 0; i < n; ++i)
+        if (! std::isfinite (buf[i])) { buf[i] = 0.0f; bad = true; }
+    return bad;
+}
+
+bool ProcessingGraph::process (const float* inL, const float* inR,
                                float* outMono, int numSamples) {
     auto* l = scratch.getWritePointer (0);
     auto* r = scratch.getWritePointer (1);
     juce::FloatVectorOperations::copy (l, inL, numSamples);
     juce::FloatVectorOperations::copy (r, inR, numSamples);
+    // Keep non-finite OUT of the stateful FFT convolution: a single NaN would smear through the
+    // overlap-add and poison every later block (permanent silence) until reset.
+    bool bad = sanitizeNonFinite (l, numSamples);
+    bad = sanitizeNonFinite (r, numSamples) || bad;
 
     { juce::dsp::AudioBlock<float> b (&l, 1, (size_t) numSamples);
       juce::dsp::ProcessContextReplacing<float> ctx (b); convL.process (ctx); }
@@ -146,10 +159,15 @@ void ProcessingGraph::process (const float* inL, const float* inR,
     const float g = outGain.load() * headroomGain.load();
     if (g != 1.0f) juce::FloatVectorOperations::multiply (outMono, g, numSamples);
 
+    // Catch a FIR-produced non-finite BEFORE the clamp: on x86/SSE FloatVectorOperations::clip turns a
+    // NaN into 1.0, so a post-clamp scan would miss it and a garbage full-scale sample would reach Dirac.
+    bad = sanitizeNonFinite (outMono, numSamples) || bad;
+
     // Final hard ceiling: the makeup keeps the steady-state sweep <= 0 dBFS, but a broadband transient
     // or the brief window where an async FIR swap runs the OLD (louder) IR under the NEW headroom could
     // momentarily overshoot. Clamp so the cable Dirac records can never see a sample past full scale.
     juce::FloatVectorOperations::clip (outMono, outMono, -1.0f, 1.0f, numSamples);
+    return bad;
 }
 
 void ProcessingGraph::reset() {

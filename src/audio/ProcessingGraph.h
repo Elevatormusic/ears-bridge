@@ -11,7 +11,11 @@ public:
     void clearFir (int channel);   // load a unit-impulse (passthrough) IR + reset that ear's headroom
     void setCombineMode (CombineMode mode);
     void setOutputGain (float linear);   // applied to the mono output (the "Output trim" control)
-    void process (const float* inL, const float* inR, float* outMono, int numSamples);
+    // Returns true if it replaced any non-finite sample (in the input scratch before convolution, or in
+    // the output before the clamp), so the audio callback can flag a FIR-produced non-finite. Sanitizing
+    // the input scratch keeps a NaN OUT of the stateful FFT convolution (its overlap-add would otherwise
+    // be poisoned, silencing every later block).
+    bool process (const float* inL, const float* inR, float* outMono, int numSamples);
     void reset();
 
     // AutoPerEar: which earcup the graph is currently feeding to the mono output (0 = left, 1 = right).

@@ -139,6 +139,8 @@ bool HealthMonitor::scanAndFlagNonFinite (const float* buf, int n) noexcept {
     return false;
 }
 
+void HealthMonitor::reportNonFinite() noexcept { raise (HealthFlag::NonFinite); }
+
 Health HealthMonitor::snapshot() const {
     Health h;
     h.xruns = xrunsA.load();

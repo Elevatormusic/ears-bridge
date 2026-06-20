@@ -65,6 +65,11 @@ public:
     // RT-safe: a plain loop, no allocation. Called on the audio thread.
     bool scanAndFlagNonFinite (const float* buf, int n) noexcept;
 
+    // Raise HealthFlag::NonFinite (invalidating) for a FIR-produced non-finite that ProcessingGraph
+    // already sanitized -- analyzeInputBlock only sees the RAW input, so the callback uses process()'s
+    // return to flag a non-finite the convolution/combine emitted. RT-safe: one atomic raise().
+    void reportNonFinite() noexcept;
+
     // Peak + confirmed-clip-run + NaN/Inf analysis on the RAW per-channel input. Replaces the inline
     // peak loop in the capture callback; feeds the existing guidance path via reportInLevels at the
     // kClipLinear (-1 dBFS) near-rail threshold. RT-safe (plain loop + atomics).

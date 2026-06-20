@@ -5,6 +5,7 @@
 #include "cal/FirDesigner.h"
 #include <juce_dsp/juce_dsp.h>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 using Catch::Matchers::WithinAbs;
@@ -237,4 +238,17 @@ TEST_CASE("Real R_HPN cal cuts the ~4 kHz EARS resonance after convolution") {
     float re = buf[(size_t) bin*2], im = buf[(size_t) bin*2+1];
     double db = 20.0 * std::log10 (std::max (1e-9f, std::sqrt (re*re + im*im)));
     CHECK(db < -10.0);   // inverse of a large positive bump = a strong cut
+}
+
+TEST_CASE("ProcessingGraph::process sanitizes non-finite input and reports it") {
+    eb::ProcessingGraph g; g.prepare (48000.0, 8);
+    std::vector<float> l (8, 0.2f), r (8, 0.0f), out (8, 0.0f);
+    l[2] = std::numeric_limits<float>::infinity();
+    const bool bad = g.process (l.data(), r.data(), out.data(), 8);
+    CHECK (bad);
+    for (float v : out) CHECK (std::isfinite (v));
+    // A following clean block stays finite (convolution not poisoned).
+    std::vector<float> l2 (8, 0.2f), out2 (8, 0.0f);
+    CHECK_FALSE (g.process (l2.data(), r.data(), out2.data(), 8));
+    for (float v : out2) CHECK (std::isfinite (v));
 }
