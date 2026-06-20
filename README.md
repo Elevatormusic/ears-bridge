@@ -4,7 +4,10 @@
 
 Use a two-channel **miniDSP EARS** or **EARS Pro** headphone-measurement jig with **Dirac Live**, which only accepts a single calibrated microphone. EARS Bridge applies each ear's calibration and presents it to Dirac through a virtual audio device as the single microphone Dirac expects — in the default Auto per-ear mode it follows Dirac's sweep and sends whichever earcup is being measured, one ear at a time, never combining the two.
 
-![Release](https://img.shields.io/badge/release-v0.2.12-informational?style=flat)
+> [!WARNING]
+> **Alpha — pre-release.** EARS Bridge is in active testing. Expect bugs and rough edges, treat measurement results as provisional, and please [report issues](https://github.com/Elevatormusic/ears-bridge/issues). Every published build is a pre-release.
+
+![Status](https://img.shields.io/badge/status-alpha-orange?style=flat)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgray?style=flat)
 [![Website](https://img.shields.io/badge/website-elevatormusic.github.io%2Fears--bridge-0071E3?style=flat)](https://elevatormusic.github.io/ears-bridge/)
 

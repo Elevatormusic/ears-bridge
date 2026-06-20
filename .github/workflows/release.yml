@@ -86,6 +86,7 @@ jobs:
         with:
           files: dist/*.exe
           generate_release_notes: true
+          prerelease: true   # alpha: every build ships as a pre-release
 
   macos-installer:
     needs: [version-check, tests]
@@ -119,3 +120,4 @@ jobs:
         with:
           files: dist/*.dmg
           generate_release_notes: true
+          prerelease: true   # alpha: every build ships as a pre-release
