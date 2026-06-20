@@ -330,12 +330,14 @@ MainComponent::~MainComponent() {
 
 double MainComponent::activeRate() const { return settings.sampleRate(); }
 
+bool MainComponent::isRealEarsInput() const noexcept {
+    const auto in = inputPicker.selectedDevice();
+    return in && (in->model == EarsModel::Ears || in->model == EarsModel::EarsPro);
+}
+
 bool MainComponent::isRealEarsWithCable() const noexcept {
-    const auto in  = inputPicker.selectedDevice();
     const auto out = outputPicker.selectedDevice();
-    if (! in || ! out) return false;
-    const bool realEars = (in->model == EarsModel::Ears || in->model == EarsModel::EarsPro);
-    return realEars && out->isVirtualSink;
+    return isRealEarsInput() && out && out->isVirtualSink;
 }
 
 void MainComponent::refreshDeviceLists() {
@@ -621,7 +623,12 @@ void MainComponent::updateStartGate() {
     // D7/R17: with real EARS + virtual cable, block non-AutoPerEar so the user can't record a
     // summed/single-ear signal into Dirac.
     const bool wrongMode = isRealEarsWithCable() && settings.combineMode() != CombineMode::AutoPerEar;
-    const bool ready    = haveDevs && haveCals && ! wrongMode;
+    // P1-09: a real EARS into an output that is NOT a verified virtual sink would record into a
+    // device Dirac never sees. Block Start until the user picks the virtual audio cable.
+    const bool physicalOutput = isRealEarsInput()
+                             && outputPicker.selectedDevice().has_value()
+                             && ! outputPicker.selectedDevice()->isVirtualSink;
+    const bool ready    = haveDevs && haveCals && ! wrongMode && ! physicalOutput;
     startStop.setEnabled (running || ready);
     verifyButton.setEnabled (! running && inputPicker.selectedDevice().has_value());   // needs the EARS, while stopped
     updateControlsEnabled();
@@ -741,6 +748,13 @@ void MainComponent::updateStatusLine() {
                   && outputPicker.selectedDevice().has_value())) {
         statusLine.setText ("Select an input and output device", juce::dontSendNotification);
         statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+    } else if (isRealEarsInput()
+               && outputPicker.selectedDevice().has_value()
+               && ! outputPicker.selectedDevice()->isVirtualSink) {
+        // P1-09: a real EARS into a physical output can't reach Dirac. Start is disabled;
+        // point the user at the virtual cable.
+        statusLine.setText ("Select the virtual audio cable as the output to start", juce::dontSendNotification);
+        statusLine.setColour (juce::Label::textColourId, Theme::warn());
     } else if (isRealEarsWithCable()
                && settings.combineMode() != CombineMode::AutoPerEar) {
         // D7 / R17: non-Auto combine mode selected with a real EARS + virtual cable.

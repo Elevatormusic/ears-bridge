@@ -46,6 +46,9 @@ private:
     void updateActiveEarIndicator (bool silent);   // AutoPerEar "capturing Left/Right" caption + meter accent
     void updateStartGate();          // enable Start only when a valid calibration generation is applied
     void updateControlsEnabled();    // freeze config (cals/rate/mode/FIR) while capturing; re-enable when stopped
+    // Returns true when the selected input is a detected EARS / EARS Pro (the Dirac path).
+    // Shared by isRealEarsWithCable and the physical-output gate (P1-09).
+    bool isRealEarsInput() const noexcept;
     // Returns true when a detected EARS input and a virtual-sink output are both
     // selected. Used by updateStartGate to enforce the combine-mode gate (D7 / R17).
     bool isRealEarsWithCable() const noexcept;
