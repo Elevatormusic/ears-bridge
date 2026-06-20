@@ -605,7 +605,11 @@ void MainComponent::updateStartGate() {
     const bool running  = engine.status() == EngineStatus::Running;
     const bool haveDevs = inputPicker.selectedDevice().has_value()
                        && outputPicker.selectedDevice().has_value();
-    const bool ready    = haveDevs && leftCal.hasCal() && rightCal.hasCal();
+    const bool haveCals = leftCal.hasCal() && rightCal.hasCal();
+    // D7/R17: with real EARS + virtual cable, block non-AutoPerEar so the user can't record a
+    // summed/single-ear signal into Dirac.
+    const bool wrongMode = isRealEarsWithCable() && settings.combineMode() != CombineMode::AutoPerEar;
+    const bool ready    = haveDevs && haveCals && ! wrongMode;
     startStop.setEnabled (running || ready);
     verifyButton.setEnabled (! running && inputPicker.selectedDevice().has_value());   // needs the EARS, while stopped
     updateStatusLine();
@@ -708,6 +712,12 @@ void MainComponent::updateStatusLine() {
                   && outputPicker.selectedDevice().has_value())) {
         statusLine.setText ("Select an input and output device", juce::dontSendNotification);
         statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+    } else if (isRealEarsWithCable()
+               && settings.combineMode() != CombineMode::AutoPerEar) {
+        // D7 / R17: non-Auto combine mode selected with a real EARS + virtual cable.
+        // Start is disabled; tell the user exactly why and what to change.
+        statusLine.setText ("Set Combine Mode to Auto per-ear (Dirac) to start", juce::dontSendNotification);
+        statusLine.setColour (juce::Label::textColourId, Theme::warn());
     } else if (leftCal.hasCal() && rightCal.hasCal()) {
         // Ready: no redundant label — the enabled Start button is the affordance.
         statusLine.setText ({}, juce::dontSendNotification);
