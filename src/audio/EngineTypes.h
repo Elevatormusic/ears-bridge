@@ -5,6 +5,11 @@ namespace eb {
 enum class EarsModel  { Unknown, Ears, EarsPro };
 enum class EngineStatus { Stopped, Running, Error };
 
+// D5 / R18: the measurement-session phase, scoping validity to Dirac's sweep window (left earcup ->
+// gap -> right earcup) instead of the whole engine run. Driven by the input level threshold in
+// MeasurementSession. NOT persisted.
+enum class SessionPhase { Idle, Preflight, SweepActive, Complete, Invalid };
+
 struct Levels {
     float inL = 0, inR = 0, outMono = 0;
     bool  clipL = false, clipR = false, clipOut = false;
@@ -40,6 +45,7 @@ struct Health {
     bool      cleanCapture = true;
     double    captureToRenderRatio = 1.0;
     HealthFlag flags = HealthFlag::None;   // Plan 4 addition: latched sticky condition flags
+    SessionPhase session = SessionPhase::Idle;   // D5: measurement-session phase snapshot
 };
 
 // --- D2: raw-rail capture state, captured once per run by AudioEngine::start ---

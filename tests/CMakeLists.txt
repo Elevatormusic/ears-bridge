@@ -19,7 +19,8 @@ add_executable(eb_tests
     test_calslot.cpp
     test_updatecheck.cpp
     test_clipstatus.cpp
-    test_rawrailstatus.cpp)
+    test_rawrailstatus.cpp
+    test_measurementsession.cpp)
 # Link the JUCE modules the test sources include directly, plus the recommended config flags,
 # so eb_tests compiles regardless of eb_core's link visibility.
 target_link_libraries(eb_tests PRIVATE
