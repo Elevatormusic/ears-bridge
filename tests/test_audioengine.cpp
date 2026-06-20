@@ -104,3 +104,11 @@ TEST_CASE("AudioEngine seam: a NaN input is sanitized and does NOT poison the FI
     e.processCaptureBlockForTest (clean.data(), r1.data(), mono2.data(), 8);
     for (float v : mono2) CHECK (std::isfinite (v));
 }
+
+TEST_CASE("AudioEngine::rawRail defaults to unverified before any run") {
+    eb::AudioEngine e;
+    auto rr = e.rawRail();
+    CHECK_FALSE (rr.verified);
+    CHECK (rr.requestedRate == 0.0);
+    CHECK (rr.mixRate == 0.0);
+}

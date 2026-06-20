@@ -87,6 +87,11 @@ public:
     double grantedSampleRate()    const noexcept { return grantedRate_; }
     int    grantedOutputBitDepth() const noexcept;
 
+    // D2 raw-rail snapshot: captured at the last successful start() from the DeviceManager (was the
+    // EARS input running at the endpoint mix rate, i.e. no OS SRC on our stream?). Default = unverified;
+    // reset to {} in stop()/onDeviceLost() so a stale snapshot never outlives its device.
+    RawRailState rawRail() const noexcept;
+
     // Drive a short tone into ONE earcup (user routes playback to that earcup) and report which
     // mic channel responded. Runs only while Stopped; opens a dedicated capture-only stream that
     // feeds the LrVerify state machine, then the GUI polls the verdict. begin -> poll complete ->
@@ -131,6 +136,7 @@ private:
     DeviceId inputId, outputId;
     double   activeRate = 48000.0;
     double   grantedRate_ = 48000.0;   // capture rate actually granted at the last successful start()
+    RawRailState rawRail_;             // D2: captured once per successful start(); reset in stop()/onDeviceLost()
     int      outputBits = 24;
     int      blockSize  = 0;
 

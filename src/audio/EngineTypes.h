@@ -42,6 +42,16 @@ struct Health {
     HealthFlag flags = HealthFlag::None;   // Plan 4 addition: latched sticky condition flags
 };
 
+// --- D2: raw-rail capture state, captured once per run by AudioEngine::start ---
+// verified == true => the EARS input ran at the endpoint mix rate (no OS SRC on our stream), so the
+// float samples faithfully represent the device's integer rails. verified == false => OS-resampled or
+// the mix rate could not be resolved -> clip detection is approximate.
+struct RawRailState {
+    bool   verified      = false;
+    double requestedRate = 0.0;
+    double mixRate       = 0.0;
+};
+
 // --- Plan 4 addition: hardware DIP-switch analog-gain range per model ---
 // (no software control; used for low-level guidance).
 struct DipGainProfile {

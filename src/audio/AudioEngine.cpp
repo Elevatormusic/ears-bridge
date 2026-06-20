@@ -174,6 +174,7 @@ bool AudioEngine::reachedGoodLevel()       const noexcept { return hm.reachedGoo
 int  AudioEngine::autoActiveEar()          const noexcept { return graph.activeEar(); }
 bool AudioEngine::consumeDeviceDied()      noexcept      { return deviceDied_.exchange (false); }
 int  AudioEngine::grantedOutputBitDepth()  const noexcept { return devices.grantedOutputBitDepth(); }
+RawRailState AudioEngine::rawRail()        const noexcept { return rawRail_; }
 
 void AudioEngine::onDeviceLost() {
     // Set status away from Running FIRST so the closeAll() below (which fires audioDeviceStopped on
@@ -182,6 +183,7 @@ void AudioEngine::onDeviceLost() {
     devices.closeAll();
     aggregate_.destroy(); usingAggregate_ = false;
     bridge.reset();
+    rawRail_ = RawRailState {};   // D2: the device is gone -- the snapshot must not outlive it
     deviceDied_.store (false);
 }
 
@@ -291,6 +293,13 @@ bool AudioEngine::start (juce::String& errorOut) {
     // aggregate's internal drift-correction wobble can't trip the drift latch.)
     bridge.prepare (capRate, renRate, 1, cap);
     hm.prepare (inputId.model, cap, capRate / juce::jmax (1.0, renRate));   // reset + size + NOMINAL ratio (drift detection)
+    // D2: latch the raw-rail snapshot on this converged success path (always runs before a Running
+    // return). reportRawRail MUST come AFTER hm.prepare() -- prepare resets flagBits, so reporting
+    // before it would clear the OsResampled guidance flag this raises when the rail isn't verified.
+    rawRail_ = RawRailState { devices.rawRailVerified(),
+                              devices.requestedInputSampleRate(),
+                              devices.endpointMixSampleRate() };
+    hm.reportRawRail (rawRail_.verified);
     bridge.reset();
     // Pre-fill the FIFO to the PI controller's half-full target BEFORE the streams start. The two
     // device callbacks begin asynchronously and the render callback can pull before capture has
@@ -319,6 +328,7 @@ bool AudioEngine::start (juce::String& errorOut) {
         devices.closeAll();
         aggregate_.destroy(); usingAggregate_ = false;
         bridge.reset();
+        rawRail_ = RawRailState {};   // streams never came up: drop the snapshot latched above
         engineStatus.store ((int) EngineStatus::Error);
         return false;
     }
@@ -331,6 +341,7 @@ void AudioEngine::stop() {
         devices.closeAll();
         aggregate_.destroy();      // idempotent: tear down any aggregate even from a non-Running state
         usingAggregate_ = false;
+        rawRail_ = RawRailState {};   // D2: clear any snapshot left from a prior run
         return;
     }
     // Flip out of Running BEFORE closing so our own audioDeviceStopped() doesn't latch deviceDied_
@@ -340,6 +351,7 @@ void AudioEngine::stop() {
     aggregate_.destroy();          // idempotent (no-op on Windows / when not using the aggregate)
     usingAggregate_ = false;
     bridge.reset();
+    rawRail_ = RawRailState {};    // D2: stopped -- the snapshot must not outlive the device
 }
 
 // ---- Headless test seam ---------------------------------------------------------------
