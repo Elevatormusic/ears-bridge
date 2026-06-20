@@ -191,6 +191,43 @@ void AudioEngine::loadRightCal (const CalFile& cal) {
     graph.setFir (1, FirDesigner::design (cal, p));
 }
 
+// ---- Calibration generation lifecycle (message thread) ----
+void AudioEngine::setRequestedGeneration (int id) noexcept {
+    requestedGenId_.store (id, std::memory_order_relaxed);
+}
+
+void AudioEngine::applyCalibrationGeneration (CalibrationGeneration gen) {
+    // Read out the fields we still need BEFORE we move gen into appliedGen_ (move leaves it valid but
+    // unspecified). builtGenId_ records EVERY processed generation (valid or not) so the diagnostic
+    // surfaces and the gate can tell "built but invalid" from "never built".
+    const int  id    = gen.id;
+    const bool valid = gen.valid;
+
+    appliedGen_ = std::move (gen);
+    builtGenId_.store (id, std::memory_order_relaxed);
+
+    if (valid) {
+        // Install BOTH ears atomically (Task 3's pair installer takes its buffers by value -> copy).
+        graph.setFirPair (appliedGen_.leftFir, appliedGen_.rightFir);
+        appliedGenId_.store (id, std::memory_order_relaxed);
+    }
+    // An INVALID generation installs NOTHING: the graph keeps its prior/unity state and appliedGenId_
+    // is left untouched, so calibrationApplied() stays closed while calibrationDiagnostic() surfaces why.
+}
+
+int  AudioEngine::requestedGeneration() const noexcept { return requestedGenId_.load (std::memory_order_relaxed); }
+int  AudioEngine::builtGeneration()     const noexcept { return builtGenId_.load     (std::memory_order_relaxed); }
+int  AudioEngine::appliedGeneration()   const noexcept { return appliedGenId_.load   (std::memory_order_relaxed); }
+
+bool AudioEngine::calibrationApplied() const noexcept {
+    const int req = requestedGenId_.load (std::memory_order_relaxed);
+    const int blt = builtGenId_.load     (std::memory_order_relaxed);
+    const int app = appliedGenId_.load   (std::memory_order_relaxed);
+    return req == blt && blt == app && app != 0 && appliedGen_.valid;
+}
+
+juce::String AudioEngine::calibrationDiagnostic() const { return appliedGen_.diagnostic; }
+
 EngineStatus AudioEngine::status() const { return (EngineStatus) engineStatus.load(); }
 Levels AudioEngine::levels() const { return hm.levels(); }
 Health AudioEngine::health() const {

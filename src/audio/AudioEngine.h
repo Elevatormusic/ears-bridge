@@ -10,6 +10,7 @@
 #include "audio/LrVerify.h"
 #include "audio/AsioFallback.h"
 #include "audio/CalBinder.h"
+#include "audio/CalibrationGeneration.h"
 #include "platform/AggregateDevice_mac.h"   // portable header; macOS-gated .mm (Plan 4 Task 7)
 #include "cal/CalFile.h"
 #include "cal/FirDesigner.h"
@@ -48,6 +49,24 @@ public:
     // Convenience: design + load the FIR from a parsed cal file at the active rate.
     void loadLeftCal  (const CalFile&);
     void loadRightCal (const CalFile&);
+
+    // ---- Calibration generation lifecycle (message thread) ----
+    // A monotonic generation token guards the Start gate so it can never be satisfied by a stale,
+    // half-installed, or invalid calibration. The GUI bumps requestedGeneration() when it posts an
+    // off-thread build job, hands the finished CalibrationGeneration to applyCalibrationGeneration(),
+    // and the gate (calibrationApplied()) is satisfied only when requested == built == applied and the
+    // applied generation is valid. The ids are std::atomic<int> so the GUI gate reads them without a
+    // lock; the audio thread never touches them. appliedGen_ is written on the message thread only.
+    void setRequestedGeneration (int id) noexcept;       // GUI: bump when posting a build job
+    // Always records builtGenId_/appliedGen_ (so the diagnostic surfaces). ONLY when gen.valid does it
+    // install the FIR pair (graph.setFirPair) and advance appliedGenId_ — an invalid generation leaves
+    // the graph at its prior state and keeps the gate closed. Message thread only.
+    void applyCalibrationGeneration (CalibrationGeneration gen);
+    int  requestedGeneration() const noexcept;
+    int  builtGeneration()     const noexcept;
+    int  appliedGeneration()   const noexcept;
+    bool calibrationApplied()  const noexcept;           // the Start-gate readiness predicate
+    juce::String calibrationDiagnostic() const;          // appliedGen_.diagnostic (empty when valid)
 
     // ---- Transport ----
     bool start (juce::String& errorOut);
@@ -165,6 +184,16 @@ private:
 
     std::atomic<int>  engineStatus { (int) EngineStatus::Stopped };
     std::atomic<bool> deviceDied_  { false };   // set on the AUDIO-DEVICE thread from audioDeviceStopped()
+
+    // Calibration generation lifecycle. The three ids are atomic so the GUI gate reads them lock-free
+    // (the audio thread never reads them); appliedGen_ is written on the message thread only.
+    // requestedGenId_ : last id the GUI asked to build. builtGenId_ : last id applyCalibrationGeneration
+    // processed (valid OR invalid). appliedGenId_ : last id whose FIRs were actually installed (valid
+    // only; 0 = none). The gate is closed unless all three match, are non-zero, and appliedGen_.valid.
+    std::atomic<int> requestedGenId_ { 0 };
+    std::atomic<int> builtGenId_     { 0 };
+    std::atomic<int> appliedGenId_   { 0 };
+    CalibrationGeneration appliedGen_;          // last generation handed in (valid or invalid); message thread only
 
     // Audio callback adapters (own no state beyond pointers back to this).
     struct CaptureCallback;  struct RenderCallback;  struct VerifyCallback;

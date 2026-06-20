@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "audio/AudioEngine.h"
+#include "audio/CalibrationGeneration.h"
 #include "cal/FirDesigner.h"
 #include <vector>
 #include <cmath>
@@ -228,4 +229,32 @@ TEST_CASE("AudioEngine seam: format change after prepare raises FormatChanged an
     e.simulateFormatChangeForTest (96000.0, 32, 2);
     CHECK (eb::any (e.health().flags & eb::HealthFlag::FormatChanged));
     CHECK_FALSE (e.cleanCapture());
+}
+
+TEST_CASE("AudioEngine: calibrationApplied requires a valid generation with matching requested/built/applied ids") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 512);
+    CHECK_FALSE (e.calibrationApplied());                 // nothing applied yet
+
+    eb::CalibrationGeneration g;
+    g.id = 7; g.sampleRate = 48000.0; g.taps = 8; g.valid = true;
+    g.leftFir = juce::AudioBuffer<float> (1, 8);  g.leftFir.clear();  g.leftFir.setSample (0,0,1.0f);
+    g.rightFir = juce::AudioBuffer<float> (1, 8); g.rightFir.clear(); g.rightFir.setSample (0,0,1.0f);
+
+    e.setRequestedGeneration (7);
+    e.applyCalibrationGeneration (g);
+    CHECK (e.requestedGeneration() == 7);
+    CHECK (e.appliedGeneration() == 7);
+    CHECK (e.calibrationApplied());                       // requested==built==applied, valid
+
+    // A newer request that hasn't been applied yet -> not ready (stale-protection: the gate closes).
+    e.setRequestedGeneration (8);
+    CHECK_FALSE (e.calibrationApplied());
+
+    // An INVALID generation never reads as applied even if ids match.
+    eb::CalibrationGeneration bad; bad.id = 9; bad.valid = false; bad.diagnostic = "HEQ blocked";
+    e.setRequestedGeneration (9);
+    e.applyCalibrationGeneration (bad);
+    CHECK_FALSE (e.calibrationApplied());
+    CHECK (e.calibrationDiagnostic().containsIgnoreCase ("HEQ"));
 }
