@@ -9,6 +9,7 @@
 #include "gui/LevelMeter.h"
 #include "gui/RateMenu.h"
 #include "net/UpdateChecker.h"
+#include <atomic>
 #include <memory>
 
 namespace eb {
@@ -43,7 +44,8 @@ private:
     void onStartStop();
     void updateStatusLine();
     void updateActiveEarIndicator (bool silent);   // AutoPerEar "capturing Left/Right" caption + meter accent
-    void updateStartGate();          // enable Start only when both ear cals are loaded
+    void updateStartGate();          // enable Start only when a valid calibration generation is applied
+    void updateControlsEnabled();    // freeze config (cals/rate/mode/FIR) while capturing; re-enable when stopped
     // Returns true when a detected EARS input and a virtual-sink output are both
     // selected. Used by updateStartGate to enforce the combine-mode gate (D7 / R17).
     bool isRealEarsWithCable() const noexcept;
@@ -125,6 +127,11 @@ private:
     std::vector<CombineMenuItem> combineModel; // index -> combo id (i+1)
 
     std::unique_ptr<juce::ThreadPool> firPool;  // off-thread FIR design
+    // Monotonic calibration-generation request id. rebuildFirsAsync bumps this and stamps the
+    // posted build job; on the message thread a finished job discards itself when its id no longer
+    // equals this counter (a newer request superseded it). The engine mirrors it via
+    // setRequestedGeneration(); together they form the stale-guard for the Start gate (P0-02).
+    std::atomic<int> calGenCounter_ { 0 };
     int themeTick = 0;                          // throttles the live light/dark poll
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

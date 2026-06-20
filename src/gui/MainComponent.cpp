@@ -2,6 +2,8 @@
 #include "gui/ClipStatus.h"
 #include "gui/RawRailStatus.h"
 #include "platform/DiracCompat.h"
+#include "cal/CalibrationPairValidator.h"   // eb::validateCalibrationPair (P0-07)
+#include "audio/CalibrationGeneration.h"    // eb::CalibrationGeneration (generation lifecycle)
 #include <algorithm>
 #include <cmath>
 
@@ -217,8 +219,10 @@ MainComponent::MainComponent() {
     addAndMakeVisible (calEyebrow);
     leftCal.onCalLoaded  = [this] (const juce::File& f) { onLeftCalLoaded (f);  updateStartGate(); syncPlotScales(); };
     rightCal.onCalLoaded = [this] (const juce::File& f) { onRightCalLoaded (f); updateStartGate(); syncPlotScales(); };
-    leftCal.onCalCleared  = [this] { settings.setLeftCalPath  ({}); engine.clearLeftCalFir();  updateStartGate(); syncPlotScales(); };
-    rightCal.onCalCleared = [this] { settings.setRightCalPath ({}); engine.clearRightCalFir(); updateStartGate(); syncPlotScales(); };
+    // Removing a slot resets that ear to unity AND bumps a fresh (now-incomplete) generation, so the
+    // Start gate (calibrationApplied()) closes instead of staying satisfied by the prior valid build.
+    leftCal.onCalCleared  = [this] { settings.setLeftCalPath  ({}); engine.clearLeftCalFir();  rebuildFirsAsync(); updateStartGate(); syncPlotScales(); };
+    rightCal.onCalCleared = [this] { settings.setRightCalPath ({}); engine.clearRightCalFir(); rebuildFirsAsync(); updateStartGate(); syncPlotScales(); };
     addAndMakeVisible (leftCal);
     addAndMakeVisible (rightCal);
     styleEyebrow (levelsEyebrow, "LEVELS");
@@ -537,33 +541,38 @@ void MainComponent::onRightCalLoaded (const juce::File& f) {
 }
 
 void MainComponent::rebuildFirsAsync() {
+    const int genId = ++calGenCounter_;                 // monotonic request id
+    engine.setRequestedGeneration (genId);
     const double sr = activeRate();
     const int taps = (settings.firLength() > 0) ? settings.firLength() : numTapsForRate (sr);
-    const auto mode = settings.complexPhase() ? FirMode::ComplexWithPhase
-                                              : FirMode::MinPhaseMagnitude;
-    auto left  = leftCal.calFile();
+    const auto mode = settings.complexPhase() ? FirMode::ComplexWithPhase : FirMode::MinPhaseMagnitude;
+    auto left  = leftCal.calFile();                     // std::optional<CalFile> (copies)
     auto right = rightCal.calFile();
     juce::Component::SafePointer<MainComponent> safe (this);
 
-    firPool->removeAllJobs (false, 0);
-    firPool->addJob ([safe, sr, taps, mode, left, right] {
-        FirDesignParams p;
-        p.sampleRate = sr;
-        p.numTaps    = taps;
-        p.mode       = mode;
-        p.invert     = true;
-        if (left) {
-            auto ir = FirDesigner::design (*left, p);
-            juce::MessageManager::callAsync ([safe, ir = std::move (ir)]() mutable {
-                if (auto* mc = safe.getComponent()) mc->engine.setLeftCalFir (std::move (ir));
-            });
+    firPool->removeAllJobs (false, 0);                  // request the previous job stop; the genId check below is the real guard
+    firPool->addJob ([safe, genId, sr, taps, mode, left, right]() mutable {
+        eb::CalibrationGeneration g;
+        g.id = genId; g.sampleRate = sr; g.taps = taps; g.mode = mode;
+        if (left && right) {
+            g.leftHash = left->contentHash; g.rightHash = right->contentHash; g.serial = left->serial;
+            const auto v = eb::validateCalibrationPair (*left, *right, mode);   // P0-07
+            g.valid = v.valid; g.diagnostic = v.reason;
+            if (g.valid) {
+                FirDesignParams p; p.sampleRate = sr; p.numTaps = taps; p.mode = mode; p.invert = true;
+                g.leftFir  = FirDesigner::design (*left,  p);                   // BOTH ears in ONE job
+                g.rightFir = FirDesigner::design (*right, p);
+            }
+        } else {
+            g.diagnostic = "Load both ear calibrations";
         }
-        if (right) {
-            auto ir = FirDesigner::design (*right, p);
-            juce::MessageManager::callAsync ([safe, ir = std::move (ir)]() mutable {
-                if (auto* mc = safe.getComponent()) mc->engine.setRightCalFir (std::move (ir));
-            });
-        }
+        juce::MessageManager::callAsync ([safe, g = std::move (g)]() mutable {
+            auto* mc = safe.getComponent();
+            if (! mc) return;
+            if (g.id != mc->calGenCounter_.load()) return;   // STALE: a newer request superseded this build -> discard
+            mc->engine.applyCalibrationGeneration (std::move (g));
+            mc->updateStartGate();
+        });
     });
 }
 
@@ -606,14 +615,32 @@ void MainComponent::updateStartGate() {
     const bool running  = engine.status() == EngineStatus::Running;
     const bool haveDevs = inputPicker.selectedDevice().has_value()
                        && outputPicker.selectedDevice().has_value();
-    const bool haveCals = leftCal.hasCal() && rightCal.hasCal();
+    // Start requires a VALID, fully-built, atomically-applied generation (requested==built==applied,
+    // valid) -- not merely two parsed files. This is the stale/incomplete/invalid guard (P0-02/P0-07).
+    const bool haveCals = engine.calibrationApplied();
     // D7/R17: with real EARS + virtual cable, block non-AutoPerEar so the user can't record a
     // summed/single-ear signal into Dirac.
     const bool wrongMode = isRealEarsWithCable() && settings.combineMode() != CombineMode::AutoPerEar;
     const bool ready    = haveDevs && haveCals && ! wrongMode;
     startStop.setEnabled (running || ready);
     verifyButton.setEnabled (! running && inputPicker.selectedDevice().has_value());   // needs the EARS, while stopped
+    updateControlsEnabled();
     updateStatusLine();
+}
+
+void MainComponent::updateControlsEnabled() {
+    // Defensive GUI freeze: while capturing, a cal/rate/mode/FIR change must not race the running
+    // engine. The handlers already early-return while Running and the engine backstops reconfig
+    // (Task 6); this greys the affordances so the freeze is visible, then re-enables when stopped.
+    const bool frozen = engine.status() == EngineStatus::Running;
+    leftCal.setEnabled            (! frozen);   // greys the slot (Replace/Remove) — no dedicated per-button API
+    rightCal.setEnabled           (! frozen);
+    combineBox.setEnabled         (! frozen);
+    rateBox.setEnabled            (! frozen);
+    bitBox.setEnabled             (! frozen);
+    firLenBox.setEnabled          (! frozen);
+    complexPhaseToggle.setEnabled (! frozen);
+    trimSlider.setEnabled         (! frozen);
 }
 
 void MainComponent::syncPlotScales() {
@@ -719,9 +746,20 @@ void MainComponent::updateStatusLine() {
         // Start is disabled; tell the user exactly why and what to change.
         statusLine.setText ("Set Combine Mode to Auto per-ear (Dirac) to start", juce::dontSendNotification);
         statusLine.setColour (juce::Label::textColourId, Theme::warn());
-    } else if (leftCal.hasCal() && rightCal.hasCal()) {
-        // Ready: no redundant label — the enabled Start button is the affordance.
+    } else if (engine.calibrationApplied()) {
+        // Ready: a valid generation is applied. No redundant label — the enabled Start button is the affordance.
         statusLine.setText ({}, juce::dontSendNotification);
+    } else if (leftCal.hasCal() && rightCal.hasCal()) {
+        // Both files are loaded but no valid generation is applied yet: either the validator rejected the
+        // pair (surface the reason in warn colour) or the build is still in flight (dim "Preparing...").
+        const auto diag = engine.calibrationDiagnostic();
+        if (diag.isNotEmpty()) {
+            statusLine.setText (diag, juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::warn());
+        } else {
+            statusLine.setText ("Preparing calibration...", juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+        }
     } else {
         statusLine.setText ("Load both ear calibrations to start", juce::dontSendNotification);
         statusLine.setColour (juce::Label::textColourId, Theme::textDim());
