@@ -138,3 +138,63 @@ TEST_CASE("AudioEngine::rawRail defaults to unverified before any run") {
     CHECK (rr.requestedRate == 0.0);
     CHECK (rr.mixRate == 0.0);
 }
+
+TEST_CASE("AudioEngine seam: a clip DURING the sweep invalidates and latches the session Invalid") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 8);
+    auto run = [&] (std::vector<float> l) {
+        std::vector<float> r (l.size(), 0.0f), mono (l.size(), 0.0f);
+        e.processCaptureBlockForTest (l.data(), r.data(), mono.data(), (int) l.size());
+    };
+    std::vector<float> loud (8, 0.5f);
+    std::vector<float> clip { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f };
+
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i) run (loud);  // arm
+    CHECK (e.sessionPhase() == eb::SessionPhase::SweepActive);
+    CHECK (e.cleanCapture());
+
+    run (clip);                                                                      // mid-sweep clip
+    CHECK_FALSE (e.cleanCapture());
+    CHECK (eb::any (e.health().flags & eb::HealthFlag::ClipConfirmed));
+    CHECK (e.health().session == eb::SessionPhase::Invalid);
+}
+
+TEST_CASE("AudioEngine seam: a clean sweep then sustained silence reaches Complete and stays clean") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 8);
+    auto run = [&] (float v) {
+        std::vector<float> l (8, v), r (8, 0.0f), mono (8, 0.0f);
+        e.processCaptureBlockForTest (l.data(), r.data(), mono.data(), 8);
+    };
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i) run (0.5f);   // arm
+    CHECK (e.sessionPhase() == eb::SessionPhase::SweepActive);
+    // prepareForTest configured the silence window for block=8 @ 48k (a large block count); drive enough
+    // quiet blocks to cross it. Use the session's configured need via kSilenceCompleteSeconds.
+    const int need = (int) std::lround (eb::MeasurementSession::kSilenceCompleteSeconds * 48000.0 / 8.0) + 2;
+    for (int i = 0; i < need; ++i) run (0.0f);
+    CHECK (e.sessionPhase() == eb::SessionPhase::Complete);
+    CHECK (e.cleanCapture());
+}
+
+TEST_CASE("AudioEngine seam: the RIGHT-earcup sweep after a gap is still scored (no false-clean)") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 8);
+    auto runL = [&] (std::vector<float> l) {
+        std::vector<float> r (l.size(), 0.0f), mono (l.size(), 0.0f);
+        e.processCaptureBlockForTest (l.data(), r.data(), mono.data(), (int) l.size());
+    };
+    std::vector<float> loud (8, 0.5f), quiet (8, 0.0f);
+    std::vector<float> clip { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f };
+
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i) runL (loud);  // LEFT sweep
+    const int need = (int) std::lround (eb::MeasurementSession::kSilenceCompleteSeconds * 48000.0 / 8.0) + 2;
+    for (int i = 0; i < need; ++i) runL (quiet);                                      // long inter-sweep gap
+    CHECK (e.sessionPhase() == eb::SessionPhase::Complete);                           // provisional
+    CHECK (e.cleanCapture());
+
+    // RIGHT earcup sweep arms again; a clip on it must STILL invalidate (the bug D5 must not have).
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks - 1; ++i) runL (loud);
+    runL (clip);
+    CHECK_FALSE (e.cleanCapture());
+    CHECK (e.health().session == eb::SessionPhase::Invalid);
+}
