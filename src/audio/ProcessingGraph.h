@@ -33,7 +33,7 @@ private:
     static float peakGainOfIr (const juce::AudioBuffer<float>& ir);   // max |H(f)| of an IR
 
     juce::dsp::Convolution convL, convR;
-    std::atomic<int> combine { (int) CombineMode::LeftOnly };
+    std::atomic<int> combine { (int) CombineMode::AutoPerEar };
     std::atomic<float> outGain { 1.0f };   // post-combine output gain (1.0 = unity); lock-free for the audio thread
     // Auto makeup attenuation (<= 1), composed with outGain. Deliberately NOT reset in prepare()/reset()
     // -- convL/convR keep their loaded IRs across those, so it stays bound to the current FIRs; setFir
@@ -48,6 +48,6 @@ private:
     float envL_ = 0.0f, envR_ = 0.0f;
     std::atomic<int> activeEar_ { 0 };   // 0 = left mic, 1 = right mic (published for the GUI indicator)
     float relCoeff_ = 0.0f; // AutoPerEar envelope-release coefficient, precomputed in prepare() (no per-block exp)
-    int   lastMode_ = (int) CombineMode::LeftOnly;   // detect a live combine-mode change to re-arm AutoPerEar cleanly
+    int   lastMode_ = (int) CombineMode::AutoPerEar;   // detect a live combine-mode change to re-arm AutoPerEar cleanly
 };
 }

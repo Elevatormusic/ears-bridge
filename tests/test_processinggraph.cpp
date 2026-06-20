@@ -240,6 +240,16 @@ TEST_CASE("Real R_HPN cal cuts the ~4 kHz EARS resonance after convolution") {
     CHECK(db < -10.0);   // inverse of a large positive bump = a strong cut
 }
 
+TEST_CASE("ProcessingGraph default combine mode is AutoPerEar (the Dirac per-ear mode)") {
+    eb::ProcessingGraph g;
+    g.prepare (48000.0, 512);
+    std::vector<float> inL (512, 0.0f), inR (512, 0.9f), out (512, 0.0f);   // right ear has signal
+    for (int i = 0; i < 64; ++i) g.process (inL.data(), inR.data(), out.data(), 512);
+    // AutoPerEar follows whichever ear is sounding -> right (activeEar 1). The old LeftOnly default
+    // never runs the per-ear switch, so activeEar stays 0. This fails before the default fix.
+    CHECK (g.activeEar() == 1);
+}
+
 TEST_CASE("ProcessingGraph::process sanitizes non-finite input and reports it") {
     eb::ProcessingGraph g; g.prepare (48000.0, 8);
     std::vector<float> l (8, 0.2f), r (8, 0.0f), out (8, 0.0f);
