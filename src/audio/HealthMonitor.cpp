@@ -143,6 +143,10 @@ void HealthMonitor::reportOutLevel (float peakMono, bool clipOut) {
         raise (HealthFlag::ClipOutput); // Plan 4: guidance warning
 }
 
+void HealthMonitor::reportRawRail (bool verified) noexcept {
+    if (! verified) raise (HealthFlag::OsResampled);   // guidance only; not in the invalidating mask
+}
+
 bool HealthMonitor::scanAndFlagNonFinite (const float* buf, int n) noexcept {
     for (int i = 0; i < n; ++i)
         if (! std::isfinite (buf[i])) { raise (HealthFlag::NonFinite); return true; }

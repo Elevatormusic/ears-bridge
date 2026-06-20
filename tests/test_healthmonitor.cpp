@@ -328,3 +328,25 @@ TEST_CASE("Confirmed clip requires a FLAT rail run, not a smooth full-scale peak
         CHECK (h.cleanCapture());
     }
 }
+
+TEST_CASE("HealthMonitor::reportRawRail raises OsResampled only when NOT verified, never invalidates") {
+    using eb::HealthFlag; using eb::any;
+    SECTION ("verified => no flag, clean") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+        h.reportRawRail (true);
+        CHECK_FALSE (any (h.flags() & HealthFlag::OsResampled));
+        CHECK (h.cleanCapture());
+    }
+    SECTION ("not verified => OsResampled, but still VALID (guidance)") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+        h.reportRawRail (false);
+        CHECK (any (h.flags() & HealthFlag::OsResampled));
+        CHECK (h.cleanCapture());
+    }
+    SECTION ("reset clears it") {
+        eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+        h.reportRawRail (false);
+        h.reset();
+        CHECK_FALSE (any (h.flags() & HealthFlag::OsResampled));
+    }
+}

@@ -22,7 +22,8 @@ enum class HealthFlag : unsigned {
     ClipOutput  = 1u << 5,   // guidance: program output hit the clamp; does NOT invalidate
     FifoStarved = 1u << 6,
     ClipConfirmed = 1u << 7, // INVALIDATING: a consecutive near-rail run = confirmed digital clip
-    NonFinite     = 1u << 8  // INVALIDATING: a NaN/Inf sample reached the path
+    NonFinite     = 1u << 8, // INVALIDATING: a NaN/Inf sample reached the path
+    OsResampled   = 1u << 9  // guidance: OS SRC resampled the INPUT (D2) -> clip detection approximate; NOT invalidating
 };
 constexpr HealthFlag operator| (HealthFlag a, HealthFlag b) noexcept {
     return static_cast<HealthFlag> (static_cast<unsigned> (a) | static_cast<unsigned> (b));

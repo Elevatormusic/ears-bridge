@@ -19,6 +19,7 @@ public:
     void setCaptureToRenderRatio (double r);
     void reportInLevels (float peakL, float peakR, bool clipL, bool clipR);
     void reportOutLevel  (float peakMono, bool clipOut);
+    void reportRawRail (bool verified) noexcept;   // D2: raises OsResampled (guidance) when !verified
 
     Health snapshot() const;                 // now also carries flags + cleanCapture
     Levels levels()  const;
