@@ -2,62 +2,70 @@
 
 > For agentic workers: REQUIRED SUB-SKILL: use superpowers:subagent-driven-development (recommended) or executing-plans to implement this plan task-by-task. Steps use checkbox syntax.
 
-**Goal:** Scope clipping/integrity validity to Dirac's actual sweep window, not the whole Start->Stop engine run. Add a `MeasurementSession` state machine (Idle -> Preflight -> SweepActive -> Complete/Invalid) driven by an input LEVEL THRESHOLD. Reset the clip/integrity latches at `SweepActive` entry; retain events that occur during the sweep; ignore pre-sweep and post-sweep room events. This closes audit finding **D5 / requirement R18**.
+**Goal:** Scope clipping/integrity validity to Dirac's actual sweep window, not the whole Start->Stop engine run. Add a `MeasurementSession` state machine (Idle -> Preflight -> SweepActive -> Complete/Invalid) driven by an input LEVEL THRESHOLD. Clear the clip/integrity latches ONCE at the genuine sweep onset; retain events during the sweep; ignore pre-sweep room events. Dirac measures BOTH earcups (left sweep -> gap -> right sweep) in one routine, so the validity window must span the WHOLE measurement, not just the first sweep. This closes audit finding **D5 / requirement R18**.
 
-**Architecture:** A new pure, lock-free `eb::MeasurementSession` (no JUCE audio deps, atomics + plain locals only — same shape as `LrVerify`) owned by `AudioEngine`. The capture callback feeds it the per-block input peak (already computed in `HealthMonitor::analyzeInputBlock`); on the rising edge into `SweepActive` it calls `HealthMonitor::reset()`-equivalent clip/integrity clearing; on sustained post-signal silence it transitions to `Complete`. The session phase is published via an atomic the GUI reads on its 30 Hz timer and that **D6 (frozen SRC ratio)** will later consume to decide when to freeze the ClockBridge ratio.
+**Architecture:** A new pure, lock-free `eb::MeasurementSession` (no JUCE audio deps, atomics + plain locals only — same shape as `LrVerify`) owned by `AudioEngine`. The capture callback computes the current block's input peak and feeds it to the session BEFORE analyzing the block; on the FIRST sweep-onset edge it calls `HealthMonitor::resetMeasurementLatches()` (validity-only) so a pre-sweep room event doesn't brand the sweep invalid, then analyzes the current block so a clip ON the onset block still counts. The session phase is published via an atomic the GUI reads on its 30 Hz timer and that **D6 (frozen SRC ratio)** will later consume via `sweepActive()`.
 
 **Tech Stack:** C++17, JUCE 8.0.4, Catch2 (`Catch2WithMain`), CMake + Ninja + MSVC via `tools/dev.cmd`.
 
+## Pre-build review applied (why this plan differs from a naive D5)
+
+This plan was reviewed against CURRENT `main` (the clipping-review-fixes + D2 raw-rail slices both merged) by a 4-angle workflow before writing. Five critical corrections are baked in; do NOT undo them:
+
+1. **Do not revert the merged NaN-poison fix.** `graph.process(...)` now returns `bool` and sanitizes input+output internally; the capture callback is `if (e.graph.process(...)) e.hm.reportNonFinite();` with NO `scanAndFlagNonFinite(mono)`+`clear`. The D5 session lines are INSERTED around the existing callback body — never a wholesale replacement (which would silently revert the fix and drop the null guard + dropped-frames block).
+2. **`resetMeasurementLatches()` must PRESERVE D2's `OsResampled`** (a per-run guidance flag, raised once in `start()`) — clear all sticky flags EXCEPT it via `flagBits.fetch_and((unsigned)HealthFlag::OsResampled)` — and must also reset the fix-slice's flat-run scratch `prevL_/prevR_`.
+3. **Current-block-peak arming (no lag).** The session is fed the CURRENT block's peak (a cheap no-latch `HealthMonitor::blockPeak`), not the prior block's quantized meter value, so the sweep arms with zero lag and a clip on the onset block is retained.
+4. **Re-armable, time-based `Complete` for Dirac's two sweeps.** `Complete` is provisional: a fresh sustained rise re-enters `SweepActive` WITHOUT re-clearing latches, so a clip on the RIGHT earcup still invalidates. The terminal-silence window is expressed in TIME (configured from block size + sample rate), not raw blocks.
+5. **Single-writer `phase_`.** Only the capture thread writes the session phase. The render callback does NOT call `markInvalid()`; a render-side dropout latches `cleanCapture=false`, which the next capture block re-derives into `Invalid`.
+
+**On-device ratification (like the D2 smoke, not headless-testable):** the exact `kSweepStartLinear` and `kSilenceCompleteSeconds` should be confirmed against one real EARS+Dirac sweep capture. The chosen defaults (-24 dBFS arm, 3-block sustain, 1.5 s terminal silence) are designed to be correct for any realistic gap/level; ratification only tunes them.
+
 ## Global Constraints
 
-- Build (tests): ./tools/dev.cmd cmake --build build --target eb_tests  — run tools/dev.cmd DIRECTLY from Bash, never bare cmake (it loses the MSVC env) and never cmd /c; it wraps Ninja + MSVC.
-- Run a test: ./tools/dev.cmd ctest --test-dir build -R "<regex>" --output-on-failure . Full suite: ./tools/dev.cmd ctest --test-dir build --output-on-failure (must stay green; 98 tests today).
+- Build (tests): `./tools/dev.cmd cmake --build build --target eb_tests` — run tools/dev.cmd DIRECTLY from Bash, never bare cmake (it loses the MSVC env) and never cmd /c; it wraps Ninja + MSVC.
+- Run a test: `./tools/dev.cmd ctest --test-dir build -R "<regex>" --output-on-failure`. Full suite: `./tools/dev.cmd ctest --test-dir build --output-on-failure` (must stay green; **109 tests today**).
 - RT-safety: code reachable from an audio callback must have NO heap allocation, lock, syscall, logging, or exception — plain locals + std::atomic only.
-- HealthFlag (src/audio/EngineTypes.h) is NOT persisted — append enum values freely. CombineMode IS persisted by index — never change its existing values.
+- HealthFlag (src/audio/EngineTypes.h) is NOT persisted — append enum values freely. Current highest bit is `OsResampled = 1u << 9`. D5 adds NO HealthFlag (it adds a separate `SessionPhase` enum). CombineMode IS persisted by index — never change its existing values.
 - No real EARS serial in any file (tests use synthetic buffers).
-- Commit trailer on every commit: Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+- Commit trailer on every commit: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
 - Work on a feature branch, not main.
-
-## Design decision
-
-**Sweep boundary = input LEVEL THRESHOLD (chosen).** Audit §7 step 3 says: "Add `MeasurementSession{Idle,Preflight,SweepActive,Complete,Invalid}` driven by a level-threshold sweep boundary (or an explicit 'Arm measurement' button). Reset clip/integrity latches at `SweepActive` entry." We implement the level-threshold variant: the session enters `SweepActive` when the input peak rises above a start threshold (Dirac's log sweep is loud and unmistakable), and reaches `Complete` after a sustained run of below-floor blocks once signal has been seen. **Alternative considered and rejected for now: an explicit "Arm measurement" button.** That is more precise but requires a GUI affordance and asks the user to coordinate two apps (arm EARS Bridge, then start the Dirac sweep) — a worse UX for a tool whose whole point is "press Start, run Dirac, read the verdict." The level-threshold approach is fully automatic and reuses the per-block peak the capture path already computes. The state enum is named so the button variant can be added later by simply adding an `arm()`/`disarm()` entry point without changing the phases.
-
-This task touches **only**: a new `MeasurementSession` (state machine), wiring in `AudioEngine` (capture callback + a `Health.session` snapshot field + a `sessionPhase()` accessor), one new invalidating-aware reset on `HealthMonitor`, and the GUI status line. It deliberately does **not** freeze the SRC ratio — that is D6, which will read the `SweepActive` signal defined here.
 
 ## File Structure
 
 | File | Create/Modify | Responsibility |
 |---|---|---|
-| `src/audio/MeasurementSession.h` | Create | Pure lock-free `SessionPhase` enum + `MeasurementSession` state machine: `observeBlockPeak(float)` advances Idle->Preflight->SweepActive->Complete via the level threshold; `markInvalid()`; `reset()`; `phase()`. Atomics-only, no JUCE audio deps. |
-| `src/audio/MeasurementSession.cpp` | Create | State-transition bodies (threshold rise -> SweepActive with a reset-edge flag; sustained silence -> Complete). |
-| `src/audio/EngineTypes.h` | Modify | Add `SessionPhase` forward use in `Health` (a `SessionPhase session` field) — additive, not persisted. |
-| `src/audio/HealthMonitor.h` | Modify | Add `resetMeasurementLatches()` — clears ONLY the clip/integrity latches + cleanCapture (not the per-run config), so a sweep-start edge re-scopes validity to the sweep without losing model/capacity/nominal. |
+| `src/audio/MeasurementSession.h` | Create | Pure lock-free `MeasurementSession`: `observeBlockPeak(float)` advances Idle->Preflight->SweepActive->Complete (re-armable) via a sustained level threshold; `configure(blockSize,sampleRate)`; `consumeSweepStarted()`; `markInvalid()`; `reset()`; `phase()`/`sweepActive()`/`inMeasurement()`. Atomics-only. |
+| `src/audio/MeasurementSession.cpp` | Create | State-transition bodies. |
+| `src/audio/EngineTypes.h` | Modify | Add `SessionPhase` enum + a `SessionPhase session` field in `Health` (additive, not persisted). |
+| `src/audio/HealthMonitor.h` | Modify | Add static `blockPeak(l,r,n)` (no-latch max-abs); add `resetMeasurementLatches()` (validity-only, preserves OsResampled + config + telemetry). |
 | `src/audio/HealthMonitor.cpp` | Modify | Implement `resetMeasurementLatches()`. |
-| `src/audio/AudioEngine.h` | Modify | Own a `MeasurementSession session_`; add `SessionPhase sessionPhase() const noexcept`; add a `consumeSweepStarted()` edge for the latch re-scope; expose `bool sweepActive() const noexcept` for D6. |
-| `src/audio/AudioEngine.cpp` | Modify | In the capture callback, after `analyzeInputBlock`, feed the block peak to `session_`; on the SweepActive rising edge call `hm.resetMeasurementLatches()`. Snapshot the phase into `Health.session`. Reset the session in `start()`/`prepareForTest()`. |
-| `src/gui/MainComponent.cpp` | Modify | In `updateStatusLine`, gate the clean/invalid wording on the session phase: before the sweep (`Idle`/`Preflight`) show "Waiting for the Dirac sweep..."; during/after show the existing clean/invalid verdict; keep the device-loss path first. |
-| `tests/test_measurementsession.cpp` | Create | Unit tests for the pure state machine (transitions, reset-edge, invalid latch, silence-to-complete). |
-| `tests/test_audioengine.cpp` | Modify | Add seam tests: a clip BEFORE the sweep does not invalidate; a clip DURING the sweep does; the sweep-start edge clears a pre-sweep latch. |
-| `tests/CMakeLists.txt` | Modify | Add `test_measurementsession.cpp` to the `eb_tests` sources. |
+| `src/audio/AudioEngine.h` | Modify | Own `MeasurementSession session_`; add `sessionPhase()`/`sweepActive()`. |
+| `src/audio/AudioEngine.cpp` | Modify | Capture callback: feed the session the current block peak, re-scope on the sweep-onset edge, mark Invalid in-measurement. Snapshot phase into `Health.session`. `configure()`+`reset()` the session in `start()`/`prepareForTest()`. |
+| `src/gui/MainComponent.cpp` | Modify | In the Running branch of `updateStatusLine`, gate the verdict on the session phase. |
+| `tests/test_measurementsession.cpp` | Create | Unit tests for the pure state machine. |
+| `tests/test_healthmonitor.cpp` | Modify | `resetMeasurementLatches` test (incl. OsResampled survives). |
+| `tests/test_audioengine.cpp` | Modify | Seam tests: pre-sweep events dropped, in-sweep events score, two-sweep re-arm. |
+| `tests/CMakeLists.txt` | Modify | Add `test_measurementsession.cpp`. |
 
 ---
 
 ### Task 1: Pure `MeasurementSession` state machine (no AudioEngine wiring yet)
 
-A self-contained, lock-free phase machine. Driven entirely by per-block input peaks plus an external `markInvalid()`. It does NOT know about HealthMonitor — the engine wires the reset edge in Task 3. Mirrors `LrVerify`'s "pure state machine, touched only on the audio thread, GUI reads an atomic" contract.
+A self-contained, lock-free phase machine driven by per-block input peaks plus an external `markInvalid()`. It does NOT know about HealthMonitor — the engine wires the reset edge in Task 3. Mirrors `LrVerify`'s "pure state machine, touched only on the audio thread, GUI reads an atomic" contract.
 
 **Files:** `src/audio/MeasurementSession.h`, `src/audio/MeasurementSession.cpp`, `src/audio/EngineTypes.h`, `tests/test_measurementsession.cpp`, `tests/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: per-block input peak `float` (the larger of the two channel peaks the capture path already computes), and an external `markInvalid()` raised when `HealthMonitor` latches an invalidating flag during the sweep.
+- Consumes: per-block input peak `float` (max of the two channel peaks), and an external `markInvalid()`.
 - Produces:
   - `enum class eb::SessionPhase { Idle, Preflight, SweepActive, Complete, Invalid }`
-  - `void MeasurementSession::reset() noexcept`
-  - `void MeasurementSession::observeBlockPeak (float peak) noexcept`
-  - `bool MeasurementSession::consumeSweepStarted() noexcept` — edge-triggered: true exactly once on the Idle/Preflight -> SweepActive transition (drives the latch re-scope)
-  - `void MeasurementSession::markInvalid() noexcept`
-  - `SessionPhase MeasurementSession::phase() const noexcept`
-  - thresholds as public constants: `kSweepStartLinear` (-12 dBFS), `kSilenceFloorLinear` (reuse the -50 dBFS floor value), `kSilenceCompleteBlocks` (sustained below-floor blocks after signal -> Complete)
+  - `void reset() noexcept`
+  - `void configure (int blockSize, double sampleRate) noexcept` — sizes the terminal-silence window in TIME
+  - `void observeBlockPeak (float peak) noexcept`
+  - `bool consumeSweepStarted() noexcept` — true exactly once, on the FIRST (genuine) sweep onset (drives the one latch re-scope); re-arms after a provisional Complete do NOT fire it
+  - `void markInvalid() noexcept`
+  - `SessionPhase phase() const noexcept`, `bool sweepActive() const noexcept`, `bool inMeasurement() const noexcept`
+  - public constants: `kSweepStartLinear` (-24 dBFS), `kArmSustainBlocks` (3), `kSilenceFloorLinear` (-50 dBFS), `kSilenceCompleteSeconds` (1.5), `kDefaultSilenceBlocks` (140)
 
 Steps:
 
@@ -67,23 +75,16 @@ Steps:
 enum class EarsModel  { Unknown, Ears, EarsPro };
 enum class EngineStatus { Stopped, Running, Error };
 
-// D5 / R18: the measurement-session phase, scoping validity to Dirac's sweep window (not the
-// whole engine run). Driven by the input level threshold in MeasurementSession. NOT persisted.
+// D5 / R18: the measurement-session phase, scoping validity to Dirac's sweep window (left earcup ->
+// gap -> right earcup) instead of the whole engine run. Driven by the input level threshold in
+// MeasurementSession. NOT persisted.
 enum class SessionPhase { Idle, Preflight, SweepActive, Complete, Invalid };
 ```
 
-  And inside `struct Health` add one field (additive; default keeps existing snapshots unchanged):
+  And inside `struct Health` add one field (additive; default keeps existing snapshots unchanged). Match the real current struct — add the field after `flags`:
 
 ```cpp
-struct Health {
-    int       xruns = 0;
-    long long droppedFrames = 0;
-    double    fifoFill = 0.0;
-    bool      cleanCapture = true;
-    double    captureToRenderRatio = 1.0;
-    HealthFlag flags = HealthFlag::None;   // Plan 4 addition: latched sticky condition flags
     SessionPhase session = SessionPhase::Idle;   // D5: measurement-session phase snapshot
-};
 ```
 
 - [ ] Write the failing test `tests/test_measurementsession.cpp`:
@@ -95,73 +96,105 @@ struct Health {
 using eb::MeasurementSession;
 using eb::SessionPhase;
 
-static void quietBlocks (MeasurementSession& s, int n) {
-    for (int i = 0; i < n; ++i) s.observeBlockPeak (0.0f);   // below the silence floor
-}
+static const float kLoud  = 0.5f;    // -6 dBFS, well above the -24 dB arm threshold
+static const float kQuiet = 0.0f;    // below the -50 dB silence floor
 
-TEST_CASE("MeasurementSession starts Idle and a quiet warm-up moves to Preflight, not SweepActive") {
+static void blocks (MeasurementSession& s, int n, float peak) {
+    for (int i = 0; i < n; ++i) s.observeBlockPeak (peak);
+}
+// Arm the sweep: kArmSustainBlocks consecutive loud blocks.
+static void arm (MeasurementSession& s) { blocks (s, MeasurementSession::kArmSustainBlocks, kLoud); }
+
+TEST_CASE("MeasurementSession starts Idle, a quiet warm-up moves to Preflight, not SweepActive") {
     MeasurementSession s; s.reset();
     CHECK (s.phase() == SessionPhase::Idle);
-    quietBlocks (s, 4);
-    CHECK (s.phase() == SessionPhase::Preflight);   // armed and waiting, but no sweep yet
+    blocks (s, 4, kQuiet);
+    CHECK (s.phase() == SessionPhase::Preflight);
     CHECK_FALSE (s.consumeSweepStarted());
 }
 
-TEST_CASE("MeasurementSession enters SweepActive when the input rises above the start threshold") {
+TEST_CASE("MeasurementSession arms only after a SUSTAINED rise (a single transient does not arm)") {
     MeasurementSession s; s.reset();
-    quietBlocks (s, 2);
-    s.observeBlockPeak (0.5f);   // well above kSweepStartLinear (-12 dBFS ~= 0.251)
+    blocks (s, 2, kQuiet);
+    s.observeBlockPeak (kLoud);                       // 1 loud block: a door slam, not the sweep
+    CHECK (s.phase() == SessionPhase::Preflight);     // not armed by one block
+    s.observeBlockPeak (kQuiet);                      // the run breaks
+    CHECK (s.phase() == SessionPhase::Preflight);
+    arm (s);                                          // kArmSustainBlocks loud blocks: the sweep
     CHECK (s.phase() == SessionPhase::SweepActive);
-    CHECK (s.consumeSweepStarted());            // rising edge fires exactly once
-    CHECK_FALSE (s.consumeSweepStarted());      // and only once
+    CHECK (s.consumeSweepStarted());                  // genuine onset fires exactly once
+    CHECK_FALSE (s.consumeSweepStarted());
+}
+
+TEST_CASE("MeasurementSession: a peak just under the arm threshold never arms") {
+    MeasurementSession s; s.reset();
+    // 0.05 (~ -26 dBFS) is below kSweepStartLinear (-24 dBFS): typical room noise must not arm.
+    blocks (s, MeasurementSession::kArmSustainBlocks + 5, 0.05f);
+    CHECK (s.phase() == SessionPhase::Preflight);
+    CHECK_FALSE (s.consumeSweepStarted());
 }
 
 TEST_CASE("MeasurementSession reaches Complete after sustained silence following signal") {
     MeasurementSession s; s.reset();
-    s.observeBlockPeak (0.5f);                                  // -> SweepActive
+    arm (s);
     CHECK (s.phase() == SessionPhase::SweepActive);
-    quietBlocks (s, MeasurementSession::kSilenceCompleteBlocks - 1);
+    blocks (s, MeasurementSession::kDefaultSilenceBlocks - 1, kQuiet);
     CHECK (s.phase() == SessionPhase::SweepActive);             // not yet
-    s.observeBlockPeak (0.0f);                                  // crosses the sustain threshold
+    s.observeBlockPeak (kQuiet);                                // crosses the sustain threshold
     CHECK (s.phase() == SessionPhase::Complete);
 }
 
 TEST_CASE("MeasurementSession: a brief gap mid-sweep does not end the sweep") {
     MeasurementSession s; s.reset();
-    s.observeBlockPeak (0.5f);                                  // SweepActive
-    quietBlocks (s, MeasurementSession::kSilenceCompleteBlocks - 1);   // a gap, but not sustained
-    s.observeBlockPeak (0.5f);                                  // signal returns -> resets the silence run
-    quietBlocks (s, MeasurementSession::kSilenceCompleteBlocks - 1);
-    CHECK (s.phase() == SessionPhase::SweepActive);             // still sweeping
+    arm (s);
+    blocks (s, MeasurementSession::kDefaultSilenceBlocks - 1, kQuiet);   // a gap, not sustained
+    s.observeBlockPeak (kLoud);                                          // signal returns -> resets the run
+    blocks (s, MeasurementSession::kDefaultSilenceBlocks - 1, kQuiet);
+    CHECK (s.phase() == SessionPhase::SweepActive);
 }
 
-TEST_CASE("MeasurementSession: markInvalid latches Invalid and survives further peaks") {
+TEST_CASE("MeasurementSession: the SECOND Dirac sweep re-arms after a provisional Complete, no re-clear") {
     MeasurementSession s; s.reset();
-    s.observeBlockPeak (0.5f);                                  // SweepActive
+    arm (s);                                                            // left earcup sweep
+    CHECK (s.consumeSweepStarted());                                    // drained the one re-scope edge
+    blocks (s, MeasurementSession::kDefaultSilenceBlocks + 2, kQuiet);  // long inter-sweep gap
+    CHECK (s.phase() == SessionPhase::Complete);                        // provisional complete
+    arm (s);                                                            // right earcup sweep
+    CHECK (s.phase() == SessionPhase::SweepActive);                     // re-armed
+    CHECK_FALSE (s.consumeSweepStarted());                              // re-arm does NOT re-scope latches
+}
+
+TEST_CASE("MeasurementSession: markInvalid latches Invalid and is absorbing") {
+    MeasurementSession s; s.reset();
+    arm (s);
     s.markInvalid();
     CHECK (s.phase() == SessionPhase::Invalid);
-    s.observeBlockPeak (0.5f);                                  // further audio cannot un-invalidate
-    quietBlocks (s, MeasurementSession::kSilenceCompleteBlocks + 2);
+    arm (s);                                                            // further audio cannot un-invalidate
+    blocks (s, MeasurementSession::kDefaultSilenceBlocks + 2, kQuiet);
     CHECK (s.phase() == SessionPhase::Invalid);
 }
 
-TEST_CASE("MeasurementSession: pre-sweep noise does not start the sweep and reset() returns to Idle") {
+TEST_CASE("MeasurementSession: configure sizes the terminal silence in TIME, not raw blocks") {
     MeasurementSession s; s.reset();
-    // A door slam below the start threshold during Preflight must not arm SweepActive.
-    s.observeBlockPeak (0.20f);   // above the -50 dB floor but below the -12 dB start threshold
-    CHECK (s.phase() == SessionPhase::Preflight);
-    CHECK_FALSE (s.consumeSweepStarted());
+    s.configure (256, 48000.0);   // 1.5 s @ 256/48k ~= 281 blocks
+    arm (s);
+    blocks (s, 280, kQuiet);
+    CHECK (s.phase() == SessionPhase::SweepActive);   // 280 < ~281: not yet complete at the smaller block
+    blocks (s, 3, kQuiet);
+    CHECK (s.phase() == SessionPhase::Complete);
+}
+
+TEST_CASE("MeasurementSession: reset returns to Idle and clears the arm run") {
+    MeasurementSession s; s.reset();
+    s.observeBlockPeak (kLoud); s.observeBlockPeak (kLoud);   // partial arm run
     s.reset();
     CHECK (s.phase() == SessionPhase::Idle);
+    arm (s);                                                  // a fresh full run arms cleanly
+    CHECK (s.phase() == SessionPhase::SweepActive);
 }
 ```
 
-- [ ] Add `test_measurementsession.cpp` to `tests/CMakeLists.txt` (append to the `eb_tests` source list, before the closing paren):
-
-```cmake
-    test_clipstatus.cpp
-    test_measurementsession.cpp)
-```
+- [ ] Add `test_measurementsession.cpp` to `tests/CMakeLists.txt`. Find the `eb_tests` source list (it lists `test_*.cpp` explicitly — `test_clipstatus.cpp`, `test_rawrailstatus.cpp`, etc.) and add the new file alongside them.
 
 - [ ] Create the header `src/audio/MeasurementSession.h`:
 
@@ -169,55 +202,75 @@ TEST_CASE("MeasurementSession: pre-sweep noise does not start the sweep and rese
 #pragma once
 #include "audio/EngineTypes.h"   // eb::SessionPhase
 #include <atomic>
+#include <cmath>
 
 namespace eb {
 
-// Lock-free measurement-session state machine (D5 / R18). Scopes clip/integrity validity to
-// Dirac's actual sweep window instead of the whole Start->Stop engine run. Driven on the CAPTURE
-// audio thread by the per-block input peak; the GUI reads phase() via an atomic (never the
-// internal scratch). Pure: no JUCE audio deps, no allocation, no lock — same contract as LrVerify.
+// Lock-free measurement-session state machine (D5 / R18). Scopes clip/integrity validity to Dirac's
+// actual sweep window (left earcup -> gap -> right earcup) instead of the whole Start->Stop run.
+// Driven on the CAPTURE thread by the per-block input peak; the GUI reads phase() via an atomic
+// (never the internal scratch). Pure: no JUCE audio deps, no alloc, no lock — same contract as LrVerify.
 //
 // Phases:
 //   Idle        - fresh, before the first observed block
 //   Preflight   - armed; input is below the sweep-start threshold (room noise / silence)
-//   SweepActive - input rose above the start threshold; THIS is the validity window. D6 will read
-//                 sweepActive() to freeze the ClockBridge SRC ratio for exactly this span.
-//   Complete    - sustained silence after signal: the sweep ended cleanly
-//   Invalid     - an invalidating condition fired during the sweep (latched; absorbing)
+//   SweepActive - input sustained above the start threshold; THIS is the validity window. D6 will read
+//                 sweepActive() to freeze the ClockBridge SRC ratio for the sweep.
+//   Complete    - sustained silence after signal. PROVISIONAL: a fresh sustained rise re-arms
+//                 SweepActive (the right-earcup sweep / a re-take) WITHOUT re-clearing latches.
+//   Invalid     - an invalidating condition fired in-measurement (latched; absorbing)
 class MeasurementSession {
 public:
-    // Input peak (linear, 0..) that arms SweepActive. -12 dBFS: Dirac's log sweep is loud and
-    // unmistakable, while typical room noise (~ -30 dBFS) and a door slam stay below it.
-    static constexpr float kSweepStartLinear     = 0.25119f;   // -12 dBFS
-    // Below this counts as silence for the sweep-end detector. Same -50 dBFS floor the level
-    // guidance uses (HealthMonitor::kLowLevelLinear), kept independent so the two can't desync by
-    // accident — both are -50 dBFS by intent.
-    static constexpr float kSilenceFloorLinear   = 0.00316f;   // -50 dBFS
-    // Consecutive below-floor blocks AFTER signal that end the sweep. At a 512-sample WASAPI block
-    // and 48 kHz that's ~ 0.85 s — long enough that the quiet tail of a sweep doesn't end it early,
-    // short enough to close before post-sweep room events fold in.
-    static constexpr int   kSilenceCompleteBlocks = 80;
+    // Sustained input peak (linear) that arms the sweep. -24 dBFS == the app's healthy-level floor
+    // (HealthMonitor::kGoodLevelLinear): a correctly-leveled Dirac sweep (the app targets -18..-12 dBFS)
+    // clears it, while typical room noise (~ -30 dBFS) stays below. Arming also requires kArmSustainBlocks
+    // consecutive blocks so a single loud transient (door slam, cable bump) cannot arm.
+    static constexpr float kSweepStartLinear      = 0.06310f;   // -24 dBFS
+    static constexpr int   kArmSustainBlocks      = 3;          // consecutive above-threshold blocks to arm
+    // Below this counts as silence for the sweep-end detector. Same -50 dBFS no-signal floor the level
+    // guidance uses, kept independent so the two can't desync by accident.
+    static constexpr float kSilenceFloorLinear    = 0.00316f;   // -50 dBFS
+    // Terminal post-signal silence that ends a sweep segment, expressed in TIME. configure() converts
+    // it to a block count for the real block size; kDefaultSilenceBlocks is the pre-configure default
+    // (~1.5 s @ 512/48k) used by unit tests. 1.5 s is long enough that the quiet tail of a sweep (or a
+    // short inter-sweep gap) does not end it early; Complete is re-armable so a longer gap is also safe.
+    static constexpr double kSilenceCompleteSeconds = 1.5;
+    static constexpr int    kDefaultSilenceBlocks   = 140;
 
     void reset() noexcept;
+    void configure (int blockSize, double sampleRate) noexcept;   // size the terminal-silence window
 
     // Advance the machine with one block's input peak (max of the two channel peaks). RT-safe.
     void observeBlockPeak (float peak) noexcept;
 
-    // Edge: true exactly once on the transition INTO SweepActive (drives the latch re-scope in the
-    // engine). Read-and-clear, like HealthMonitor::recentInputClip().
+    // Edge: true exactly once, on the FIRST (genuine) sweep onset (Preflight -> SweepActive) — drives
+    // the one validity re-scope in the engine. Re-arms out of a provisional Complete do NOT set it.
     bool consumeSweepStarted() noexcept;
 
-    // Latch Invalid (an invalidating HealthMonitor flag fired during the sweep). Absorbing.
+    // Latch Invalid (an invalidating HealthMonitor flag fired in-measurement). Absorbing.
     void markInvalid() noexcept;
 
     SessionPhase phase() const noexcept { return static_cast<SessionPhase> (phase_.load()); }
-    bool sweepActive() const noexcept { return phase() == SessionPhase::SweepActive; }  // D6 consumer
+    bool sweepActive()   const noexcept { return phase() == SessionPhase::SweepActive; }   // D6 consumer
+    // True once the measurement has started (armed or later) — the engine marks Invalid only here, so a
+    // pre-sweep room event in Idle/Preflight is never scored, but a same-block silence->Complete plus a
+    // late-latched dropout still invalidates.
+    bool inMeasurement() const noexcept {
+        const auto p = phase();
+        return p == SessionPhase::SweepActive || p == SessionPhase::Complete || p == SessionPhase::Invalid;
+    }
 
 private:
-    std::atomic<int>  phase_ { (int) SessionPhase::Idle };
+    // Shared, sustained-rise re-arm helper for Preflight (first onset) and Complete (re-take/2nd sweep).
+    // Returns true when the kArmSustainBlocks run completes this block.
+    bool advanceArmRun (float peak) noexcept;
+
+    std::atomic<int>  phase_        { (int) SessionPhase::Idle };
     std::atomic<bool> sweepStarted_ { false };   // edge, drained by consumeSweepStarted()
-    int  silenceRun_ = 0;        // CAPTURE-THREAD-ONLY scratch: consecutive below-floor blocks in-sweep
-    bool sawSignal_  = false;    // CAPTURE-THREAD-ONLY scratch: signal observed since SweepActive entry
+    int  armRun_            = 0;                  // CAPTURE-THREAD scratch: consecutive above-threshold blocks
+    int  silenceRun_        = 0;                  // CAPTURE-THREAD scratch: consecutive below-floor blocks in-sweep
+    bool sawSignal_         = false;              // CAPTURE-THREAD scratch: signal seen since SweepActive entry
+    int  silenceBlocksNeeded_ = kDefaultSilenceBlocks;   // configured terminal-silence count
 };
 
 } // namespace eb
@@ -227,48 +280,68 @@ private:
 
 ```cpp
 #include "audio/MeasurementSession.h"
+#include <algorithm>
 
 namespace eb {
 
 void MeasurementSession::reset() noexcept {
     phase_.store ((int) SessionPhase::Idle);
     sweepStarted_.store (false);
-    silenceRun_ = 0;
-    sawSignal_  = false;
+    armRun_ = 0; silenceRun_ = 0; sawSignal_ = false;
+}
+
+void MeasurementSession::configure (int blockSize, double sampleRate) noexcept {
+    if (blockSize > 0 && sampleRate > 0.0) {
+        const long n = std::lround (kSilenceCompleteSeconds * sampleRate / (double) blockSize);
+        silenceBlocksNeeded_ = (int) std::max (1L, n);
+    }
+}
+
+bool MeasurementSession::advanceArmRun (float peak) noexcept {
+    if (peak >= kSweepStartLinear) {
+        if (++armRun_ >= kArmSustainBlocks) { armRun_ = 0; return true; }
+    } else {
+        armRun_ = 0;
+    }
+    return false;
 }
 
 void MeasurementSession::observeBlockPeak (float peak) noexcept {
-    const auto p = static_cast<SessionPhase> (phase_.load());
+    if (static_cast<SessionPhase> (phase_.load()) == SessionPhase::Invalid)
+        return;   // absorbing
 
-    // Invalid and Complete are terminal for the rest of this run; ignore further audio.
-    if (p == SessionPhase::Invalid || p == SessionPhase::Complete)
-        return;
-
-    if (p == SessionPhase::Idle) {
-        // First observed block: we are now armed and waiting for the sweep.
+    if (static_cast<SessionPhase> (phase_.load()) == SessionPhase::Idle)
         phase_.store ((int) SessionPhase::Preflight);
-    }
 
-    // Arm the sweep on the rising edge above the start threshold (works from Idle-just-promoted or
-    // Preflight). The reload below sees the Preflight we may have just stored.
-    if (static_cast<SessionPhase> (phase_.load()) == SessionPhase::Preflight) {
-        if (peak >= kSweepStartLinear) {
+    const auto cur = static_cast<SessionPhase> (phase_.load());
+
+    if (cur == SessionPhase::Preflight) {
+        // FIRST sweep onset: arm on a sustained rise and fire the one re-scope edge.
+        if (advanceArmRun (peak)) {
             phase_.store ((int) SessionPhase::SweepActive);
-            sweepStarted_.store (true);   // rising edge for consumeSweepStarted()
-            silenceRun_ = 0;
-            sawSignal_  = true;
+            sweepStarted_.store (true);   // genuine onset -> the single latch clear
+            silenceRun_ = 0; sawSignal_ = true;
         }
         return;
     }
 
-    // SweepActive: track the silence tail. A below-floor run after signal ends the sweep; any
-    // above-floor block resets the run so a brief inter-segment gap doesn't end it early.
+    if (cur == SessionPhase::Complete) {
+        // Re-arm for the next sweep of the SAME Dirac measurement (right earcup) or a re-take, WITHOUT
+        // re-clearing latches: a clip on either earcup must accrue into the one validity window.
+        if (advanceArmRun (peak)) {
+            phase_.store ((int) SessionPhase::SweepActive);
+            silenceRun_ = 0; sawSignal_ = true;
+        }
+        return;
+    }
+
+    // SweepActive: track the silence tail. A sustained below-floor run after signal -> provisional
+    // Complete; any above-floor block resets the run so a brief inter-segment gap doesn't end it early.
     if (peak < kSilenceFloorLinear) {
-        if (sawSignal_ && ++silenceRun_ >= kSilenceCompleteBlocks)
+        if (sawSignal_ && ++silenceRun_ >= silenceBlocksNeeded_)
             phase_.store ((int) SessionPhase::Complete);
     } else {
-        silenceRun_ = 0;
-        sawSignal_  = true;
+        silenceRun_ = 0; sawSignal_ = true;
     }
 }
 
@@ -283,39 +356,47 @@ void MeasurementSession::markInvalid() noexcept {
 } // namespace eb
 ```
 
-- [ ] Add `src/audio/MeasurementSession.cpp` to the engine library source list. Find the `eb_engine` target in `CMakeLists.txt` (it compiles `src/audio/*.cpp`) and add the new file alongside `HealthMonitor.cpp`. If the engine sources are globbed, no edit is needed — verify by grepping `CMakeLists.txt` for `HealthMonitor.cpp`; add `src/audio/MeasurementSession.cpp` in the same list if they are listed explicitly.
-- [ ] Build the tests: `./tools/dev.cmd cmake --build build --target eb_tests`
-- [ ] Run only the new file's tests to see them pass: `./tools/dev.cmd ctest --test-dir build -R "MeasurementSession" --output-on-failure`
-- [ ] Run the full suite to confirm nothing regressed: `./tools/dev.cmd ctest --test-dir build --output-on-failure`
-- [ ] Commit: `MeasurementSession state machine (D5/R18): level-threshold sweep boundary` with the required trailer.
+- [ ] Add `src/audio/MeasurementSession.cpp` to the `eb_engine` target in `CMakeLists.txt`, alongside `src/audio/HealthMonitor.cpp` (grep `HealthMonitor.cpp` to find the list). If sources are globbed, no edit is needed — verify.
+- [ ] Build: `./tools/dev.cmd cmake --build build --target eb_tests`
+- [ ] Run the new tests: `./tools/dev.cmd ctest --test-dir build -R "MeasurementSession" --output-on-failure`
+- [ ] Run the full suite: `./tools/dev.cmd ctest --test-dir build --output-on-failure`
+- [ ] Commit: `MeasurementSession state machine (D5/R18): re-armable level-threshold sweep boundary` with the trailer.
 
 ---
 
-### Task 2: `HealthMonitor::resetMeasurementLatches()` — re-scope validity without losing config
+### Task 2: `HealthMonitor::blockPeak` + `resetMeasurementLatches()`
 
-The sweep-start edge must clear ONLY the validity latches (clip/integrity flags + `cleanCapture` + the clip-run scratch), NOT the per-run config (`model_`, `capacity_`, `nominal_`) or the level/ratio telemetry the GUI is rendering. `reset()` is too broad (it also re-arms the low-level grace window and zeroes telemetry). This is the surgical clearing the session edge calls.
+Two additions: (1) a no-latch static `blockPeak` so the engine can feed the session the CURRENT block's peak before `analyzeInputBlock`; (2) `resetMeasurementLatches()` that clears ONLY the validity latches on the sweep-onset edge while PRESERVING the per-run `OsResampled` guidance flag, the config, and the live telemetry.
 
 **Files:** `src/audio/HealthMonitor.h`, `src/audio/HealthMonitor.cpp`, `tests/test_healthmonitor.cpp`
 
 **Interfaces:**
-- Consumes: nothing (no args).
-- Produces: `void HealthMonitor::resetMeasurementLatches() noexcept` — clears `flagBits`, `clean`, `clipConfirmed_`, the rail-run scratch + atomics, `recentClip_`, and `driftRun`; leaves `model_`/`capacity_`/`nominal_`, the level atomics (`inLm`/`inRm`/`outM`), `reachedGood_`, `blockCount`, and the FIFO counters untouched.
+- `static float HealthMonitor::blockPeak (const float* l, const float* r, int n) noexcept` — max |sample| over both channels (skips non-finite). No latching, no state.
+- `void HealthMonitor::resetMeasurementLatches() noexcept` — clears `clean`, all sticky flags EXCEPT `OsResampled`, `recentClip_`, the rail-run scratch + atomics, `prevL_/prevR_`, and `driftRun`; leaves `model_`/`capacity_`/`nominal_`, the level atomics, `reachedGood_`, `blockCount`, and the FIFO counters untouched.
 
 Steps:
 
 - [ ] Write the failing test, appended to `tests/test_healthmonitor.cpp`:
 
 ```cpp
-TEST_CASE("HealthMonitor: resetMeasurementLatches clears validity latches but keeps run config + telemetry") {
+TEST_CASE("HealthMonitor::blockPeak is the max |sample| over both channels, ignoring non-finite") {
+    std::vector<float> l { 0.1f, -0.7f, 0.2f }, r { 0.3f, 0.05f, -0.4f };
+    CHECK (eb::HealthMonitor::blockPeak (l.data(), r.data(), 3) == Catch::Approx (0.7f));
+    std::vector<float> ln { 0.2f, std::numeric_limits<float>::quiet_NaN(), 0.1f }, rn (3, 0.0f);
+    CHECK (eb::HealthMonitor::blockPeak (ln.data(), rn.data(), 3) == Catch::Approx (0.2f));  // NaN skipped
+}
+
+TEST_CASE("HealthMonitor: resetMeasurementLatches clears validity but keeps config + telemetry + OsResampled") {
     eb::HealthMonitor h; h.prepare (eb::EarsModel::EarsPro, 16384, 2.0);   // model + nominal ratio 2.0
 
-    // Establish telemetry + a healthy level + a confirmed clip (invalidating) before the sweep edge.
-    h.observeRenderBlock (256, 256, 2.0, 0.5);              // advances blockCount; sets ratio/fill
-    h.reportInLevels (0.10f, 0.02f, false, false);          // latches reachedGoodLevel
+    h.observeRenderBlock (256, 256, 2.0, 0.5);                 // advances blockCount; sets ratio/fill
+    h.reportInLevels (0.10f, 0.02f, false, false);             // latches reachedGoodLevel
+    h.reportRawRail (false);                                   // D2: per-run OsResampled guidance
     std::vector<float> rail (4, 1.0f), sil (4, 0.0f);
-    h.analyzeInputBlock (rail.data(), sil.data(), 4);       // confirmed clip -> invalidates
+    h.analyzeInputBlock (rail.data(), sil.data(), 4);          // confirmed clip -> invalidates
     REQUIRE_FALSE (h.cleanCapture());
     REQUIRE (eb::any (h.flags() & eb::HealthFlag::ClipConfirmed));
+    REQUIRE (eb::any (h.flags() & eb::HealthFlag::OsResampled));
 
     h.resetMeasurementLatches();   // the sweep-start edge: re-scope validity to the sweep
 
@@ -324,25 +405,45 @@ TEST_CASE("HealthMonitor: resetMeasurementLatches clears validity latches but ke
     CHECK_FALSE (eb::any (h.flags() & eb::HealthFlag::ClipConfirmed));
     CHECK_FALSE (h.clipConfirmed());
     CHECK (h.clipLongestRun() == 0);
-    // ...but run config + telemetry survive (so the GUI meters and the drift NOMINAL don't reset).
-    CHECK (h.reachedGoodLevel());                                   // kept
+    // ...but the per-run OS-SRC guidance + run config + telemetry survive.
+    CHECK (eb::any (h.flags() & eb::HealthFlag::OsResampled));            // D2 guidance kept
+    CHECK (h.reachedGoodLevel());                                        // kept
     CHECK (std::abs (h.snapshot().captureToRenderRatio - 2.0) < 1e-6);   // ratio telemetry kept
 
     // And a fresh in-sweep confirmed clip still invalidates after the re-scope.
     h.analyzeInputBlock (rail.data(), sil.data(), 4);
     CHECK_FALSE (h.cleanCapture());
     CHECK (eb::any (h.flags() & eb::HealthFlag::ClipConfirmed));
+    // The in-sweep clip message still carries the OS-resampled caveat (OsResampled survived).
+    CHECK (eb::invalidMeasurementMessage (h.flags()).contains ("OS-resampled"));
 }
 ```
+(Ensure `tests/test_healthmonitor.cpp` includes `<limits>`, `<cmath>`, and `"gui/ClipStatus.h"` for `invalidMeasurementMessage`; add whichever is missing.)
 
-- [ ] Run it to see it fail to compile (method missing): `./tools/dev.cmd cmake --build build --target eb_tests`
-- [ ] Declare the method in `src/audio/HealthMonitor.h`, directly after the `prepare(...)` declaration:
+- [ ] Run it to see it fail to compile (methods missing): `./tools/dev.cmd cmake --build build --target eb_tests`
+- [ ] Add `blockPeak` to `src/audio/HealthMonitor.h` (public, static, near the other peak helpers; needs `<cmath>` + `juce_core`):
 
 ```cpp
-    // D5: clear ONLY the measurement-validity latches (sticky flags, cleanCapture, clip-run state,
-    // drift run, edge clip), WITHOUT touching the per-run config (model/capacity/nominal) or the
-    // level/ratio telemetry the GUI is rendering. Called on the SweepActive rising edge so a clip or
-    // dropout that happened BEFORE the sweep doesn't brand the sweep invalid. RT-safe (atomics only).
+    // No-latch max |sample| over both channels for the CURRENT block (skips non-finite). Lets the
+    // engine feed MeasurementSession the current block's peak BEFORE analyzeInputBlock, so the sweep
+    // arms with zero lag and a clip ON the onset block is re-detected after the validity re-scope.
+    static float blockPeak (const float* l, const float* r, int n) noexcept {
+        float pk = 0.0f;
+        for (int i = 0; i < n; ++i) {
+            if (std::isfinite (l[i])) pk = juce::jmax (pk, std::abs (l[i]));
+            if (std::isfinite (r[i])) pk = juce::jmax (pk, std::abs (r[i]));
+        }
+        return pk;
+    }
+```
+
+- [ ] Declare `resetMeasurementLatches` in `src/audio/HealthMonitor.h`, after the `prepare(...)` declaration:
+
+```cpp
+    // D5: clear ONLY the measurement-validity latches (sticky flags EXCEPT the per-run OsResampled
+    // guidance, cleanCapture, clip-run + flat-run scratch, drift run, edge clip) WITHOUT touching the
+    // per-run config (model/capacity/nominal) or the level/ratio telemetry the GUI is rendering. Called
+    // on the sweep-onset edge so a clip/dropout BEFORE the sweep doesn't brand the sweep invalid.
     void resetMeasurementLatches() noexcept;
 ```
 
@@ -351,198 +452,152 @@ TEST_CASE("HealthMonitor: resetMeasurementLatches clears validity latches but ke
 ```cpp
 void HealthMonitor::resetMeasurementLatches() noexcept {
     clean.store (true);
-    flagBits.store (0);
+    // Clear every sticky flag EXCEPT the per-run OS-SRC guidance (OsResampled is raised once in start()
+    // after prepare() and reflects the whole run's stream; it must survive a mid-run sweep re-scope so
+    // the in-sweep clip caveat still fires).
+    flagBits.fetch_and (static_cast<unsigned> (HealthFlag::OsResampled));
     recentClip_.store (false);
     railRunL_ = railRunR_ = longestRun_ = 0;
+    prevL_ = prevR_ = 0.0f;                              // fix-slice flat-run scratch (mirror reset())
     railSamplesL_.store (0); railSamplesR_.store (0); longestRunA_.store (0);
     clipConfirmed_.store (false);
     driftRun.store (0);
-    // Deliberately NOT cleared: model_/capacity_/nominal_ (config), inLm/inRm/outM + cL/cR/cO
-    // (live meters), reachedGood_ (monotonic per run), blockCount (grace window), and the FIFO
-    // counters (xrunsA/droppedA) — re-scoping validity must not wipe the GUI's telemetry.
+    // Deliberately NOT cleared: model_/capacity_/nominal_ (config), inLm/inRm/outM + cL/cR/cO (live
+    // meters), reachedGood_ (monotonic per run), blockCount (grace window), the FIFO counters
+    // (xrunsA/droppedA), AND OsResampled (per-run guidance, preserved above).
 }
 ```
 
-- [ ] Run to pass: `./tools/dev.cmd ctest --test-dir build -R "resetMeasurementLatches" --output-on-failure`
+- [ ] Run to pass: `./tools/dev.cmd ctest --test-dir build -R "resetMeasurementLatches|blockPeak" --output-on-failure`
 - [ ] Run the full suite: `./tools/dev.cmd ctest --test-dir build --output-on-failure`
-- [ ] Commit: `HealthMonitor::resetMeasurementLatches: clear validity latches, keep config+telemetry (D5)` with the trailer.
+- [ ] Commit: `HealthMonitor: blockPeak + resetMeasurementLatches (preserve OsResampled + config + telemetry) (D5)` with the trailer.
 
 ---
 
 ### Task 3: Wire `MeasurementSession` into `AudioEngine` and scope latches to the sweep
 
-The capture callback already computes the per-block input peak inside `HealthMonitor::analyzeInputBlock`. Expose that peak (so the session is fed the same number the meter uses), drive the session in the capture callback, and on the SweepActive rising edge call `hm.resetMeasurementLatches()`. Snapshot the phase into `Health.session`. Reset the session at `start()` and in `prepareForTest()`.
+Feed the session the CURRENT block's peak (via `HealthMonitor::blockPeak`) BEFORE `analyzeInputBlock`; on the sweep-onset edge call `hm.resetMeasurementLatches()` (clearing pre-sweep latches) THEN analyze the current block (re-latching any clip ON the onset block). Mark the session Invalid in-measurement when `cleanCapture()` is false. Snapshot the phase into `Health.session`. `configure()` + `reset()` the session at run start.
 
-**Files:** `src/audio/HealthMonitor.h`, `src/audio/AudioEngine.h`, `src/audio/AudioEngine.cpp`, `tests/test_audioengine.cpp`
+**CRITICAL — do NOT revert the merged NaN fix.** The current capture callback and `processCaptureBlockForTest` use `if (graph.process(...)) hm.reportNonFinite();` (process returns bool, sanitizes input+output internally) and have NO `scanAndFlagNonFinite(mono)`/`clear`. INSERT the session lines around that body; do not replace it.
+
+**Files:** `src/audio/AudioEngine.h`, `src/audio/AudioEngine.cpp`, `tests/test_audioengine.cpp`
 
 **Interfaces:**
-- Consumes: `MeasurementSession::observeBlockPeak(float)`, `MeasurementSession::consumeSweepStarted()`, `HealthMonitor::resetMeasurementLatches()`, and a new `HealthMonitor::lastInputPeak()` returning the max of the two channel peaks observed in the most recent `analyzeInputBlock`.
-- Produces:
-  - `float HealthMonitor::lastInputPeak() const noexcept` (max of inLm/inRm, linear)
-  - `SessionPhase AudioEngine::sessionPhase() const noexcept`
-  - `bool AudioEngine::sweepActive() const noexcept` (for D6)
-  - `Health.session` populated in `AudioEngine::health()`.
+- `SessionPhase AudioEngine::sessionPhase() const noexcept` ; `bool AudioEngine::sweepActive() const noexcept` (for D6) ; `Health.session` populated in `health()`.
 
 Steps:
 
-- [ ] Write the failing seam tests, appended to `tests/test_audioengine.cpp`:
+- [ ] Write the failing seam tests, appended to `tests/test_audioengine.cpp` (a clip block is loud, so `kArmSustainBlocks` clip blocks arm on the 3rd; the onset block's clip is retained, ramp blocks before arming are re-scoped away):
 
 ```cpp
-TEST_CASE("AudioEngine seam: a confirmed clip BEFORE the sweep does not invalidate the sweep") {
+TEST_CASE("AudioEngine seam: session starts Idle and arms after a sustained loud run") {
     eb::AudioEngine e;
     e.prepareForTest (48000.0, 8);
     CHECK (e.sessionPhase() == eb::SessionPhase::Idle);
-
-    // Pre-sweep: a quiet door-slam-ish clip while still in Preflight (peak below the -12 dB start).
-    // Build a confirmed rail run but keep the block peak under the sweep-start threshold is impossible
-    // for a true rail run, so instead simulate the realistic case: a confirmed clip whose level is at
-    // the rail. The session is still in Preflight only if the peak stayed below kSweepStartLinear; a
-    // rail clip is above it, so this models the OTHER ordering: clip fires AS the sweep starts.
-    // The load-bearing guarantee we test is: the sweep-start edge re-scopes validity.
-    std::vector<float> rail { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f };
-    std::vector<float> sil (rail.size(), 0.0f);
-    std::vector<float> mono (rail.size(), 0.0f);
-
-    // Block 1: a clip at -50..-12 is impossible (a rail IS full scale), so feed a LOUD non-clipping
-    // block first to enter SweepActive, then re-scope happens on that edge.
-    std::vector<float> loud (8, 0.5f);   // -6 dBFS: above sweep-start, below the rail ceiling
-    e.processCaptureBlockForTest (loud.data(), sil.data(), mono.data(), 8);
+    std::vector<float> loud (8, 0.5f), sil (8, 0.0f), mono (8, 0.0f);
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i)
+        e.processCaptureBlockForTest (loud.data(), sil.data(), mono.data(), 8);
     CHECK (e.sessionPhase() == eb::SessionPhase::SweepActive);
-    CHECK (e.cleanCapture());            // a clean loud block stays valid
+    CHECK (e.cleanCapture());            // a clean loud run stays valid
 }
 
-TEST_CASE("AudioEngine seam: a pre-sweep clip latch is cleared by the sweep-start edge") {
+TEST_CASE("AudioEngine seam: a clip ON the sweep-onset block invalidates") {
     eb::AudioEngine e;
     e.prepareForTest (48000.0, 8);
-
-    // Force a confirmed clip while still Preflight by driving the HealthMonitor directly is not the
-    // seam's job; instead exercise the integration: a clip block (which is loud) arms the sweep AND
-    // clips in the SAME block. The edge clears the latch, then the SAME block's clip re-latches it,
-    // so a clip ON the first sweep block is correctly invalidating.
-    std::vector<float> rail { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f };
-    std::vector<float> sil (rail.size(), 0.0f), mono (rail.size(), 0.0f);
-    e.processCaptureBlockForTest (rail.data(), sil.data(), mono.data(), (int) rail.size());
-    CHECK (e.sessionPhase() == eb::SessionPhase::SweepActive);
+    // Two clean-loud ramp blocks, then a clip block that COMPLETES the arm: the onset block's clip is
+    // analyzed AFTER the latch re-scope, so it stands.
+    std::vector<float> loud (8, 0.5f), sil (8, 0.0f), mono (8, 0.0f);
+    std::vector<float> clip { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f };
+    e.processCaptureBlockForTest (loud.data(), sil.data(), mono.data(), 8);
+    e.processCaptureBlockForTest (loud.data(), sil.data(), mono.data(), 8);
+    e.processCaptureBlockForTest (clip.data(), sil.data(), mono.data(), (int) clip.size());  // arms + clips
+    CHECK (e.sessionPhase() == eb::SessionPhase::Invalid);
     CHECK (eb::any (e.health().flags & eb::HealthFlag::ClipConfirmed));
-    CHECK_FALSE (e.cleanCapture());      // a clip ON the sweep invalidates
-    CHECK (e.health().session == eb::SessionPhase::SweepActive);
+    CHECK_FALSE (e.cleanCapture());
 }
 ```
 
-  Note on ordering: `processCaptureBlockForTest` runs `analyzeInputBlock` (which latches the clip) BEFORE the session observes the peak (which fires the sweep-start edge and re-scopes). So the seam must clear-then-re-analyze ordering is handled in the production code below: the session is observed AFTER `analyzeInputBlock`, and the re-scope clears the latch; therefore a clip that occurs ON the first sweep block must be re-detected. To preserve "a clip on the very first sweep block still invalidates," the engine re-runs the clip detection's invalidation by checking the session edge and, when it fires, clearing the latch and then re-applying the just-computed clip verdict. We implement that by ordering the session BEFORE `analyzeInputBlock` for the peak decision but using the PRIOR block's peak — see the production code, which feeds the session the peak from the block it just analyzed and clears latches on the edge, then lets the NEXT block's analysis stand. The test above asserts the simplest correct behavior: a clip in the first sweep block invalidates. Achieve it by clearing latches on the edge BEFORE analyzing the current block (Task-3 production code does exactly this).
-
-- [ ] Add `lastInputPeak()` to `src/audio/HealthMonitor.h`, next to `clipLongestRun()`:
+- [ ] Add the session member + accessors to `src/audio/AudioEngine.h`. Add the include with the other audio includes:
 
 ```cpp
-    // Max of the two channel peaks from the most recent reportInLevels/analyzeInputBlock (linear).
-    // Feeds the MeasurementSession's level-threshold sweep boundary with the same number the meter uses.
-    float lastInputPeak() const noexcept {
-        return juce::jmax (inLm.load(), inRm.load()) / 1000.0f;
-    }
-```
-
-- [ ] Add the session member + accessors to `src/audio/AudioEngine.h`. Include the header at the top with the other audio includes:
-
-```cpp
-#include "audio/HealthMonitor.h"
 #include "audio/MeasurementSession.h"
 ```
 
-  Add the public accessors near `healthFlags()`/`cleanCapture()`:
+  Add the public accessors near `cleanCapture()`/`healthFlags()`:
 
 ```cpp
     // D5: the measurement-session phase (Idle/Preflight/SweepActive/Complete/Invalid). The GUI gates
     // its clean/invalid wording on this so pre-/post-sweep room events aren't scored as the sweep.
     SessionPhase sessionPhase() const noexcept { return session_.phase(); }
-    // D6 will read this to freeze the ClockBridge SRC ratio for exactly the sweep window.
-    bool sweepActive() const noexcept { return session_.sweepActive(); }
+    bool sweepActive()         const noexcept { return session_.sweepActive(); }   // D6 consumer
 ```
 
   Add the member alongside `HealthMonitor hm;`:
 
 ```cpp
-    HealthMonitor      hm;
-    MeasurementSession session_;   // D5: level-threshold sweep-window state machine (capture thread)
+    MeasurementSession session_;   // D5: re-armable level-threshold sweep-window state machine
 ```
 
-- [ ] Wire the capture callback in `src/audio/AudioEngine.cpp`. Reorder so the session is advanced and the latch is re-scoped BEFORE the current block's clip analysis, using the previous block's peak to detect the sweep edge — this guarantees a clip ON the first sweep block is detected fresh. Replace the body lines `e.hm.analyzeInputBlock (...)` ... `e.bridge.pushCapture (...)` in `CaptureCallback::audioDeviceIOCallbackWithContext`:
+- [ ] Wire the capture callback in `src/audio/AudioEngine.cpp`. INSERT the four session lines into the EXISTING body (current `CaptureCallback::audioDeviceIOCallbackWithContext`, AudioEngine.cpp ~31-48) — keep the null guard, the bool `graph.process`, and the dropped-frames delta block exactly as they are:
 
 ```cpp
         if (numIn < 2 || (int) mono.size() < numSamples) { e.hm.reportXrun(); return; }
         const float* l = in[0]; const float* r = in[1];
+        if (l == nullptr || r == nullptr) { e.hm.reportXrun(); return; }   // KEEP: per-pointer guard
 
-        // D5: drive the session FIRST with the peak the monitor published from the PRIOR block, then
-        // re-scope validity on the SweepActive rising edge BEFORE analyzing the current block — so a
-        // pre-sweep clip is dropped and a clip ON the first sweep block is detected fresh by the
-        // analyzeInputBlock below. (lastInputPeak() is the prior block's peak; the very first block's
-        // peak is 0, which only advances Idle->Preflight.)
-        e.session_.observeBlockPeak (e.hm.lastInputPeak());
-        if (e.session_.consumeSweepStarted())
-            e.hm.resetMeasurementLatches();
+        // D5: feed the session the CURRENT block's peak; on the genuine sweep onset re-scope validity
+        // BEFORE analyzing this block (so a pre-sweep room event is dropped and a clip ON the onset
+        // block is re-detected fresh by analyzeInputBlock below).
+        const float pk = eb::HealthMonitor::blockPeak (l, r, numSamples);
+        e.session_.observeBlockPeak (pk);
+        if (e.session_.consumeSweepStarted()) e.hm.resetMeasurementLatches();
 
-        e.hm.analyzeInputBlock (l, r, numSamples);             // peak + confirmed-clip-run + NaN/Inf (RAW input)
-        // If an invalidating condition fired during the sweep, latch the session Invalid too so the
-        // GUI's phase-gated wording matches cleanCapture(). (Outside the sweep, analyzeInputBlock's
-        // latch was just cleared on the edge, so this only fires for in-sweep events.)
-        if (e.session_.sweepActive() && ! e.hm.cleanCapture())
-            e.session_.markInvalid();
+        e.hm.analyzeInputBlock (l, r, numSamples);             // KEEP: detection (raw input)
+        // In-measurement only: an invalidating flag (clip/NaN/dropout/drift) latches the session Invalid
+        // so the GUI's phase-gated wording matches cleanCapture(). Single-writer: the capture thread is
+        // the only writer of session phase_; a render-side dropout sets cleanCapture=false and is
+        // re-derived here on the next capture block.
+        if (e.session_.inMeasurement() && ! e.hm.cleanCapture()) e.session_.markInvalid();
 
-        e.graph.process (l, r, mono.data(), numSamples);       // per-ear FIR + combine
-        if (e.hm.scanAndFlagNonFinite (mono.data(), numSamples))   // a non-finite sample would corrupt Dirac
-            juce::FloatVectorOperations::clear (mono.data(), numSamples);
+        if (e.graph.process (l, r, mono.data(), numSamples))   // KEEP: bool return, sanitizes in+out
+            e.hm.reportNonFinite();
         e.bridge.pushCapture (mono.data(), numSamples);
+        // KEEP UNCHANGED below: the droppedCaptureFrames delta block.
 ```
 
-  The render-side drop/drift latches also invalidate the session: in `RenderCallback::audioDeviceIOCallbackWithContext`, after the `observeRenderBlock(...)` calls, add one line that mirrors the capture-side invalidation:
+  Do NOT touch `RenderCallback` — the render side keeps its existing `observeRenderBlock(...)` calls and does NOT call `markInvalid()` (single-writer model; a render dropout is re-derived on the next capture block).
+
+- [ ] Snapshot the phase in `AudioEngine::health()` and reset+configure the session at run start. In `AudioEngine::health()` (after `auto h = hm.snapshot();`):
 
 ```cpp
-        if (e.usingAggregate_) e.hm.observeRenderBlock (numSamples, numSamples, 1.0, 0.5);
-        else                   e.hm.observeRenderBlock (numSamples, effGot, e.bridge.currentRatio(), e.bridge.fifoFill());
-        if (e.session_.sweepActive() && ! e.hm.cleanCapture())   // D5: a dropout/drift during the sweep invalidates it
-            e.session_.markInvalid();
-```
-
-- [ ] Snapshot the phase in `AudioEngine::health()` and reset the session at run start. In `AudioEngine::health()`:
-
-```cpp
-Health AudioEngine::health() const {
-    auto h = hm.snapshot();
     h.session = session_.phase();   // D5: surface the measurement-session phase to the GUI
-    return h;
-}
 ```
 
-  In `start()`, reset the session next to `hm.prepare(...)` / `bridge.reset()` (so each run begins Idle):
+  In `start()`, next to the existing `hm.prepare(...)` / `session`-adjacent reset (the same spot where `hm.prepare` and `bridge.reset()` run; `cap`/`capRate` are in scope there):
 
 ```cpp
-    hm.prepare (inputId.model, cap, capRate / juce::jmax (1.0, renRate));   // reset + size + NOMINAL ratio (drift detection)
-    session_.reset();   // D5: fresh measurement session each run (Idle -> Preflight -> SweepActive ...)
-    bridge.reset();
+    session_.configure (cap, capRate);   // D5: size the terminal-silence window for this block/rate
+    session_.reset();                     // fresh measurement session each run (Idle -> Preflight -> ...)
 ```
 
-  In `prepareForTest(...)`, reset the session so the seam mirrors a run:
+  In `prepareForTest(...)`, configure + reset so the seam mirrors a run:
 
 ```cpp
-void AudioEngine::prepareForTest (double sampleRate, int block) {
-    activeRate = sampleRate; blockSize = block;
-    graph.prepare (sampleRate, block);
-    hm.prepare (eb::EarsModel::Ears, juce::jmax (8192, block * 4));   // reset + size so the seam mirrors a run
+    session_.configure (block, sampleRate);
     session_.reset();
-}
 ```
 
-  And make the seam drive the session, so seam tests exercise the same path. In `processCaptureBlockForTest(...)`, mirror the capture-callback ordering:
+  And make the seam drive the session, mirroring the capture-callback ordering. Update `processCaptureBlockForTest(...)` (current form is `hm.analyzeInputBlock(...); if (graph.process(...)) hm.reportNonFinite();`):
 
 ```cpp
 void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR,
                                               float* outMono, int numSamples) {
-    session_.observeBlockPeak (hm.lastInputPeak());        // prior block's peak drives the sweep edge
+    const float pk = eb::HealthMonitor::blockPeak (inL, inR, numSamples);
+    session_.observeBlockPeak (pk);
     if (session_.consumeSweepStarted()) hm.resetMeasurementLatches();
-    hm.analyzeInputBlock (inL, inR, numSamples);           // same analysis as the capture callback
-    if (session_.sweepActive() && ! hm.cleanCapture()) session_.markInvalid();
-    graph.process (inL, inR, outMono, numSamples);
-    if (hm.scanAndFlagNonFinite (outMono, numSamples))
-        juce::FloatVectorOperations::clear (outMono, numSamples);
+    hm.analyzeInputBlock (inL, inR, numSamples);
+    if (session_.inMeasurement() && ! hm.cleanCapture()) session_.markInvalid();
+    if (graph.process (inL, inR, outMono, numSamples)) hm.reportNonFinite();
 }
 ```
 
@@ -555,29 +610,25 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
 
 ### Task 4: GUI status line gated on the session phase
 
-`updateStatusLine` currently scores clean/invalid against the whole run. Gate it on the session phase: before the sweep show a neutral "waiting" line; during/after the sweep keep the existing clean/invalid/output-clip/low-level verdict. The device-loss/Error path and the silent/low-level guidance stay; we only insert the phase gate.
+Gate the Running-branch verdict on the session phase: before the sweep, a neutral "waiting" line; in-sweep, the existing clean/invalid/output-clip/low-level verdict; at Complete, an honest sweep-scoped all-clear (with the OS-resampled caveat when applicable). The device-loss/Error path and the cleanCapture-first ordering stay.
 
 **Files:** `src/gui/MainComponent.cpp`
 
-**Interfaces:**
-- Consumes: `engine.health().session` (the `SessionPhase` snapshot), the existing `engine.health()` flags/cleanCapture.
-- Produces: status-line text + colour per phase. No new members; reuses `Theme::ok()/warn()/danger()/textDim()` and the existing `silentTicks_`/`lowLevelTicks_` debounce.
+**Anchor:** the REAL current Running chain in `updateStatusLine()` has FOUR else-if rungs after the `!h.cleanCapture` rung, in order: (1) `!h.cleanCapture` -> `invalidMeasurementMessage(h.flags)` (danger), (2) `any(h.flags & HealthFlag::ClipOutput)` (warn), (3) `silentTicks_ >= kSilentHoldTicks` -> "no input signal" (warn), (4) `lowLevelTicks_ >= kLowLevelHoldTicks` -> "level low" (warn), else "Running - clean" (ok). Read the file and quote that exact block as the replace target. `invalidMeasurementMessage(h.flags)` returns `juce::String` and `Label::setText` takes `juce::String`, so the existing call is correct.
 
 Steps:
 
-- [ ] In `src/gui/MainComponent.cpp`, in the `st == EngineStatus::Running` branch of `updateStatusLine()`, insert a phase gate. Replace the existing Running block (the `if (! h.cleanCapture) { ... } else if (...ClipOutput...) ... else { "Running - clean" }` chain) with:
+- [ ] In `src/gui/MainComponent.cpp`, replace the Running chain with the phase-gated version (insert the Idle/Preflight rung ABOVE the ClipOutput/silent/low-level warnings — those are suppressed before the sweep arms, intended — and add the Complete rung):
 
 ```cpp
     if (st == EngineStatus::Running) {
         const auto h = engine.health();
-        // D5: an invalidating condition is reported the instant it latches (the user must know the
-        // sweep is ruined immediately), regardless of phase.
+        // An invalidating condition is reported the instant it latches, regardless of phase.
         if (! h.cleanCapture) {
             statusLine.setText (eb::invalidMeasurementMessage (h.flags), juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::danger());
         } else if (h.session == eb::SessionPhase::Idle || h.session == eb::SessionPhase::Preflight) {
-            // Before the sweep: clip/integrity validity is NOT yet scoped to anything, so don't claim
-            // "clean". Tell the user we're armed and waiting for Dirac to start its sweep.
+            // Before the sweep: validity isn't scoped to anything yet, so don't claim "clean".
             statusLine.setText ("Running - waiting for the Dirac sweep...", juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::textDim());
         } else if (any (h.flags & HealthFlag::ClipOutput)) {
@@ -590,73 +641,51 @@ Steps:
             statusLine.setText ("Running - level low: turn your amp up to the green band", juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::warn());
         } else if (h.session == eb::SessionPhase::Complete) {
-            // The sweep ended and nothing invalidated it: an honest, sweep-scoped all-clear.
-            statusLine.setText ("Sweep complete - no clipping or dropouts on the sweep", juce::dontSendNotification);
+            juce::String msg = "Sweep captured - no clipping or dropouts detected";
+            if (any (h.flags & HealthFlag::OsResampled)) msg += " (OS-resampled - approximate)";
+            statusLine.setText (msg, juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::ok());
         } else {
-            // SweepActive, clean so far.
             statusLine.setText ("Capturing the Dirac sweep - clean so far", juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::ok());
         }
     } else if (st == EngineStatus::Error) {
 ```
 
-- [ ] Build the GUI (the test target links `eb_gui`, so building `eb_tests` compiles it): `./tools/dev.cmd cmake --build build --target eb_tests`
-- [ ] Run the full suite to confirm the GUI change compiled and nothing regressed: `./tools/dev.cmd ctest --test-dir build --output-on-failure`
+  (Match the real surrounding code: keep the exact `Theme::` accessor names, the `any(...)`/`HealthFlag` qualification, and the `silentTicks_`/`lowLevelTicks_`/`kSilentHoldTicks`/`kLowLevelHoldTicks` names the file already uses. Adjust only if the real names differ.)
+
+- [ ] Build (the test target links `eb_gui`): `./tools/dev.cmd cmake --build build --target eb_tests`
+- [ ] Run the full suite: `./tools/dev.cmd ctest --test-dir build --output-on-failure`
 - [ ] Commit: `MainComponent: gate the status line on the measurement-session phase (D5)` with the trailer.
 
 ---
 
-### Task 5: Edge tests — pre/post-sweep events are excluded, in-sweep events score
+### Task 5: Edge tests — pre/post-sweep events excluded, two-sweep scoping correct
 
-A focused integration test driving the seam across a realistic pre-sweep -> sweep -> post-sweep sequence, asserting the scoping is correct end-to-end (the load-bearing D5 guarantee).
+Focused seam tests proving the scoping end-to-end (the load-bearing D5 guarantee), including the two-sweep re-arm.
 
 **Files:** `tests/test_audioengine.cpp`
 
-**Interfaces:**
-- Consumes: `processCaptureBlockForTest`, `sessionPhase()`, `health()`, `cleanCapture()`.
-- Produces: assertions only.
-
 Steps:
 
-- [ ] Append the scoping test to `tests/test_audioengine.cpp`:
+- [ ] Append the scoping tests to `tests/test_audioengine.cpp`:
 
 ```cpp
-TEST_CASE("AudioEngine seam: clip BEFORE the sweep is dropped; clip DURING the sweep invalidates") {
+TEST_CASE("AudioEngine seam: a clip DURING the sweep invalidates and latches the session Invalid") {
     eb::AudioEngine e;
     e.prepareForTest (48000.0, 8);
-
-    auto block = [&] (std::vector<float> l) {
+    auto run = [&] (std::vector<float> l) {
         std::vector<float> r (l.size(), 0.0f), mono (l.size(), 0.0f);
         e.processCaptureBlockForTest (l.data(), r.data(), mono.data(), (int) l.size());
     };
-    auto loud  = [] { return std::vector<float> (8, 0.5f); };               // -6 dBFS, no rail run
-    auto quiet = [] { return std::vector<float> (8, 0.0f); };
-    auto clip  = [] { return std::vector<float> { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f }; };
+    std::vector<float> loud (8, 0.5f);
+    std::vector<float> clip { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f };
 
-    // 1) Preflight quiet, then a PRE-sweep clip is below the sweep start? No — a rail clip is loud, so
-    //    it would itself arm the sweep. The honest pre-sweep exclusion case is a NON-rail loud event
-    //    BEFORE the sweep cannot be a "clip" (a clip == rail == full scale). The defensible D5 claim
-    //    the seam proves is: any latch accrued while Idle/Preflight is cleared the instant the sweep
-    //    arms. We model that by latching a NonFinite (corruption) in Preflight, then arming the sweep.
-
-    // Drive one Preflight block whose processed output is corrupted (NonFinite invalidates), but the
-    // INPUT peak stays sub-threshold so the session is still Preflight.
-    {
-        std::vector<float> l (8, 0.10f), r (8, 0.0f), mono (8, 0.0f);
-        e.processCaptureBlockForTest (l.data(), r.data(), mono.data(), 8);   // peak ~ -20 dB: Preflight
-    }
-    // A corruption flagged while Preflight (simulate by re-using the scan via a NaN-producing block is
-    // out of the seam's reach; instead assert the phase and that we are still clean+Preflight).
-    CHECK (e.sessionPhase() == eb::SessionPhase::Preflight);
-
-    // 2) Sweep arms on a loud clean block -> the edge clears any pre-sweep latch.
-    block (loud());
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i) run (loud);  // arm
     CHECK (e.sessionPhase() == eb::SessionPhase::SweepActive);
     CHECK (e.cleanCapture());
 
-    // 3) A clip DURING the sweep invalidates and latches the session Invalid.
-    block (clip());
+    run (clip);                                                                      // mid-sweep clip
     CHECK_FALSE (e.cleanCapture());
     CHECK (eb::any (e.health().flags & eb::HealthFlag::ClipConfirmed));
     CHECK (e.health().session == eb::SessionPhase::Invalid);
@@ -665,43 +694,68 @@ TEST_CASE("AudioEngine seam: clip BEFORE the sweep is dropped; clip DURING the s
 TEST_CASE("AudioEngine seam: a clean sweep then sustained silence reaches Complete and stays clean") {
     eb::AudioEngine e;
     e.prepareForTest (48000.0, 8);
-    auto block = [&] (float v) {
+    auto run = [&] (float v) {
         std::vector<float> l (8, v), r (8, 0.0f), mono (8, 0.0f);
         e.processCaptureBlockForTest (l.data(), r.data(), mono.data(), 8);
     };
-    block (0.0f);                 // Idle -> Preflight (peak 0)
-    block (0.5f);                 // prior-peak 0 keeps Preflight; this block's peak publishes 0.5
-    block (0.5f);                 // prior-peak 0.5 -> SweepActive arms here
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i) run (0.5f);   // arm
     CHECK (e.sessionPhase() == eb::SessionPhase::SweepActive);
-    // Sustained silence after signal -> Complete. Feed one extra loud block so lastInputPeak is loud,
-    // then enough quiet blocks for the silence run; the session reads the PRIOR block's peak each call.
-    for (int i = 0; i < eb::MeasurementSession::kSilenceCompleteBlocks + 2; ++i) block (0.0f);
+    // prepareForTest configured the silence window for block=8 @ 48k (a large block count); drive enough
+    // quiet blocks to cross it. Use the session's configured need via kSilenceCompleteSeconds.
+    const int need = (int) std::lround (eb::MeasurementSession::kSilenceCompleteSeconds * 48000.0 / 8.0) + 2;
+    for (int i = 0; i < need; ++i) run (0.0f);
     CHECK (e.sessionPhase() == eb::SessionPhase::Complete);
-    CHECK (e.cleanCapture());     // a clean sweep stays valid through Complete
+    CHECK (e.cleanCapture());
+}
+
+TEST_CASE("AudioEngine seam: the RIGHT-earcup sweep after a gap is still scored (no false-clean)") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 8);
+    auto runL = [&] (std::vector<float> l) {
+        std::vector<float> r (l.size(), 0.0f), mono (l.size(), 0.0f);
+        e.processCaptureBlockForTest (l.data(), r.data(), mono.data(), (int) l.size());
+    };
+    std::vector<float> loud (8, 0.5f), quiet (8, 0.0f);
+    std::vector<float> clip { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f };
+
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i) runL (loud);  // LEFT sweep
+    const int need = (int) std::lround (eb::MeasurementSession::kSilenceCompleteSeconds * 48000.0 / 8.0) + 2;
+    for (int i = 0; i < need; ++i) runL (quiet);                                      // long inter-sweep gap
+    CHECK (e.sessionPhase() == eb::SessionPhase::Complete);                           // provisional
+    CHECK (e.cleanCapture());
+
+    // RIGHT earcup sweep arms again; a clip on it must STILL invalidate (the bug D5 must not have).
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks - 1; ++i) runL (loud);
+    runL (clip);
+    CHECK_FALSE (e.cleanCapture());
+    CHECK (e.health().session == eb::SessionPhase::Invalid);
 }
 ```
-
-  Note: because the engine feeds the session the PRIOR block's peak (`lastInputPeak()`), the seam needs one extra loud block to arm `SweepActive` (the peak is published by `analyzeInputBlock` and read on the next call). The tests above account for that one-block lag explicitly. This is intentional and harmless in production: at a 512-sample / 48 kHz block the lag is ~11 ms, far inside the sweep's quiet lead-in.
+(Ensure `tests/test_audioengine.cpp` includes `<cmath>` for `std::lround`.)
 
 - [ ] Build: `./tools/dev.cmd cmake --build build --target eb_tests`
 - [ ] Run the scoping tests: `./tools/dev.cmd ctest --test-dir build -R "AudioEngine seam" --output-on-failure`
 - [ ] Run the full suite: `./tools/dev.cmd ctest --test-dir build --output-on-failure`
-- [ ] Commit: `Tests: pre/post-sweep clip scoping + sweep-to-Complete (D5)` with the trailer.
+- [ ] Commit: `Tests: pre/post-sweep clip scoping + two-sweep re-arm (D5)` with the trailer.
 
 ---
 
+## Final verification (run before finishing)
+
+- [ ] Full suite green: `./tools/dev.cmd ctest --test-dir build --output-on-failure`.
+- [ ] App builds: `./tools/dev.cmd cmake --build build --target EarsBridge`.
+- [ ] **On-device ratification (not headless-testable, like the D2 smoke):** run a real Dirac measurement through the EARS and confirm (a) the status shows "waiting for the Dirac sweep" before Dirac starts, "Capturing the Dirac sweep" during, and "Sweep captured" after BOTH earcups; (b) a deliberately hot level shows the invalid clip message; (c) the session does NOT prematurely show Complete between the left and right sweeps (if it does, raise `kSilenceCompleteSeconds`); (d) a correctly-leveled sweep actually arms (if it sits on "waiting", lower `kSweepStartLinear`). Note the observed inter-sweep gap + sweep peak so the two constants can be ratified.
+
+Then use **superpowers:finishing-a-development-branch**.
+
 ## Self-review
 
-**Spec coverage (audit finding D5 / R18, §7 step 3, §10).**
-- *"Add a MeasurementSession state machine (Idle -> Preflight -> SweepActive -> Complete/Invalid)"* — Task 1 creates `eb::SessionPhase { Idle, Preflight, SweepActive, Complete, Invalid }` and the pure `MeasurementSession`.
-- *"Reset the clip/integrity latches at SweepActive entry"* — Task 2 adds `HealthMonitor::resetMeasurementLatches()` (validity-only, config preserved); Task 3 calls it on `consumeSweepStarted()` (the SweepActive rising edge) in both the capture callback and the headless seam.
-- *"retain during-sweep events; ignore pre/post-sweep ones"* — pre-sweep latches are cleared on the sweep-start edge (Task 3); during-sweep invalidations latch the session `Invalid` via `markInvalid()` from both capture and render paths; post-sweep silence advances to `Complete` (terminal — `observeBlockPeak` ignores later peaks). Task 5 proves the exclusion end-to-end.
-- *"Sweep boundary via a LEVEL THRESHOLD (input rises above a start threshold -> SweepActive; sustained silence after signal -> Complete)"* — `kSweepStartLinear` (-12 dBFS) arms SweepActive; `kSilenceFloorLinear` (-50 dBFS) + `kSilenceCompleteBlocks` end it. The alternative ("an explicit 'Arm measurement' button") is named in the Design decision note and rejected with a reason, with the enum left open to add it later.
-- *"D6 (frozen SRC ratio) will consume the SweepActive signal you define"* — `AudioEngine::sweepActive()` and `MeasurementSession::sweepActive()` are exposed precisely for D6; comments in both headers point to it.
-- GUI wording (§10 / R20 spirit): Task 4 stops claiming "clean" before the sweep ("waiting for the Dirac sweep..."), labels the in-sweep state honestly ("Capturing the Dirac sweep - clean so far"), and only claims an all-clear scoped to the sweep at `Complete`.
+**Spec coverage (audit D5 / R18, §7 step 3, §10).** `MeasurementSession{Idle,Preflight,SweepActive,Complete,Invalid}` (Task 1); latch re-scope on the genuine sweep onset via `resetMeasurementLatches()` (Task 2) called on `consumeSweepStarted()` (Task 3); pre-sweep events cleared on the edge, in-sweep events latch `Invalid`, post-signal silence -> Complete; **the two-sweep Dirac reality is handled** (re-armable Complete keeps both earcups in one validity window — Task 1 + Task 5 prove the right earcup still scores). Level-threshold boundary with a sustained-arm gate; the "Arm measurement" button alternative remains addable. GUI stops claiming "clean" before the sweep (Task 4).
 
-**Placeholder scan.** No `TBD`, "add error handling", "handle edge cases", or "similar to Task N". Every task carries the actual enum, signatures, method bodies, and test code in fenced blocks, grounded in the real files (`EngineTypes.h`, `HealthMonitor.{h,cpp}`, `AudioEngine.{h,cpp}`, `MainComponent.cpp`, `tests/CMakeLists.txt`, the existing Catch2 style in `test_healthmonitor.cpp`/`test_audioengine.cpp`).
+**Integration with merged work.** The capture callback + seam keep the fix-slice NaN form (`if (graph.process(...)) reportNonFinite()`, no `scanAndFlagNonFinite`); `resetMeasurementLatches` preserves D2's `OsResampled` and resets the fix-slice `prevL_/prevR_`; Task 4 anchors the real 4-rung `updateStatusLine` and uses the `juce::String` `invalidMeasurementMessage`.
 
-**Type consistency.** `SessionPhase` lives in `EngineTypes.h` alongside `EngineStatus` and is used by `MeasurementSession`, `Health.session`, `AudioEngine::sessionPhase()`, and `MainComponent`. `MeasurementSession` stores its phase as `std::atomic<int>` and round-trips through `static_cast<SessionPhase>` exactly like `AudioEngine::engineStatus` does for `EngineStatus`, and like `verifyResult_` does for `LrResult` — matching the existing lock-free-snapshot idiom. The session-active boolean is exposed as `sweepActive()` on both classes with identical semantics. Thresholds are `float` linear constants consistent with `HealthMonitor::kClipLinear`/`kLowLevelLinear`; the silence floor is documented as the same -50 dBFS value (`0.00316f`) to avoid a silent divergence.
+**Placeholder scan.** No TBD / "add error handling" / "similar to Task N". Every task carries real enums, signatures, bodies, and tests grounded in current `main`.
 
-**RT-safety.** `MeasurementSession` uses only `std::atomic<int>/<bool>` and plain `int`/`bool` scratch written solely on the capture thread (same discipline as `HealthMonitor`'s `railRun*_` scratch and `LrVerify`). `observeBlockPeak`, `consumeSweepStarted`, `markInvalid`, and `resetMeasurementLatches` allocate nothing, take no locks, do no I/O, and are `noexcept`. The capture/render callbacks gain only atomic stores/loads and a branch — no new allocation, lock, syscall, logging, or exception.
+**Type consistency.** `SessionPhase` in `EngineTypes.h`; `MeasurementSession` round-trips its phase through `std::atomic<int>` + `static_cast<SessionPhase>` like `AudioEngine::engineStatus`/`LrVerify`; thresholds are `float` linear constants consistent with `HealthMonitor::kClipLinear`; the silence floor matches the -50 dBFS level floor by intent.
+
+**RT-safety.** `MeasurementSession` uses only `std::atomic<int>/<bool>` + plain capture-thread scratch, all `noexcept`, no alloc/lock/IO. `blockPeak` is a plain loop. The capture callback gains only atomic ops + a branch. `phase_` is single-writer (capture thread); the GUI reads it via `phase()`. The render callback is unchanged (no `markInvalid`), so there is no two-writer race.
