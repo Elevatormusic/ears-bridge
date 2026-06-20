@@ -326,6 +326,14 @@ MainComponent::~MainComponent() {
 
 double MainComponent::activeRate() const { return settings.sampleRate(); }
 
+bool MainComponent::isRealEarsWithCable() const noexcept {
+    const auto in  = inputPicker.selectedDevice();
+    const auto out = outputPicker.selectedDevice();
+    if (! in || ! out) return false;
+    const bool realEars = (in->model == EarsModel::Ears || in->model == EarsModel::EarsPro);
+    return realEars && out->isVirtualSink;
+}
+
 void MainComponent::refreshDeviceLists() {
     inputPicker.setDevices  (engine.inputDevices(),  settings.inputKey());
     outputPicker.setDevices (engine.outputDevices(), settings.outputKey());

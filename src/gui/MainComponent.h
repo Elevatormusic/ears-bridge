@@ -44,6 +44,9 @@ private:
     void updateStatusLine();
     void updateActiveEarIndicator (bool silent);   // AutoPerEar "capturing Left/Right" caption + meter accent
     void updateStartGate();          // enable Start only when both ear cals are loaded
+    // Returns true when a detected EARS input and a virtual-sink output are both
+    // selected. Used by updateStartGate to enforce the combine-mode gate (D7 / R17).
+    bool isRealEarsWithCable() const noexcept;
     void syncPlotScales();           // lock both ear plots to one shared dB scale
     void applyTextColours();         // (re)apply theme-dependent label colours (live light/dark)
     void applyTitleBarTheme();       // match the OS title bar to the active mode (Windows)
