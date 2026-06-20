@@ -119,6 +119,14 @@ public:
                                      float* outMono, int numSamples);
     bool bridgeSweepFrozen() const noexcept { return bridge.sweepActive(); }   // D6 test accessor
 
+    // ---- R22 callback-level test seam ----
+    // Prepares the SAME engine state start() builds (graph + ClockBridge primed to target + HealthMonitor),
+    // sizes the production callbacks' scratch, and lets a test drive the REAL CaptureCallback/RenderCallback
+    // bodies with synthetic buffers. No device I/O, no new thread. nominalRatio is sampleRate:sampleRate (1.0).
+    void prepareCallbacksForTest (double sampleRate, int blockSize, int fifoCapacity);
+    void driveCaptureCallback (const float* inL, const float* inR, int numSamples);
+    void driveRenderCallback  (float* outL, float* outR, int numSamples);
+
 private:
     void rescanDevices();
     static int nextPow2 (int v);

@@ -9,6 +9,7 @@ add_executable(eb_tests
     test_healthmonitor.cpp
     test_devicemanager.cpp
     test_audioengine.cpp
+    test_audioengine_callbacks.cpp
     test_settings.cpp
     test_plotmath.cpp
     test_ratemenu.cpp

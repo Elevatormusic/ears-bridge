@@ -404,4 +404,44 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
     if (graph.process (inL, inR, outMono, numSamples)) hm.reportNonFinite();
 }
 
+// ---- R22 callback-level test seam -----------------------------------------------------
+// Build the same state start() does (without devices), then drive the production callbacks.
+void AudioEngine::prepareCallbacksForTest (double sampleRate, int block, int fifoCapacity) {
+    activeRate = sampleRate; blockSize = block;
+    const int cap = juce::jmax (1024, fifoCapacity);
+
+    graph.prepare (sampleRate, block);
+    bridge.prepare (sampleRate, sampleRate, 1, cap);   // clears the D6 freeze state
+    hm.prepare (eb::EarsModel::Ears, cap, 1.0);        // nominal capture:render ratio == 1.0 (equal rates)
+    session_.configure (block, sampleRate);            // D5: size the silence window for this block/rate
+    session_.reset();                                  // D5: fresh session each run (Idle -> Preflight -> ...)
+    bridge.reset();
+    bridge.primeToTarget();                            // mirror start(): prime to the PI setpoint, no startup underrun
+    bridge.setSweepActive (false);                     // D6: a fresh run free-runs; the session arms the sweep later
+
+    // Reset the per-callback diff baselines exactly as start() does (a stale value would suppress
+    // underrun detection or inject a spurious dropped-frame delta on the first driven block).
+    lastUnderruns_      = 0;
+    lastDroppedCapture_ = 0;
+    usingAggregate_     = false;                   // exercise the Windows two-device path (real observeRenderBlock)
+
+    // Size the production callbacks' scratch (audioDeviceAboutToStart normally does this from the device).
+    captureCb->mono.assign ((size_t) juce::jmax (1, block), 0.0f);
+    renderCb->mono.assign  ((size_t) juce::jmax (1, block), 0.0f);
+
+    engineStatus.store ((int) EngineStatus::Running);   // so audioDeviceStopped()-style guards behave as in a run
+}
+
+void AudioEngine::driveCaptureCallback (const float* inL, const float* inR, int numSamples) {
+    const float* in[2] = { inL, inR };
+    juce::AudioIODeviceCallbackContext ctx;
+    captureCb->audioDeviceIOCallbackWithContext (in, 2, nullptr, 0, numSamples, ctx);
+}
+
+void AudioEngine::driveRenderCallback (float* outL, float* outR, int numSamples) {
+    float* out[2] = { outL, outR };
+    juce::AudioIODeviceCallbackContext ctx;
+    renderCb->audioDeviceIOCallbackWithContext (nullptr, 0, out, 2, numSamples, ctx);
+}
+
 } // namespace eb
