@@ -666,6 +666,13 @@ void MainComponent::updateStatusLine() {
             // clamp stops a cable over, but it distorts the sweep -- flag it, don't pass it as "clean".
             statusLine.setText ("Output clipping - lower the level or avoid Sum", juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::warn());
+        } else if (h.session == SessionPhase::Complete) {
+            // Sweep finished clean: an honest sweep-scoped all-clear (no dropouts / clipping seen during
+            // the captured sweep), with the OS-resampled caveat when the input ran through OS SRC.
+            juce::String msg = "Sweep captured - no clipping or dropouts detected";
+            if (any (h.flags & HealthFlag::OsResampled)) msg += " (OS-resampled - approximate)";
+            statusLine.setText (msg, juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::ok());
         } else if (silentTicks_ >= kSilentHoldTicks) {
             // "clean" only means no dropouts -- a connected-but-silent EARS reads clean too. After ~2 s
             // of genuinely below-floor input (debounced in timerCallback so normal gaps don't flicker),
@@ -678,13 +685,6 @@ void MainComponent::updateStatusLine() {
             // Point the user at the meter target band, not an absolute dB they can't read.
             statusLine.setText ("Running - level low: turn your amp up to the green band", juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::warn());
-        } else if (h.session == SessionPhase::Complete) {
-            // Sweep finished clean: an honest sweep-scoped all-clear (no dropouts / clipping seen during
-            // the captured sweep), with the OS-resampled caveat when the input ran through OS SRC.
-            juce::String msg = "Sweep captured - no clipping or dropouts detected";
-            if (any (h.flags & HealthFlag::OsResampled)) msg += " (OS-resampled - approximate)";
-            statusLine.setText (msg, juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::ok());
         } else {
             // In-sweep (SweepActive), no warning latched: clean so far.
             statusLine.setText ("Capturing the Dirac sweep - clean so far", juce::dontSendNotification);
