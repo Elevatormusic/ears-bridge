@@ -15,9 +15,10 @@ public:
     void setFirPair (juce::AudioBuffer<float> leftIr, juce::AudioBuffer<float> rightIr);
     void clearFir (int channel);   // load a unit-impulse (passthrough) IR + reset that ear's headroom
 
-    // Best-effort confirmation that BOTH convolutions have the cal FIR loaded (the JUCE async background
-    // load has completed AND a process() block has swapped the new engine in). Used by the engine's
-    // calibrationApplied() readiness check; not the sole gate (the generation-id match owns that).
+    // Best-effort poll: true once BOTH convolutions report the loaded cal IR via getCurrentIRSize (which
+    // only updates after a process() block has run, so it lags the install by one block). RESERVED for the
+    // deferred in-stream readiness barrier; it is NOT consulted by calibrationApplied() (that gate is owned
+    // entirely by the generation-id match, requested == built == applied).
     // `taps` is the expected FIR length: we require getCurrentIRSize() >= taps, NOT just > 0, because a
     // freshly prepared() Convolution already holds JUCE's DEFAULT 1-sample passthrough IR (size 1 before
     // any setFir/setFirPair) -- a > 0 check would wrongly report that default as "loaded". In our usage

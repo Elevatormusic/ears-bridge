@@ -630,8 +630,9 @@ void MainComponent::updateStartGate() {
 
 void MainComponent::updateControlsEnabled() {
     // Defensive GUI freeze: while capturing, a cal/rate/mode/FIR change must not race the running
-    // engine. The handlers already early-return while Running and the engine backstops reconfig
-    // (Task 6); this greys the affordances so the freeze is visible, then re-enables when stopped.
+    // engine. These controls are DISABLED while Running so their handlers cannot fire at all (a disabled
+    // JUCE control emits no onChange/onClick) -- that, not a per-handler Running guard, is what makes them
+    // unreachable mid-capture; the engine's reconfigAllowed() no-op (Task 6) backstops the FIR-pair path.
     const bool frozen = engine.status() == EngineStatus::Running;
     leftCal.setEnabled            (! frozen);   // greys the slot (Replace/Remove) — no dedicated per-button API
     rightCal.setEnabled           (! frozen);
@@ -752,8 +753,12 @@ void MainComponent::updateStatusLine() {
     } else if (leftCal.hasCal() && rightCal.hasCal()) {
         // Both files are loaded but no valid generation is applied yet: either the validator rejected the
         // pair (surface the reason in warn colour) or the build is still in flight (dim "Preparing...").
-        const auto diag = engine.calibrationDiagnostic();
-        if (diag.isNotEmpty()) {
+        // While a new build is in flight, calibrationDiagnostic() still reflects the PREVIOUS generation, so
+        // only trust it once the build has caught up (requested == built) -- otherwise a stale reject reason
+        // could flash for a pair that is actually valid and still building.
+        const bool building = engine.requestedGeneration() != engine.builtGeneration();
+        const auto diag     = engine.calibrationDiagnostic();
+        if (! building && diag.isNotEmpty()) {
             statusLine.setText (diag, juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::warn());
         } else {
