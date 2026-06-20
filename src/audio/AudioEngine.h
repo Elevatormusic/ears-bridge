@@ -3,6 +3,7 @@
 #include "audio/DeviceManager.h"
 #include "audio/ClockBridge.h"
 #include "audio/HealthMonitor.h"
+#include "audio/MeasurementSession.h"
 #include "audio/EngineTypes.h"
 #include "audio/ProcessingGraph.h"
 #include "audio/CombineMode.h"
@@ -63,6 +64,11 @@ public:
     bool           cleanCapture() const noexcept;
     DipGainProfile gainProfile() const noexcept;   // for the "lower/raise DIP gain" hint
 
+    // D5: the measurement-session phase (Idle/Preflight/SweepActive/Complete/Invalid). The GUI gates
+    // its clean/invalid wording on this so pre-/post-sweep room events aren't scored as the sweep.
+    SessionPhase sessionPhase() const noexcept { return session_.phase(); }
+    bool sweepActive()         const noexcept { return session_.sweepActive(); }   // D6 consumer
+
     // Edge-triggered raw-input clip since the last poll (self-clearing; drives the GUI gain warning).
     bool consumeRecentInputClip() noexcept;
 
@@ -120,6 +126,7 @@ private:
     ProcessingGraph    graph;
     ClockBridge        bridge;
     HealthMonitor      hm;
+    MeasurementSession session_;   // D5: re-armable level-threshold sweep-window state machine
 
     LrVerify      lrVerify_;        // Plan 4 (pure state machine; touched only on the verify audio thread)
     std::atomic<int>  verifyResult_ { (int) LrResult::Pending };  // lock-free verdict snapshot for the GUI

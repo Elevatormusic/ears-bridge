@@ -59,6 +59,32 @@ TEST_CASE("AudioEngine seam: a clean input stays valid") {
     CHECK (e.cleanCapture());
 }
 
+TEST_CASE("AudioEngine seam: session starts Idle and arms after a sustained loud run") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 8);
+    CHECK (e.sessionPhase() == eb::SessionPhase::Idle);
+    std::vector<float> loud (8, 0.5f), sil (8, 0.0f), mono (8, 0.0f);
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i)
+        e.processCaptureBlockForTest (loud.data(), sil.data(), mono.data(), 8);
+    CHECK (e.sessionPhase() == eb::SessionPhase::SweepActive);
+    CHECK (e.cleanCapture());            // a clean loud run stays valid
+}
+
+TEST_CASE("AudioEngine seam: a clip ON the sweep-onset block invalidates") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 8);
+    // Two clean-loud ramp blocks, then a clip block that COMPLETES the arm: the onset block's clip is
+    // analyzed AFTER the latch re-scope, so it stands.
+    std::vector<float> loud (8, 0.5f), sil (8, 0.0f), mono (8, 0.0f);
+    std::vector<float> clip { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f };
+    e.processCaptureBlockForTest (loud.data(), sil.data(), mono.data(), 8);
+    e.processCaptureBlockForTest (loud.data(), sil.data(), mono.data(), 8);
+    e.processCaptureBlockForTest (clip.data(), sil.data(), mono.data(), (int) clip.size());  // arms + clips
+    CHECK (e.sessionPhase() == eb::SessionPhase::Invalid);
+    CHECK (eb::any (e.health().flags & eb::HealthFlag::ClipConfirmed));
+    CHECK_FALSE (e.cleanCapture());
+}
+
 TEST_CASE("AudioEngine: real R_HPN cal designed at 96k cuts the 4 kHz resonance") {
     auto f = juce::File (EB_TEST_DATA_DIR).getChildFile ("R_HPN_0000000.txt");
     REQUIRE (f.existsAsFile());

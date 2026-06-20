@@ -31,7 +31,20 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
         if (numIn < 2 || (int) mono.size() < numSamples) { e.hm.reportXrun(); return; }
         const float* l = in[0]; const float* r = in[1];
         if (l == nullptr || r == nullptr) { e.hm.reportXrun(); return; }   // per-pointer guard (cf. render cb)
+
+        // D5: feed the session the CURRENT block's peak; on the genuine sweep onset re-scope validity
+        // BEFORE analyzing this block (so a pre-sweep room event is dropped and a clip ON the onset
+        // block is re-detected fresh by analyzeInputBlock below).
+        const float pk = eb::HealthMonitor::blockPeak (l, r, numSamples);
+        e.session_.observeBlockPeak (pk);
+        if (e.session_.consumeSweepStarted()) e.hm.resetMeasurementLatches();
+
         e.hm.analyzeInputBlock (l, r, numSamples);             // detection (raw input): peak, run, NaN
+        // In-measurement only: an invalidating flag (clip/NaN/dropout/drift) latches the session Invalid
+        // so the GUI's phase-gated wording matches cleanCapture(). Single-writer: the capture thread is
+        // the only writer of session phase_; a render-side dropout sets cleanCapture=false and is
+        // re-derived here on the next capture block.
+        if (e.session_.inMeasurement() && ! e.hm.cleanCapture()) e.session_.markInvalid();
 
         if (e.graph.process (l, r, mono.data(), numSamples))   // sanitizes in+out; true => non-finite seen
             e.hm.reportNonFinite();                            // flag a FIR-produced non-finite too
@@ -162,8 +175,10 @@ EngineStatus AudioEngine::status() const { return (EngineStatus) engineStatus.lo
 Levels AudioEngine::levels() const { return hm.levels(); }
 Health AudioEngine::health() const {
     // The single monitor `hm` now carries fifoFill + captureToRenderRatio (from observeRenderBlock),
-    // plus the sticky flags and cleanCapture. Return it directly — no manual overwrite.
-    return hm.snapshot();
+    // plus the sticky flags and cleanCapture. Layer the D5 session phase on top.
+    auto h = hm.snapshot();
+    h.session = session_.phase();   // D5: surface the measurement-session phase to the GUI
+    return h;
 }
 
 HealthFlag AudioEngine::healthFlags() const noexcept     { return hm.flags(); }
@@ -300,6 +315,8 @@ bool AudioEngine::start (juce::String& errorOut) {
                               devices.requestedInputSampleRate(),
                               devices.endpointMixSampleRate() };
     hm.reportRawRail (rawRail_.verified);
+    session_.configure (cap, capRate);   // D5: size the terminal-silence window for this block/rate
+    session_.reset();                    // fresh measurement session each run (Idle -> Preflight -> ...)
     bridge.reset();
     // Pre-fill the FIFO to the PI controller's half-full target BEFORE the streams start. The two
     // device callbacks begin asynchronously and the render callback can pull before capture has
@@ -359,10 +376,18 @@ void AudioEngine::prepareForTest (double sampleRate, int block) {
     activeRate = sampleRate; blockSize = block;
     graph.prepare (sampleRate, block);
     hm.prepare (eb::EarsModel::Ears, juce::jmax (8192, block * 4));   // reset + size so the seam mirrors a run
+    session_.configure (block, sampleRate);
+    session_.reset();
 }
 void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR,
                                               float* outMono, int numSamples) {
+    // Mirror the capture-callback ordering: feed the session this block's peak, re-scope on the sweep
+    // onset, analyze, then latch Invalid if an invalidating flag fired in-measurement.
+    const float pk = eb::HealthMonitor::blockPeak (inL, inR, numSamples);
+    session_.observeBlockPeak (pk);
+    if (session_.consumeSweepStarted()) hm.resetMeasurementLatches();
     hm.analyzeInputBlock (inL, inR, numSamples);                      // same analysis as the capture callback
+    if (session_.inMeasurement() && ! hm.cleanCapture()) session_.markInvalid();
     if (graph.process (inL, inR, outMono, numSamples)) hm.reportNonFinite();
 }
 
