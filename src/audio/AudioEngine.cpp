@@ -324,7 +324,7 @@ bool AudioEngine::start (juce::String& errorOut) {
                               devices.requestedInputSampleRate(),
                               devices.endpointMixSampleRate() };
     hm.reportRawRail (rawRail_.verified);
-    session_.configure (cap, capRate);   // D5: size the terminal-silence window for this block/rate
+    session_.configure (maxBlk, capRate);   // D5: size the terminal-silence window for this BLOCK size/rate (NOT the FIFO capacity)
     session_.reset();                    // fresh measurement session each run (Idle -> Preflight -> ...)
     bridge.reset();
     // Pre-fill the FIFO to the PI controller's half-full target BEFORE the streams start. The two
