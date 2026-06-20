@@ -1,8 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>   // D5: Catch::Approx for the blockPeak peak comparison
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "audio/HealthMonitor.h"
+#include "gui/ClipStatus.h"   // D5: invalidMeasurementMessage() for the resetMeasurementLatches caveat check
 #include <cmath>   // std::abs in the Task-2 level/ratio round-trip cases appended below
 #include <limits>
+#include <vector>
 // (HealthMonitor.h / EngineTypes.h already included by the Plan-2 test prologue above)
 using Catch::Matchers::WithinAbs;
 
@@ -327,6 +330,45 @@ TEST_CASE("Confirmed clip requires a FLAT rail run, not a smooth full-scale peak
         CHECK_FALSE (h.clipConfirmed());
         CHECK (h.cleanCapture());
     }
+}
+
+TEST_CASE("HealthMonitor::blockPeak is the max |sample| over both channels, ignoring non-finite") {
+    std::vector<float> l { 0.1f, -0.7f, 0.2f }, r { 0.3f, 0.05f, -0.4f };
+    CHECK (eb::HealthMonitor::blockPeak (l.data(), r.data(), 3) == Catch::Approx (0.7f));
+    std::vector<float> ln { 0.2f, std::numeric_limits<float>::quiet_NaN(), 0.1f }, rn (3, 0.0f);
+    CHECK (eb::HealthMonitor::blockPeak (ln.data(), rn.data(), 3) == Catch::Approx (0.2f));  // NaN skipped
+}
+
+TEST_CASE("HealthMonitor: resetMeasurementLatches clears validity but keeps config + telemetry + OsResampled") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::EarsPro, 16384, 2.0);   // model + nominal ratio 2.0
+
+    h.observeRenderBlock (256, 256, 2.0, 0.5);                 // advances blockCount; sets ratio/fill
+    h.reportInLevels (0.10f, 0.02f, false, false);             // latches reachedGoodLevel
+    h.reportRawRail (false);                                   // D2: per-run OsResampled guidance
+    std::vector<float> rail (4, 1.0f), sil (4, 0.0f);
+    h.analyzeInputBlock (rail.data(), sil.data(), 4);          // confirmed clip -> invalidates
+    REQUIRE_FALSE (h.cleanCapture());
+    REQUIRE (eb::any (h.flags() & eb::HealthFlag::ClipConfirmed));
+    REQUIRE (eb::any (h.flags() & eb::HealthFlag::OsResampled));
+
+    h.resetMeasurementLatches();   // the sweep-start edge: re-scope validity to the sweep
+
+    // Validity is cleared...
+    CHECK (h.cleanCapture());
+    CHECK_FALSE (eb::any (h.flags() & eb::HealthFlag::ClipConfirmed));
+    CHECK_FALSE (h.clipConfirmed());
+    CHECK (h.clipLongestRun() == 0);
+    // ...but the per-run OS-SRC guidance + run config + telemetry survive.
+    CHECK (eb::any (h.flags() & eb::HealthFlag::OsResampled));            // D2 guidance kept
+    CHECK (h.reachedGoodLevel());                                        // kept
+    CHECK (std::abs (h.snapshot().captureToRenderRatio - 2.0) < 1e-6);   // ratio telemetry kept
+
+    // And a fresh in-sweep confirmed clip still invalidates after the re-scope.
+    h.analyzeInputBlock (rail.data(), sil.data(), 4);
+    CHECK_FALSE (h.cleanCapture());
+    CHECK (eb::any (h.flags() & eb::HealthFlag::ClipConfirmed));
+    // The in-sweep clip message still carries the OS-resampled caveat (OsResampled survived).
+    CHECK (eb::invalidMeasurementMessage (h.flags()).contains ("OS-resampled"));
 }
 
 TEST_CASE("HealthMonitor::reportRawRail raises OsResampled only when NOT verified, never invalidates") {

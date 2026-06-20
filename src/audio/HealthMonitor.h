@@ -2,6 +2,7 @@
 #include <juce_core/juce_core.h>
 #include "audio/EngineTypes.h"
 #include <atomic>
+#include <cmath>   // std::isfinite / std::abs for the header-inline blockPeak()
 
 namespace eb {
 
@@ -50,6 +51,12 @@ public:
     // capture:render ratio (drift is measured against this, not 1.0), then reset()s all state.
     void prepare (EarsModel model, int fifoCapacityFrames, double nominalRatio = 1.0) noexcept;
 
+    // D5: clear ONLY the measurement-validity latches (sticky flags EXCEPT the per-run OsResampled
+    // guidance, cleanCapture, clip-run + flat-run scratch, drift run, edge clip) WITHOUT touching the
+    // per-run config (model/capacity/nominal) or the level/ratio telemetry the GUI is rendering. Called
+    // on the sweep-onset edge so a clip/dropout BEFORE the sweep doesn't brand the sweep invalid.
+    void resetMeasurementLatches() noexcept;
+
     // One additive per-render-block observer. framesWanted vs framesGot (got<wanted => silence
     // fill => Dropout + FifoStarved); ratio + fill are forwarded to the existing setters so there
     // is exactly one copy of that state. Advances the block counter (low-level grace window).
@@ -83,6 +90,18 @@ public:
     bool clipConfirmed()   const noexcept { return clipConfirmed_.load(); }
     int  clipRailSamples() const noexcept { return railSamplesL_.load() + railSamplesR_.load(); }
     int  clipLongestRun()  const noexcept { return longestRunA_.load(); }
+
+    // No-latch max |sample| over both channels for the CURRENT block (skips non-finite). Lets the
+    // engine feed MeasurementSession the current block's peak BEFORE analyzeInputBlock, so the sweep
+    // arms with zero lag and a clip ON the onset block is re-detected after the validity re-scope.
+    static float blockPeak (const float* l, const float* r, int n) noexcept {
+        float pk = 0.0f;
+        for (int i = 0; i < n; ++i) {
+            if (std::isfinite (l[i])) pk = juce::jmax (pk, std::abs (l[i]));
+            if (std::isfinite (r[i])) pk = juce::jmax (pk, std::abs (r[i]));
+        }
+        return pk;
+    }
 
     // True once either ear has peaked at a healthy capture level (>= kGoodLevelLinear) since the last
     // reset. Lets the GUI separate a present-but-too-quiet capture (the low-SNR "tin-can" failure,

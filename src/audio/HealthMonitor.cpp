@@ -44,6 +44,24 @@ void HealthMonitor::reset() {
     driftRun.store (0); blockCount.store (0);
 }
 
+// ---- D5 addition: re-scope measurement validity on the sweep-onset edge ----------------
+void HealthMonitor::resetMeasurementLatches() noexcept {
+    clean.store (true);
+    // Clear every sticky flag EXCEPT the per-run OS-SRC guidance (OsResampled is raised once in start()
+    // after prepare() and reflects the whole run's stream; it must survive a mid-run sweep re-scope so
+    // the in-sweep clip caveat still fires).
+    flagBits.fetch_and (static_cast<unsigned> (HealthFlag::OsResampled));
+    recentClip_.store (false);
+    railRunL_ = railRunR_ = longestRun_ = 0;
+    prevL_ = prevR_ = 0.0f;                              // fix-slice flat-run scratch (mirror reset())
+    railSamplesL_.store (0); railSamplesR_.store (0); longestRunA_.store (0);
+    clipConfirmed_.store (false);
+    driftRun.store (0);
+    // Deliberately NOT cleared: model_/capacity_/nominal_ (config), inLm/inRm/outM + cL/cR/cO (live
+    // meters), reachedGood_ (monotonic per run), blockCount (grace window), the FIFO counters
+    // (xrunsA/droppedA), AND OsResampled (per-run guidance, preserved above).
+}
+
 void HealthMonitor::reportXrun() {
     xrunsA.fetch_add (1);
     raise (HealthFlag::Xrun);           // Plan 4: also latches cleanCapture=false (invalidating)
