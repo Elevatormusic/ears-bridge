@@ -51,3 +51,14 @@ TEST_CASE("invalidMeasurementMessage: SweepRetimed names the clock-retiming caus
     CHECK (invalidMeasurementMessage (HealthFlag::SweepRetimed | HealthFlag::ExcessDrift).toStdString()
                == "Clock drift retimed the sweep - this measurement is invalid. Repeat the measurement.");
 }
+
+TEST_CASE("invalidMeasurementMessage: FormatChanged names the device-format cause") {
+    using eb::HealthFlag; using eb::invalidMeasurementMessage;
+    CHECK (invalidMeasurementMessage(HealthFlag::FormatChanged).toStdString()
+           == "Audio device format changed mid-run - this measurement is invalid. Prevent sleep/wake during capture.");
+    CHECK (invalidMeasurementMessage(HealthFlag::ClipConfirmed | HealthFlag::FormatChanged).containsIgnoreCase("full scale"));
+    CHECK (invalidMeasurementMessage(HealthFlag::NonFinite | HealthFlag::FormatChanged).containsIgnoreCase("corrupted"));
+    CHECK (invalidMeasurementMessage(HealthFlag::SweepRetimed | HealthFlag::FormatChanged).containsIgnoreCase("retim"));  // SweepRetimed wins
+    CHECK (invalidMeasurementMessage(HealthFlag::ExcessDrift | HealthFlag::FormatChanged).containsIgnoreCase("format"));  // FormatChanged wins
+    CHECK (invalidMeasurementMessage(HealthFlag::Dropout | HealthFlag::FormatChanged).containsIgnoreCase("format"));      // FormatChanged wins
+}
