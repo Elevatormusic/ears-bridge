@@ -448,6 +448,8 @@ struct PollSummary {
     eb::RefMonState  gradeState  = eb::RefMonState::NotGraded;
     float            lastCoh     = 0.0f;
     float            gradeIrSnr  = 0.0f;
+    float            sweepSnr    = 0.0f;   // sweep-to-room-noise SNR from the match-aligned window
+    bool             sweepSnrOk  = false;  // whether that sweep SNR is valid (a usable noise region existed)
 };
 
 PollSummary runScenario (Trace& trace, const std::string& name,
@@ -468,11 +470,14 @@ PollSummary runScenario (Trace& trace, const std::string& name,
                          + " didGrade=" + (r.didGrade ? "YES" : "no ");
         if (r.didGrade) {
             ++sum.gradeCount;
-            sum.anyGraded  = true;
-            sum.gradeState = r.state;
-            sum.gradeIrSnr = r.irSnrDb;
+            sum.anyGraded   = true;
+            sum.gradeState  = r.state;
+            sum.gradeIrSnr  = r.irSnrDb;
+            sum.sweepSnr    = r.sweepSnrDb;
+            sum.sweepSnrOk  = r.sweepSnrValid;
             line += std::string (" state=") + stateName (r.state)
-                  + " irSnr=" + std::to_string (r.irSnrDb).substr (0, 6) + " dB";
+                  + " irSnr=" + std::to_string (r.irSnrDb).substr (0, 6) + " dB"
+                  + " sweepSNR=" + (r.sweepSnrValid ? (std::to_string (r.sweepSnrDb).substr (0, 6) + " dB") : std::string ("n/a"));
         }
         trace (line);
     }

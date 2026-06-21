@@ -86,7 +86,55 @@ GradePollResult packGrade (const MeasurementGrade& g) {
     r.lowQuality = g.quality.lowQuality;
     return r;
 }
+
+// Minimum samples a noise region must hold for its RMS to be a usable floor estimate. A handful of samples is
+// noise on its own, not a stationary floor; require at least this many so a near-zero alignOffset (sweep at the
+// very front) doesn't yield a meaningless leading-noise RMS that could false-flag a perfectly clean sweep.
+constexpr int kMinNoiseSamples = 256;
+
+// RMS over [first, last) of buf, skipping non-finite samples (the grade ring is fed RAW pre-sanitization
+// capture). Returns -1.0f when the span holds no finite samples (so the caller treats it as unusable).
+float rmsOver (const float* buf, int first, int last) noexcept {
+    if (first < 0) first = 0;
+    double acc = 0.0; int cnt = 0;
+    for (int i = first; i < last; ++i) {
+        const float v = buf[i];
+        if (std::isfinite (v)) { acc += (double) v * (double) v; ++cnt; }
+    }
+    if (cnt <= 0) return -1.0f;
+    return (float) std::sqrt (acc / (double) cnt);
+}
 } // namespace
+
+void ReferenceGradePoller::computeSweepSnr (const float* window, int winLen, int alignOffset, int refLen,
+                                            GradePollResult& out) noexcept {
+    out.sweepSnrDb    = 0.0f;
+    out.sweepSnrValid = false;
+    if (window == nullptr || winLen <= 0 || refLen <= 0) return;
+
+    // The SWEEP region: [alignOffset, alignOffset+refLen) clamped into the window (the grade keyed off the SAME
+    // segment). The sweep RMS is the numerator; it must be a real signal for the ratio to mean anything.
+    const int sweepStart = std::min (std::max (alignOffset, 0), winLen);
+    const int sweepEnd   = std::min (std::max (alignOffset + refLen, 0), winLen);
+    if (sweepEnd - sweepStart < kMinNoiseSamples) return;   // no usable sweep span -> skip (don't false-flag)
+    const float sweepRms = rmsOver (window, sweepStart, sweepEnd);
+    if (! (sweepRms > 0.0f)) return;                        // silent / non-finite sweep span -> skip
+
+    // The NOISE region: the LEADING room noise the ring captured BEFORE the sweep, [0, alignOffset). If that is
+    // too short to be a floor (the sweep starts at/near the front), fall back to the TRAILING-silence region
+    // after the sweep when it is the longer of the two. If NEITHER is usable, the SNR is invalid: skip it.
+    const int leadLen  = sweepStart;                        // [0, alignOffset)
+    const int trailLen = winLen - sweepEnd;                 // [alignOffset+refLen, winLen)
+    float noiseRms = -1.0f;
+    if (leadLen >= kMinNoiseSamples)
+        noiseRms = rmsOver (window, 0, sweepStart);
+    if (! (noiseRms > 0.0f) && trailLen >= kMinNoiseSamples)
+        noiseRms = rmsOver (window, sweepEnd, winLen);      // fall back to trailing silence
+    if (! (noiseRms > 0.0f)) return;                        // no usable noise region -> SNR invalid, no flag
+
+    out.sweepSnrDb    = 20.0f * std::log10 (sweepRms / noiseRms);
+    out.sweepSnrValid = std::isfinite (out.sweepSnrDb);
+}
 
 GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winLen,
                                                    const float* reference, int refLen, double rate) {
@@ -98,7 +146,18 @@ GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winL
     // match-gate FIRST on the aligned segment, then quality — so a non-sweep window returns ReferenceStale
     // (never a clean grade). Safe to call off-thread; touches no debounce state. This is the verdict the GUI
     // publishes via publishReferenceGrade. (Used by the synchronous poll() and callers that did not run decide().)
-    return packGrade (gradeMeasurementWindow (reference, refLen, window, winLen, rate));
+    GradePollResult g = packGrade (gradeMeasurementWindow (reference, refLen, window, winLen, rate));
+    // Sweep-to-noise SNR from the SAME aligned window: locate the sweep the way gradeMeasurementWindow did
+    // (winLen<refLen falls back to offset 0, matching gradeMeasurementWindowAt's short-window path) and measure
+    // the sweep over the leading room noise. This overload re-runs the alignment; the alignOffset overload reuses
+    // decide()'s. GUIDANCE only.
+    int alignOffset = 0;
+    if (winLen >= refLen) {
+        const AlignResult a = crossCorrelateAlign (reference, refLen, window, winLen);
+        alignOffset = clampSweepStart (a.delaySamples, refLen, winLen);
+    }
+    computeSweepSnr (window, winLen, alignOffset, refLen, g);
+    return g;
 }
 
 GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winLen,
@@ -111,7 +170,10 @@ GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winL
     // the grade must quality-check the SAME segment. gradeMeasurementWindowAt re-runs the match-gate FIRST on
     // that segment (a non-sweep -> ReferenceStale), so this is just as honest as the self-aligning overload but
     // avoids a second (expensive) cross-correlation. The GUI worker path uses this.
-    return packGrade (gradeMeasurementWindowAt (reference, refLen, window, winLen, alignOffset, rate));
+    GradePollResult g = packGrade (gradeMeasurementWindowAt (reference, refLen, window, winLen, alignOffset, rate));
+    // Sweep-to-noise SNR from the SAME aligned window, reusing decide()'s alignOffset (no second xcorr). GUIDANCE.
+    computeSweepSnr (window, winLen, alignOffset, refLen, g);
+    return g;
 }
 
 GradePollResult ReferenceGradePoller::poll (const float* window, int winLen,

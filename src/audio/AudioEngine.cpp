@@ -67,11 +67,16 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
         // a single channel is graded. Single writer, RT-safe.
         const float* respCh = (e.graph.activeEar() == 1) ? r : l;
         e.processGradeDetection (respCh, numSamples, pk);
-        // SNR: once per SweepActive->Complete edge (the sweep just finished), compute the per-ear SNR
-        // verdict ONCE and raise the LowSnr GUIDANCE flag on a noisy sweep. RT-safe: evaluateSnr is a few
-        // log10 + compares + atomic reads, raiseLowSnr is one atomic OR -- NO alloc/lock, and NO String
-        // (snrNote runs GUI-side in Task 4). completedFloorStable() (not preSweepFloorStable()) holds the
-        // floor confidence of the sweep that just finished, snapshotted before the next-onset reseed.
+        // SNR (LEVEL-ARM path, mostly DEAD on real sweeps -- kept harmless): once per SweepActive->Complete edge
+        // (the sweep just finished), compute the per-ear SNR verdict ONCE and raise the LowSnr GUIDANCE flag on a
+        // noisy sweep. The catch: consumeSweepComplete() is driven by MeasurementSession's rise-ratio level arm,
+        // which a gradual Dirac log-sweep does NOT trip -- so on a real measurement this almost never fires (the
+        // user-reported "Dirac said low SNR but EARS Bridge said clean" bug). The LIVE sweep-SNR check now runs off
+        // the match-aligned grade window in pollReferenceGrade (ReferenceGradePoller::computeSweepSnr), which fires
+        // on ANY sweep that grades. This arm path is LEFT in place: LowSnr is a sticky OR so a double-raise is
+        // idempotent, and publishCompletedSnrDb writes the same snapshot, so on the rare arm fire it is harmless;
+        // the consumeSweepComplete edge still also scopes the ClockBridge freeze + the per-ear clip peaks below.
+        // RT-safe: evaluateSnr is a few log10 + compares + atomic reads, raiseLowSnr is one atomic OR.
         if (e.session_.consumeSweepComplete()) {
             const auto v = eb::evaluateSnr (e.session_.armNoiseFloor(),
                                             e.hm.maxSweepPeakL(), e.hm.maxSweepPeakR(),
@@ -310,6 +315,12 @@ float AudioEngine::completedSweepSnrDb()   const noexcept {
     // matches the dB that raised the flag. Pure lock-free read.
     return hm.completedSnrDb();
 }
+// Match-window sweep-SNR fix: forward the GUI-worker-computed sweep SNR to HealthMonitor. publishCompletedSweepSnrDb
+// reuses publishCompletedSnrDb so completedSweepSnrDb()/the status line read the SAME snapshot; raiseLowSnr raises the
+// GUIDANCE LowSnr flag (not invalidating). Both are message/worker-thread callers writing lock-free atomics off the
+// audio thread (the grade math already ran on the worker; this is just the publish step).
+void AudioEngine::publishCompletedSweepSnrDb (float snrDbMin) noexcept { hm.publishCompletedSnrDb (snrDbMin); }
+void AudioEngine::raiseLowSnr() noexcept { hm.raiseLowSnr(); }
 int  AudioEngine::autoActiveEar()          const noexcept { return graph.activeEar(); }
 float AudioEngine::headroomAttenuationDb() const noexcept { return graph.headroomAttenuationDb(); }
 

@@ -106,6 +106,14 @@ public:
     // read only; the flag (health().flags & LowSnr) is the source of truth for WHETHER to warn.
     float completedSweepSnrDb() const noexcept;
 
+    // Match-window sweep-SNR fix: the GUI worker (pollReferenceGrade) computes the sweep-to-room-noise SNR from
+    // the SAME match-aligned grade window — the path that ACTUALLY fires on a real Dirac log-sweep, unlike the
+    // dead level arm — and forwards the result here. publishCompletedSweepSnrDb snapshots the dB so the existing
+    // "Low SNR: sweep only N dB over the room noise" status line names it; raiseLowSnr raises the GUIDANCE LowSnr
+    // flag (NOT invalidating). Both forward to HealthMonitor; message/worker-thread callers (lock-free stores).
+    void publishCompletedSweepSnrDb (float snrDbMin) noexcept;
+    void raiseLowSnr() noexcept;
+
     // AutoPerEar: which earcup is currently being fed to Dirac (0 = left, 1 = right). Drives the GUI
     // "capturing Left/Right" indicator; only meaningful while running in AutoPerEar with signal.
     int autoActiveEar() const noexcept;
