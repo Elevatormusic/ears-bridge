@@ -974,6 +974,18 @@ void MainComponent::updateStatusLine() {
 
 // ---- Reference-Based Measurement Monitor (Plan 5): learn + grade ----------------------
 void MainComponent::onLearnReference() {
+    // The button doubles as Learn / Cancel. WHILE a capture is in flight, a click REQUESTS CANCEL: flip the
+    // atomic the firPool job polls (inside captureLoopback) and show a brief "Cancelling..." note. The job's
+    // callAsync continuation owns restoring the idle state, so we don't touch learning_/text here.
+    if (learning_) {
+        learnCancelRequested_.store (true, std::memory_order_relaxed);
+        learnRefButton.setEnabled (false);   // re-enabled by the job continuation; blocks a double-cancel/start
+        learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
+        learnRefResultLabel.setText ("Cancelling...", juce::dontSendNotification);
+        return;
+    }
+
+    // --- Pre-start guards (only apply before a capture is in flight) ---
     // The learn capture is a Windows WASAPI loopback (on-device) — it can only succeed while Dirac's
     // Processor plays through "Windows Audio" (shared); in ASIO/exclusive the loopback is silent. We
     // detect the mode READ-ONLY from the settings file (never edit it — auto-switch is deferred to v2)
@@ -994,7 +1006,11 @@ void MainComponent::onLearnReference() {
         return;
     }
 
-    learnRefButton.setEnabled (false);
+    // --- Start the learn: enter the learning state. The button stays ENABLED and becomes "Cancel learning". ---
+    learning_ = true;
+    learnCancelRequested_.store (false, std::memory_order_relaxed);
+    learnRefButton.setButtonText ("Cancel learning");
+    learnRefButton.setEnabled (true);
     learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
     learnRefResultLabel.setText ("Learning - run a Dirac measurement now (~25 s)...", juce::dontSendNotification);
 
@@ -1008,13 +1024,20 @@ void MainComponent::onLearnReference() {
 
     juce::Component::SafePointer<MainComponent> safe (this);
     const double rate = activeRate();
-    firPool->addJob ([safe, rate, renderTarget]() mutable {
+    // The cancel token is a MainComponent member; capture its address now (message thread, `this` is alive).
+    // The component is destroyed only on the message thread, and only after this job's callAsync continuation
+    // has cleared learning_ — so the pointer stays valid for the duration of the capture.
+    const std::atomic<bool>* cancel = &learnCancelRequested_;
+    firPool->addJob ([safe, rate, renderTarget, cancel]() mutable {
         // Capture the loopback for the full L-then-R sweep sequence (~26 s), then validate the PURE core.
-        // renderTarget is the OUTPUT picker's selected device name (the endpoint Dirac plays to).
-        auto cap = eb::captureLoopback (renderTarget, 26.0, rate);   // the selected output render endpoint
-        juce::String resultMsg; bool ok = false;
+        // renderTarget is the OUTPUT picker's selected device name (the endpoint Dirac plays to). The
+        // cancel token lets a Cancel click abort this capture promptly.
+        auto cap = eb::captureLoopback (renderTarget, 26.0, rate, cancel);   // the selected output render endpoint
+        juce::String resultMsg; bool ok = false; bool cancelled = cap.cancelled;
         std::vector<float> samples; double capRate = rate;
-        if (! cap.ok) {
+        if (cap.cancelled) {
+            resultMsg = "Learning cancelled.";
+        } else if (! cap.ok) {
             resultMsg = "Capture failed: " + cap.reason;
         } else {
             const auto v = eb::validateReferenceCapture (cap.samples.data(), (int) cap.samples.size(), cap.rate);
@@ -1022,11 +1045,17 @@ void MainComponent::onLearnReference() {
             else        { ok = true; samples = std::move (cap.samples); capRate = cap.rate;
                           resultMsg = "Reference learned (" + juce::String (samples.size() / capRate, 1) + " s)."; }
         }
-        juce::MessageManager::callAsync ([safe, ok, resultMsg, samples = std::move (samples), capRate]() mutable {
+        juce::MessageManager::callAsync ([safe, ok, cancelled, resultMsg, samples = std::move (samples), capRate]() mutable {
             auto* mc = safe.getComponent();
             if (! mc) return;
+            // Back to idle: restore the button to "Learn reference (Windows Audio)" and re-enable, so the
+            // user can immediately restart. A cancelled result is shown NEUTRAL (dim), not as a failure.
+            mc->learning_ = false;
+            mc->learnCancelRequested_.store (false, std::memory_order_relaxed);
+            mc->learnRefButton.setButtonText ("Learn reference (Windows Audio)");
             mc->learnRefButton.setEnabled (true);
-            mc->learnRefResultLabel.setColour (juce::Label::textColourId, ok ? Theme::ok() : Theme::warn());
+            mc->learnRefResultLabel.setColour (juce::Label::textColourId,
+                                               cancelled ? Theme::textDim() : (ok ? Theme::ok() : Theme::warn()));
             mc->learnRefResultLabel.setText (resultMsg, juce::dontSendNotification);
             if (ok) {
                 // Store the reference + metadata on disk and mark it loaded so the engine grades against it.

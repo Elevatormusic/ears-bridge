@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_core/juce_core.h>
+#include <atomic>
 #include <vector>
 
 // Reference-Based Measurement Monitor — Task 3: the loopback reference
@@ -82,6 +83,8 @@ juce::String readDiracDeviceType();
 struct LoopbackCaptureResult {
     bool               ok = false;
     juce::String       reason;          // empty iff ok
+    bool               cancelled = false;  // true iff the capture was aborted via the cancel token
+                                           // (a user-cancel, NOT a real failure — the GUI shows it neutrally)
     std::vector<float> samples;         // mono (downmixed) float samples
     double             rate = 0.0;      // the endpoint mix-format rate actually captured
     int                channels = 0;    // the endpoint mix-format channel count
@@ -95,8 +98,16 @@ struct LoopbackCaptureResult {
 // capture is rejected (we would otherwise store a resampled reference). Must run
 // on a worker/message thread (off the audio callback). Windows-only; a no-op
 // stub on every other platform.
+//
+// COOPERATIVE CANCEL: pass a non-null `cancel` and set it (from any thread — it's
+// an atomic) to abort the in-flight capture promptly. The capture loop polls it
+// every iteration; when set it Stops()+Releases() the WASAPI client cleanly and
+// returns { ok=false, cancelled=true, reason="cancelled" } so the caller can show
+// a neutral "cancelled" message rather than a capture-failed error. A null cancel
+// (the default) runs the full `seconds` capture as before.
 LoopbackCaptureResult captureLoopback (const juce::String& renderDeviceNameSubstring,
                                        double seconds,
-                                       double expectedRate = 48000.0);
+                                       double expectedRate = 48000.0,
+                                       const std::atomic<bool>* cancel = nullptr);
 
 } // namespace eb

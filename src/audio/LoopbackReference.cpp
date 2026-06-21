@@ -346,8 +346,18 @@ void decodePacketToMono (const unsigned char* data, UINT32 frames, WORD channels
 
 } // namespace
 
-LoopbackCaptureResult captureLoopback (const juce::String& filter, double seconds, double expectedRate) {
+LoopbackCaptureResult captureLoopback (const juce::String& filter, double seconds, double expectedRate,
+                                       const std::atomic<bool>* cancel) {
     LoopbackCaptureResult res;
+
+    // Helper: a user-cancel result (distinct from a real failure so the GUI can show it neutrally).
+    auto cancelledNow = [&] { return cancel != nullptr && cancel->load (std::memory_order_relaxed); };
+
+    // Honour an already-set cancel BEFORE touching COM/WASAPI, so a pre-armed token
+    // returns promptly without doing any device work (also the headless-test path).
+    if (cancelledNow()) {
+        res.ok = false; res.cancelled = true; res.reason = "cancelled"; return res;
+    }
 
     const HRESULT co = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
     const bool weInited = SUCCEEDED (co);
@@ -441,9 +451,14 @@ LoopbackCaptureResult captureLoopback (const juce::String& filter, double second
     res.samples.reserve ((size_t) ((double) rate * juce::jmax (0.0, seconds)));
     long long nonSilent = 0, totalFrames = 0;
 
+    bool wasCancelled = false;
     const juce::int64 endMs = juce::Time::currentTimeMillis()
                             + (juce::int64) (juce::jmax (0.0, seconds) * 1000.0);
     while (juce::Time::currentTimeMillis() < endMs) {
+        // Cooperative cancel: checked each iteration alongside the time/SILENT logic.
+        // Break out and fall through to the clean Stop()+Release() below — no leaked
+        // client, no half-state — then return a cancelled (not failed) result.
+        if (cancelledNow()) { wasCancelled = true; break; }
         UINT32 packetFrames = 0;
         if (FAILED (cap->GetNextPacketSize (&packetFrames))) break;
         if (packetFrames == 0) { juce::Thread::sleep (5); continue; }
@@ -465,6 +480,10 @@ LoopbackCaptureResult captureLoopback (const juce::String& filter, double second
     cap->Release(); CoTaskMemFree (mix); ac->Release(); match->Release(); en->Release();
     if (weInited) CoUninitialize();
 
+    // A user-cancel wins over any silence/empty verdict: report it neutrally, not as a failure.
+    if (wasCancelled)
+        { res.ok = false; res.cancelled = true; res.reason = "cancelled"; return res; }
+
     if (totalFrames <= 0 || nonSilent <= 0)
         { res.ok = false; res.reason = "captured silence - nothing was playing on the render endpoint"; return res; }
 
@@ -481,9 +500,15 @@ namespace eb {
 juce::String readDiracVersion()    { return {}; }
 juce::String readDiracDeviceType() { return {}; }
 
-LoopbackCaptureResult captureLoopback (const juce::String&, double, double) {
+LoopbackCaptureResult captureLoopback (const juce::String&, double, double,
+                                       const std::atomic<bool>* cancel) {
     LoopbackCaptureResult res;
     res.ok = false;
+    // Honour a pre-set cancel token here too, so the cancelled result is reported the
+    // same way on every platform (a user-cancel, not a "needs Windows" failure).
+    if (cancel != nullptr && cancel->load (std::memory_order_relaxed)) {
+        res.cancelled = true; res.reason = "cancelled"; return res;
+    }
     res.reason = "loopback capture is only available on Windows";
     return res;
 }
