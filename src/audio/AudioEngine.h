@@ -122,9 +122,27 @@ public:
     // Drained (read-and-cleared) by the GUI worker each poll: true when a sweep COMPLETED with a reference
     // loaded, i.e. there is a measurement to grade OFF the audio thread. The audio thread only sets this
     // one atomic at the edge (no deconvolution on the audio thread); the worker runs gradeMeasurement and
-    // calls publishReferenceGrade. NOTE: the per-segment mic-response CAPTURE that feeds gradeMeasurement
-    // is the on-device half of this loop (it needs the live ASIO measurement) — see the report.
+    // calls publishReferenceGrade. The per-segment mic-response is buffered DURING the sweep into a
+    // pre-allocated response buffer (capture thread, memcpy only) and snapshotted at this edge; the GUI
+    // worker copies it out via copyGradingResponse() and grades it OFFLINE.
     bool consumePendingGrade() noexcept;
+
+    // ---- Live grading response buffer (RT-safe; capture thread writes, worker reads) ----
+    // During SweepActive the capture callback memcpy's the mic RESPONSE (left channel) into a
+    // PRE-ALLOCATED buffer (sized for ~25 s at the active rate in prepare/start — NEVER on the audio
+    // thread). At the SweepActive->Complete edge the written length is snapshotted (responseReadyLen_)
+    // and responseReady_ is set, so the GUI worker can copy out a complete, consistent response. The
+    // audio thread does NO deconvolution — it only memcpy's and stores two atomics.
+    //
+    // The GUI worker calls copyGradingResponse(dst, maxLen) to copy the ready response into ITS OWN
+    // buffer (the allocation lives in the GUI, never the engine). Returns the number of samples copied
+    // (0 when no fresh response is ready) and clears the ready flag. The reference itself is held by the
+    // GUI (from the learn), so the worker has both halves and runs gradeMeasurement off-thread.
+    int  copyGradingResponse (float* dst, int maxLen) noexcept;
+    // The rate the response buffer was captured at (the active capture rate), for the Farina offsets.
+    double gradingResponseRate() const noexcept { return grantedRate_; }
+    // Test seam: true once a fresh response snapshot is ready to grade (set at the sweep-complete edge).
+    bool gradingResponseReady() const noexcept { return responseReady_.load(); }
 
     // Publish a reference-grade verdict (message/worker thread, OFFLINE). Snapshots the workflow state +
     // IR-SNR + THD TOGETHER (the SNR lesson) and raises the matching GUIDANCE flag (RefMismatch when the
@@ -199,6 +217,9 @@ public:
 private:
     void rescanDevices();
     static int nextPow2 (int v);
+    // Pre-allocate (message thread) the live-grading response buffer for kGradingSeconds at `rate` and
+    // clear the per-sweep capture state. Called from prepare/start; NEVER from the audio thread.
+    void allocateResponseBuffer (double rate);
 
     DeviceManager      devices;
     ProcessingGraph    graph;
@@ -233,6 +254,17 @@ private:
     // deconvolution — it only stores these two atomics at the edge.
     std::atomic<bool> referenceLoaded_ { false };
     std::atomic<bool> pendingGrade_    { false };
+
+    // Live grading response buffer. responseBuffer_ is PRE-ALLOCATED in prepare/start (sized for
+    // kGradingSeconds at the active rate) and NEVER resized on the audio thread. The capture thread is
+    // the SINGLE writer: it memcpy's the mic response during SweepActive (responseWriteIdx_ is
+    // capture-thread scratch) and, at the SweepActive->Complete edge, snapshots the written length into
+    // responseReadyLen_ and sets responseReady_. The GUI worker reads them via copyGradingResponse().
+    static constexpr double kGradingSeconds = 25.0;   // L-then-R Dirac sweep sequence is ~25 s
+    std::vector<float> responseBuffer_;               // pre-allocated; capture-thread writes, worker reads
+    int                responseWriteIdx_ = 0;         // capture-thread scratch: next write offset this sweep
+    std::atomic<int>   responseReadyLen_ { 0 };       // snapshot of the captured length at the complete edge
+    std::atomic<bool>  responseReady_    { false };   // a fresh response snapshot is ready to grade
 
     // Calibration generation lifecycle. The three ids are atomic so the GUI gate reads them lock-free
     // (the audio thread never reads them); appliedGen_ is written on the message thread only.

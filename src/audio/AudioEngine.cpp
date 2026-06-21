@@ -2,6 +2,7 @@
 #include "gui/SnrStatus.h"   // SNR: pure evaluateSnr verdict (RT-safe; snrNote/String is GUI-side only)
 #include "audio/RefMonitor.h"   // Plan 5: RefMonState (the published-state enum; gradeMeasurement is GUI-worker-side)
 #include <cmath>
+#include <cstring>   // std::memcpy (RT-safe response-buffer copy on the capture thread)
 namespace eb {
 
 int AudioEngine::nextPow2 (int v) {
@@ -41,7 +42,10 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
         // pre-sweep region; a clip on the block that COMPLETES the arm still latches.
         const float pk = eb::HealthMonitor::blockPeak (l, r, numSamples);
         e.session_.observeBlockPeak (pk);
-        if (e.session_.consumeSweepStarted()) e.hm.resetMeasurementLatches();
+        if (e.session_.consumeSweepStarted()) {
+            e.hm.resetMeasurementLatches();
+            e.responseWriteIdx_ = 0;   // fresh sweep onset: restart the response capture from the top
+        }
         e.bridge.setSweepActive (e.session_.sweepActive());   // D6: freeze the SRC ratio during the sweep, release between sweeps
 
         e.hm.analyzeInputBlock (l, r, numSamples);             // detection (raw input): peak, run, NaN
@@ -53,6 +57,21 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
             float spkL = 0.0f, spkR = 0.0f;
             eb::HealthMonitor::blockPeakPerEar (l, r, numSamples, spkL, spkR);
             e.hm.observeSweepPeak (spkL, spkR);
+
+            // Live grading (Plan 5): buffer THIS block's mic RESPONSE into the pre-allocated response
+            // buffer so the worker can deconvolve it OFFLINE at the sweep-complete edge. RT-safe: a
+            // bounded memcpy into pre-allocated storage, capped at the buffer end (a ~25 s sweep can't
+            // exceed it; if it ever did we keep the first 25 s and never write past the end). The
+            // reference is mono, so we capture the LEFT channel (Dirac feeds one earcup at a time;
+            // the response we grade is the captured mono path). Single writer (capture thread).
+            if (! e.responseBuffer_.empty()) {
+                const int room = (int) e.responseBuffer_.size() - e.responseWriteIdx_;
+                const int cpy  = juce::jmin (numSamples, juce::jmax (0, room));
+                if (cpy > 0) {
+                    std::memcpy (e.responseBuffer_.data() + e.responseWriteIdx_, l, (size_t) cpy * sizeof (float));
+                    e.responseWriteIdx_ += cpy;
+                }
+            }
         }
         // SNR: once per SweepActive->Complete edge (the sweep just finished), compute the per-ear SNR
         // verdict ONCE and raise the LowSnr GUIDANCE flag on a noisy sweep. RT-safe: evaluateSnr is a few
@@ -76,12 +95,17 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
 
             // Reference-Based Measurement Monitor (Plan 5): the completed-sweep edge is where measurement
             // grading hooks. KEEP IT LIGHTWEIGHT — NO deconvolution on the audio thread. If a reference is
-            // loaded, flag that there is a measurement to grade so the GUI worker can run gradeMeasurement
-            // OFFLINE; with NO reference, publish the honest NotGraded state (RefMonState::NotGraded == 5)
-            // so the GUI shows "not graded - learn a reference" and never green. Both are single atomic
-            // stores — RT-safe. (The per-segment mic-response capture that the worker grades is on-device.)
-            if (e.referenceLoaded_.load()) e.pendingGrade_.store (true);
-            else e.hm.publishRefGrade ((int) RefMonState::NotGraded, 0.0f, 0.0f);
+            // loaded, SNAPSHOT the response length captured this sweep and flag that there is a measurement
+            // to grade + a fresh response to copy, so the GUI worker can run gradeMeasurement OFFLINE; with
+            // NO reference, publish the honest NotGraded state (RefMonState::NotGraded == 5) so the GUI
+            // shows "not graded - learn a reference" and never green. All single atomic stores — RT-safe.
+            if (e.referenceLoaded_.load()) {
+                e.responseReadyLen_.store (e.responseWriteIdx_);   // length captured this sweep (snapshot)
+                e.responseReady_.store (true);                     // a complete response is ready to grade
+                e.pendingGrade_.store (true);
+            } else {
+                e.hm.publishRefGrade ((int) RefMonState::NotGraded, 0.0f, 0.0f);
+            }
         }
         // In-measurement only: an invalidating flag (clip/NaN/dropout/drift) latches the session Invalid
         // so the GUI's phase-gated wording matches cleanCapture(). Single-writer: the capture thread is
@@ -305,6 +329,26 @@ int  AudioEngine::autoActiveEar()          const noexcept { return graph.activeE
 void AudioEngine::setReferenceLoaded (bool loaded) noexcept { referenceLoaded_.store (loaded); }
 bool AudioEngine::referenceLoaded()        const noexcept { return referenceLoaded_.load(); }
 bool AudioEngine::consumePendingGrade()    noexcept      { return pendingGrade_.exchange (false); }
+
+void AudioEngine::allocateResponseBuffer (double rate) {
+    // Pre-allocate (message thread) for kGradingSeconds at this rate so the capture thread NEVER resizes.
+    const int len = juce::jmax (1, (int) std::lround (rate * kGradingSeconds));
+    responseBuffer_.assign ((size_t) len, 0.0f);
+    responseWriteIdx_ = 0;
+    responseReadyLen_.store (0);
+    responseReady_.store (false);
+}
+
+int AudioEngine::copyGradingResponse (float* dst, int maxLen) noexcept {
+    // Worker/message thread: copy the ready response snapshot into the CALLER's buffer (the allocation
+    // lives in the GUI, never here), then clear the ready flag. Returns the number of samples copied, or
+    // 0 when no fresh response is ready. responseBuffer_ is not resized once a run is prepared, so reading
+    // up to responseReadyLen_ (snapshotted at the sweep edge) is safe against the idle capture thread.
+    if (! responseReady_.exchange (false) || dst == nullptr || maxLen <= 0) return 0;
+    const int n = juce::jmin (maxLen, juce::jmin (responseReadyLen_.load(), (int) responseBuffer_.size()));
+    if (n > 0) std::memcpy (dst, responseBuffer_.data(), (size_t) n * sizeof (float));
+    return n;
+}
 void AudioEngine::publishReferenceGrade (int refMonState, float irSnrDb, float thdPercent,
                                          bool mismatch, bool lowQuality) noexcept {
     // OFFLINE (message/worker thread). Snapshot the trio TOGETHER first so the displayed numbers always
@@ -447,6 +491,7 @@ bool AudioEngine::start (juce::String& errorOut) {
     hm.reportRawRail (rawRail_.verified);
     session_.configure (maxBlk, capRate);   // D5: size the terminal-silence window for this BLOCK size/rate (NOT the FIFO capacity)
     session_.reset();                    // fresh measurement session each run (Idle -> Preflight -> ...)
+    allocateResponseBuffer (capRate);    // Plan 5: pre-allocate the live-grading response buffer (off the audio thread)
     bridge.reset();
     // Pre-fill the FIFO to the PI controller's half-full target BEFORE the streams start. The two
     // device callbacks begin asynchronously and the render callback can pull before capture has
@@ -511,6 +556,8 @@ void AudioEngine::prepareForTest (double sampleRate, int block) {
     hm.prepare (eb::EarsModel::Ears, juce::jmax (8192, block * 4));   // reset + size so the seam mirrors a run
     session_.configure (block, sampleRate);
     session_.reset();
+    grantedRate_ = sampleRate;             // so gradingResponseRate() reports the seam's capture rate
+    allocateResponseBuffer (sampleRate);   // Plan 5: pre-allocate the live-grading response buffer
     hm.notifyPreparedFormat (sampleRate, 32, 2);   // D8: register the test format so simulateFormatChangeForTest has a reference
 }
 void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR,
@@ -519,13 +566,23 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
     // onset, analyze, then latch Invalid if an invalidating flag fired in-measurement.
     const float pk = eb::HealthMonitor::blockPeak (inL, inR, numSamples);
     session_.observeBlockPeak (pk);
-    if (session_.consumeSweepStarted()) hm.resetMeasurementLatches();
+    if (session_.consumeSweepStarted()) { hm.resetMeasurementLatches(); responseWriteIdx_ = 0; }
     bridge.setSweepActive (session_.sweepActive());                  // D6: mirror the capture-callback freeze sync
     hm.analyzeInputBlock (inL, inR, numSamples);                      // same analysis as the capture callback
     if (session_.sweepActive()) {                                    // SNR numerator (mirror the capture callback)
         float spkL = 0.0f, spkR = 0.0f;
         eb::HealthMonitor::blockPeakPerEar (inL, inR, numSamples, spkL, spkR);
         hm.observeSweepPeak (spkL, spkR);
+        // Live grading: buffer the mic response (left channel) into the pre-allocated buffer (mirror
+        // the capture callback). RT-safe bounded memcpy; single writer (this thread in the seam).
+        if (! responseBuffer_.empty()) {
+            const int room = (int) responseBuffer_.size() - responseWriteIdx_;
+            const int cpy  = juce::jmin (numSamples, juce::jmax (0, room));
+            if (cpy > 0) {
+                std::memcpy (responseBuffer_.data() + responseWriteIdx_, inL, (size_t) cpy * sizeof (float));
+                responseWriteIdx_ += cpy;
+            }
+        }
     }
     // SNR: per-sweep verdict at the SweepActive->Complete edge (mirror the capture callback) -- raise
     // LowSnr on a noisy sweep, SNAPSHOT the verdict dB, then scope the per-ear peaks to ONE sweep.
@@ -537,9 +594,15 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
         hm.publishCompletedSnrDb (v.snrDbMin);
         hm.resetSweepPeaks();
         // Plan 5: mirror the capture-callback reference-grade trigger (see CaptureCallback). Lightweight:
-        // set pendingGrade_ if a reference is loaded, else publish NotGraded. No deconvolution here.
-        if (referenceLoaded_.load()) pendingGrade_.store (true);
-        else hm.publishRefGrade ((int) RefMonState::NotGraded, 0.0f, 0.0f);
+        // if a reference is loaded, snapshot the captured response length + flag pending/ready; else
+        // publish NotGraded. No deconvolution here.
+        if (referenceLoaded_.load()) {
+            responseReadyLen_.store (responseWriteIdx_);
+            responseReady_.store (true);
+            pendingGrade_.store (true);
+        } else {
+            hm.publishRefGrade ((int) RefMonState::NotGraded, 0.0f, 0.0f);
+        }
     }
     if (session_.inMeasurement() && ! hm.cleanCapture()) session_.markInvalid();
     if (graph.process (inL, inR, outMono, numSamples)) hm.reportNonFinite();
@@ -560,6 +623,8 @@ void AudioEngine::prepareCallbacksForTest (double sampleRate, int block, int fif
     hm.prepare (eb::EarsModel::Ears, cap, 1.0);        // nominal capture:render ratio == 1.0 (equal rates)
     session_.configure (block, sampleRate);            // D5: size the silence window for this block/rate
     session_.reset();                                  // D5: fresh session each run (Idle -> Preflight -> ...)
+    grantedRate_ = sampleRate;                         // gradingResponseRate() reports the seam's capture rate
+    allocateResponseBuffer (sampleRate);               // Plan 5: pre-allocate the live-grading response buffer
     bridge.reset();
     bridge.primeToTarget();                            // mirror start(): prime to the PI setpoint, no startup underrun
     bridge.setSweepActive (false);                     // D6: a fresh run free-runs; the session arms the sweep later
