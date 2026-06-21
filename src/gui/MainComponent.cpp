@@ -1012,21 +1012,20 @@ void MainComponent::onLearnReference() {
     learnRefButton.setButtonText ("Cancel learning");
     learnRefButton.setEnabled (true);
     // The loopback target is the device DIRAC PLAYS THE SWEEP TO -- read straight from Dirac's own
-    // settings (DEVICESETUP audioOutputDeviceName, e.g. "Realtek ... (Realtek USB Audio)"). NOT EARS
-    // Bridge's output: the VB-CABLE carries the RESPONSE Dirac records, not the sweep, so loopback-ing it
-    // captures the wrong signal (and is silent unless the bridge is feeding it). Fall back to the OUTPUT
-    // picker, then "CABLE", only when Dirac's settings can't be read.
-    juce::String renderTarget = eb::readDiracOutputDeviceName();
-    if (renderTarget.isEmpty()) {
-        if (auto out = outputPicker.selectedDevice(); out.has_value() && out->name.isNotEmpty())
-            renderTarget = out->name;
-        else
-            renderTarget = "CABLE";
-    }
+    // settings (DEVICESETUP audioOutputDeviceName), so it works for ANY user's output device, not a
+    // specific model. NOT EARS Bridge's output: the VB-CABLE carries the RESPONSE Dirac records, not the
+    // sweep. If Dirac's setting can't be read (e.g. a different Dirac product/folder), an EMPTY target
+    // tells captureLoopback to use the system DEFAULT render endpoint -- a sound guess for where Dirac
+    // plays -- rather than the wrong cable. Either way the status names what we land on so the user can
+    // verify it's right (or cancel and fix it).
+    const juce::String diracDevice = eb::readDiracOutputDeviceName();
+    const juce::String renderTarget = diracDevice;   // "" -> default render endpoint inside captureLoopback
 
     learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    learnRefResultLabel.setText ("Learning from \"" + renderTarget + "\" - run a Dirac measurement now (~25 s)...",
-                                 juce::dontSendNotification);
+    learnRefResultLabel.setText (diracDevice.isNotEmpty()
+            ? ("Learning from \"" + diracDevice + "\" - run a Dirac measurement now (~25 s)...")
+            : juce::String ("Learning from the default playback device - run a Dirac measurement now (~25 s)..."),
+        juce::dontSendNotification);
 
     juce::Component::SafePointer<MainComponent> safe (this);
     const double rate = activeRate();

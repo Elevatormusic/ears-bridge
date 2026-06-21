@@ -417,24 +417,43 @@ LoopbackCaptureResult captureLoopback (const juce::String& filter, double second
                                   __uuidof (IMMDeviceEnumerator), (void**) &en)) || en == nullptr)
         return fail ("no audio endpoint enumerator");
 
-    IMMDeviceCollection* coll = nullptr;
-    en->EnumAudioEndpoints (eRender, DEVICE_STATE_ACTIVE, &coll);
-    UINT count = 0; if (coll) coll->GetCount (&count);
-
-    // First eRender endpoint whose FriendlyName contains the substring.
+    // Pick the render endpoint to loop back -- entirely name-driven, so it works for ANY user's output
+    // device (no model is assumed). With a NAME: prefer an EXACT FriendlyName match, then fall back to a
+    // substring contains (tolerates minor formatting differences across Windows versions/locales). With
+    // an EMPTY name (Dirac's setting couldn't be read): use the system DEFAULT render endpoint -- the
+    // most likely place Dirac's sweep plays -- NOT an arbitrary first device and NOT the cable.
     IMMDevice* match = nullptr; juce::String matchName;
-    for (UINT i = 0; i < count; ++i) {
-        IMMDevice* dev = nullptr; coll->Item (i, &dev);
-        IPropertyStore* ps = nullptr; dev->OpenPropertyStore (STGM_READ, &ps);
-        PROPVARIANT nm; PropVariantInit (&nm);
-        if (ps) ps->GetValue (PKEY_Device_FriendlyName, &nm);
-        juce::String name = (nm.vt == VT_LPWSTR && nm.pwszVal) ? juce::String (nm.pwszVal) : juce::String();
-        PropVariantClear (&nm); if (ps) ps->Release();
-        if (match == nullptr && name.containsIgnoreCase (filter)) { match = dev; matchName = name; }
-        else dev->Release();
+    if (filter.isEmpty()) {
+        if (SUCCEEDED (en->GetDefaultAudioEndpoint (eRender, eConsole, &match)) && match != nullptr) {
+            IPropertyStore* ps = nullptr; match->OpenPropertyStore (STGM_READ, &ps);
+            PROPVARIANT nm; PropVariantInit (&nm);
+            if (ps) ps->GetValue (PKEY_Device_FriendlyName, &nm);
+            matchName = (nm.vt == VT_LPWSTR && nm.pwszVal) ? juce::String (nm.pwszVal) : juce::String();
+            PropVariantClear (&nm); if (ps) ps->Release();
+        }
+    } else {
+        IMMDeviceCollection* coll = nullptr;
+        en->EnumAudioEndpoints (eRender, DEVICE_STATE_ACTIVE, &coll);
+        UINT count = 0; if (coll) coll->GetCount (&count);
+        IMMDevice* sub = nullptr; juce::String subName;   // best substring (contains) fallback
+        for (UINT i = 0; i < count; ++i) {
+            IMMDevice* dev = nullptr; coll->Item (i, &dev);
+            IPropertyStore* ps = nullptr; dev->OpenPropertyStore (STGM_READ, &ps);
+            PROPVARIANT nm; PropVariantInit (&nm);
+            if (ps) ps->GetValue (PKEY_Device_FriendlyName, &nm);
+            juce::String name = (nm.vt == VT_LPWSTR && nm.pwszVal) ? juce::String (nm.pwszVal) : juce::String();
+            PropVariantClear (&nm); if (ps) ps->Release();
+            if      (match == nullptr && name.equalsIgnoreCase   (filter)) match    = dev, matchName = name;  // exact wins
+            else if (sub   == nullptr && name.containsIgnoreCase (filter)) sub      = dev, subName   = name;  // contains fallback
+            else                                                          dev->Release();
+        }
+        if (coll) coll->Release();
+        if (match == nullptr && sub != nullptr) { match = sub; matchName = subName; }   // no exact -> the contains match
+        else if (sub != nullptr)                  sub->Release();                       // had exact -> drop the spare
     }
-    if (coll) coll->Release();
-    if (match == nullptr) { en->Release(); return fail ("no render endpoint matched \"" + filter + "\""); }
+    if (match == nullptr) { en->Release(); return fail (filter.isEmpty()
+        ? juce::String ("no default render endpoint found")
+        : ("no render endpoint matched \"" + filter + "\"")); }
 
     auto releaseAndFail = [&] (juce::String why) -> LoopbackCaptureResult {
         match->Release(); en->Release(); return fail (std::move (why));
