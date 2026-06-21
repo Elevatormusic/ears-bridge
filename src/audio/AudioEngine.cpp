@@ -389,8 +389,10 @@ void AudioEngine::processGradeDetection (const float* respCh, int numSamples, fl
     gradeRingFilled_ += numSamples;
 
     // 2) COSMETIC room-floor activity flag (NOT a grade gate). True when this block's peak clears the LOW
-    //    activity floor (~-50 dBFS, just above room noise). Single writer, relaxed; the GUI reads it for the
-    //    "Sweep in progress..." status and the poll reads it as the "signal settled" check before grading.
+    //    activity floor (~-50 dBFS, just above room noise). Single writer, relaxed; the GUI reads it ONLY for
+    //    the "Sweep in progress..." status. It NO LONGER gates grading (grading triggers on a stable match):
+    //    the EARS mic always reads ambient above this floor, so it never "settles", which is exactly why the
+    //    old silence-gated grade never fired on hardware.
     gradeSignalPresent_.store (blockPeak >= kActivityFloorLinear, std::memory_order_relaxed);
 
     // 3) Periodic ring snapshot for the off-thread match poll. Publish a fresh window about every
@@ -561,6 +563,13 @@ bool AudioEngine::start (juce::String& errorOut) {
     // aggregate's internal drift-correction wobble can't trip the drift latch.)
     bridge.prepare (capRate, renRate, 1, cap);
     hm.prepare (inputId.model, cap, capRate / juce::jmax (1.0, renRate));   // reset + size + NOMINAL ratio (drift detection)
+    // hm.prepare() reset the published refMon state back to its NotLearned default -- which would OVERWRITE
+    // the honest Learned that setReferenceLoaded() published when the user learned a reference, making the
+    // GUI/log lie ("learn a reference") for the whole run. Re-publish the honest state from the live
+    // referenceLoaded_ latch immediately, so a measurement that starts with a reference loaded reads Learned
+    // (a later match-poll grade overwrites this; the capture-callback/complete-edge NotGraded publishes are
+    // untouched and still fire when ! referenceLoaded).
+    hm.publishRefGrade ((int) (referenceLoaded_.load() ? RefMonState::Learned : RefMonState::NotLearned), 0.0f, 0.0f);
     // D2: latch the raw-rail snapshot on this converged success path (always runs before a Running
     // return). reportRawRail MUST come AFTER hm.prepare() -- prepare resets flagBits, so reporting
     // before it would clear the OsResampled guidance flag this raises when the rail isn't verified.
@@ -692,6 +701,9 @@ void AudioEngine::prepareCallbacksForTest (double sampleRate, int block, int fif
     graph.prepare (sampleRate, block);
     bridge.prepare (sampleRate, sampleRate, 1, cap);   // clears the D6 freeze state
     hm.prepare (eb::EarsModel::Ears, cap, 1.0);        // nominal capture:render ratio == 1.0 (equal rates)
+    // Mirror start(): hm.prepare() reset the published refMon state to NotLearned; re-publish the honest
+    // state from referenceLoaded_ so the headless seam reflects a real run (Learned when a reference is loaded).
+    hm.publishRefGrade ((int) (referenceLoaded_.load() ? RefMonState::Learned : RefMonState::NotLearned), 0.0f, 0.0f);
     session_.configure (block, sampleRate);            // D5: size the silence window for this block/rate
     session_.reset();                                  // D5: fresh session each run (Idle -> Preflight -> ...)
     grantedRate_ = sampleRate;                         // gradingResponseRate() reports the seam's capture rate

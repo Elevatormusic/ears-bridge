@@ -817,9 +817,9 @@ void MainComponent::onStartStop() {
         if (engine.start (err)) {
             startStop.setButtonText ("Stop");
             inputClipHold_ = 0; silentTicks_ = 0; lowLevelTicks_ = 0; lowSnrTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
-            // Task 4 match-poll debounce: a fresh run starts settled (silent) and un-graded, so the first
-            // sweep's settled->active edge starts a new sequence cleanly and grades exactly once.
-            gradePollTick_ = 0; gradedThisSequence_ = false; gradeWasSettled_ = true; lastListenTextLogged_.clear();
+            // Task 4 match-poll debounce: a fresh run starts un-matched and un-graded, so the first sustained
+            // match (two consecutive matched polls) grades exactly once.
+            gradePollTick_ = 0; lastPollMatched_ = false; gradedThisSession_ = false; lastListenTextLogged_.clear();
             // Surface a silent format downgrade: WASAPI shared mode can grant a different rate/depth
             // than the user selected, which would otherwise resample with no indication. The split:
             // genuine cautions (a real resample, an unverifiable rail) go on preflightLabel (yellow);
@@ -1364,18 +1364,16 @@ void MainComponent::pollReferenceGrade() {
     // the MATCH is the DETECTOR, so a measurement at ANY level (incl. the low ~-25 dBFS the old -24 dBFS arm
     // could never fire on) is detected. There is NO absolute level gate anywhere in this grade path.
     //
-    // Order: (1) snapshot the match coherence for the diagnostic log; (2) DEBOUNCE — track the settled/active
-    // edge so one settled sequence grades exactly once (gradedThisSequence_, cleared when fresh activity starts
-    // a new sweep); (3) only when matched AND the signal has SETTLED (!gradeSignalPresent) AND not already
-    // graded this sequence, run the OFFLINE align + match-gate + quality grade on the worker and publish.
+    // Grade on a STABLE MATCH, not on silence. The old trigger waited for the signal to SETTLE
+    // (! gradeSignalPresent) before grading — but the EARS mic always registers ambient above the cosmetic
+    // activity floor, so the run never "settled" and the grade was gated forever even at coherence 0.99
+    // (on-device: coherence climbed 0.72->0.99 the whole measurement, no grade ever fired). Instead we grade
+    // when the match is CONFIRMED across two consecutive (throttled ~2 s) polls: a single matched poll can
+    // catch a sweep still rising into the ring, but two in a row means the full sweep has landed in the 28 s
+    // window. gradedThisSession_ is the one-grade-per-match debounce, cleared when the match drops so a fresh
+    // sweep can grade again. gradeSignalPresent() is now used ONLY for the cosmetic "Sweep in progress..."
+    // status (see updateStatusLine) — it NO LONGER gates grading.
     if (loadedReference_.empty() || ! engine.referenceLoaded()) return;   // nothing to grade against
-
-    // Debounce edge tracking runs every tick (cheap atomic read) so the rising-activity edge isn't missed
-    // between the throttled match polls. A settled->active transition starts a NEW sweep sequence: clear the
-    // graded latch so the next settle can grade again.
-    const bool settled = ! engine.gradeSignalPresent();
-    if (gradeWasSettled_ && ! settled) gradedThisSequence_ = false;       // fresh activity -> new sequence
-    gradeWasSettled_ = settled;
 
     if (gradeInFlight_.load()) return;                                    // a prior grade is still running
     if (++gradePollTick_ < kGradePollTicks) return;                      // ~2 s match-poll throttle
@@ -1397,11 +1395,14 @@ void MainComponent::pollReferenceGrade() {
     const auto m = eb::referenceMatches (loadedReference_.data(), window.data(), matchLen);
     engine.setLastMatchCoherence (m.coherence);
 
-    // Grade ONLY when: it MATCHED (a non-match is never a low-quality grade — the gate runs first), the signal
-    // has SETTLED (the sweep ended, so the window holds the whole sequence), and this sequence has not already
-    // been graded (one-grade-per-sequence debounce). No level gate participates in this decision.
-    if (! m.matched || ! settled || gradedThisSequence_) return;
-    gradedThisSequence_ = true;                                          // latch: don't re-grade this sequence
+    // STABLE-MATCH debounce. The match-gate runs FIRST: a non-match never grades, and a dropped match
+    // re-arms the session so the next sweep can grade. Grade once when the match holds across TWO consecutive
+    // throttled polls (~4 s of sustained match ⇒ the sweep is fully captured, not still rising).
+    if (! m.matched) gradedThisSession_ = false;                         // match dropped -> a fresh sweep may grade
+    const bool stableMatch = m.matched && lastPollMatched_;              // two matched polls in a row
+    lastPollMatched_ = m.matched;
+    if (! stableMatch || gradedThisSession_) return;                     // need a stable, not-yet-graded match
+    gradedThisSession_ = true;                                          // latch: don't re-grade this match session
 
     gradeInFlight_.store (true);
     juce::Component::SafePointer<MainComponent> safe (this);
@@ -1499,9 +1500,12 @@ void MainComponent::timerCallback() {
     if (engine.status() == EngineStatus::Running) updateStatusLine();
 
     // ---- Diagnostic log: reference-monitor transitions ON CHANGE + a ~30 s heartbeat (Task 3) ----
-    // Log the detector internals only when a TRACKED value actually changes (state / referenceLoaded /
-    // a bucketed input-peak or coherence step / the guidance verdict), so a steady run doesn't flood the
-    // log at 30 Hz. The input peak + coherence are bucketed (1 dB / 0.05) so dither alone never logs.
+    // Log the detector internals only when a TRACKED value actually changes (state / referenceLoaded / a
+    // bucketed coherence step / the guidance verdict), so a steady run doesn't flood the log at 30 Hz. The
+    // input peak is NOT a change trigger: it changes constantly during a sweep (1 dB buckets at 30 Hz), which
+    // produced ~4000 lines per measurement. It stays an INFO field on the logged line (so each line still
+    // shows the level) and in the de-duplicated heartbeat -- just not in the trigger. Coherence is bucketed
+    // (0.05) so dither alone never logs.
     {
         const int   refState   = engine.refMonState();
         const bool  refLoaded  = engine.referenceLoaded();
@@ -1510,20 +1514,17 @@ void MainComponent::timerCallback() {
         const auto  fl         = engine.health().flags;
         const bool  mismatch   = any (fl & HealthFlag::RefMismatch);
         const bool  lowQuality = any (fl & HealthFlag::RefLowQuality);
-        const int   peakBucket  = (peak <= 1.0e-6f) ? -1000
-                                : juce::roundToInt (juce::Decibels::gainToDecibels (peak, -120.0f));
         const int   coherBucket = juce::roundToInt (coher * 20.0f);   // 0.05 steps
         if (refState != lastRefMonStateLogged_ || refLoaded != lastRefLoadedLogged_
-            || peakBucket != lastInputPeakBucketLogged_ || coherBucket != lastCoherBucketLogged_) {
+            || coherBucket != lastCoherBucketLogged_) {
             logLine (eb::DiagnosticLog::Level::Info,
                      juce::String ("RefMon change: state=") + refMonStateName (refState)
                    + " referenceLoaded=" + (refLoaded ? "yes" : "no")
-                   + " inputPeak=" + linToDbStr (peak) + " dBFS"
+                   + " inputPeak=" + linToDbStr (peak) + " dBFS"   // INFO field only (not a change trigger)
                    + " matchCoherence=" + juce::String (coher, 2)
                    + " verdict=" + (mismatch ? "mismatch" : (lowQuality ? "lowQuality" : "ok")));
             lastRefMonStateLogged_      = refState;
             lastRefLoadedLogged_        = refLoaded;
-            lastInputPeakBucketLogged_  = peakBucket;
             lastCoherBucketLogged_      = coherBucket;
         }
     }
