@@ -29,4 +29,12 @@ struct CalFile {
 // bare letter buried in a word) or no marker -> Unknown. Pure + dependency-free. Used by the cal
 // slot to fill an Unknown content side and to cross-check a content-marked file (content wins).
 CalSide sideFromFilename (const juce::String& fileName);
+
+// Per-slot single-file side check: does a loaded cal's detected side contradict the slot it sits in?
+// True ONLY when the side is KNOWN and WRONG (Unknown -> can't tell -> never flagged, so a generically
+// named file is not falsely accused). This is what flags a wrong-side file with just ONE slot loaded,
+// independent of the other slot (the pair validator only fires when both are present). Pure.
+inline bool calSideMismatched (bool hasCal, CalSide detected, CalSide expected) {
+    return hasCal && detected != CalSide::Unknown && detected != expected;
+}
 }

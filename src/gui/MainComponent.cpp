@@ -675,36 +675,48 @@ void MainComponent::updateStartGate() {
 }
 
 void MainComponent::updateCalProblems() {
-    // A rejected pair (swap / serial mismatch / bad type) only shows in the status line today, which
-    // gets buried under device/level warnings. Surface it LOUDLY on the offending cal card so a
-    // left/right swap is impossible to miss. Only meaningful once both files are loaded AND the
-    // current build has caught up (a stale diagnostic from the PREVIOUS generation must not flash).
+    // Surface a wrong cal file LOUDLY on the offending card so a left/right swap is impossible to miss
+    // (the status line buries it under device/level warnings). Two independent sources:
+    //   1. PER-SLOT single-file side check -- fires with just ONE slot loaded, the moment a file's
+    //      detected side (CalFile::side, from filename + content) contradicts the slot it's in. This
+    //      is what catches "R_HPN in the LEFT slot" before the second file is ever loaded.
+    //   2. PAIR diagnostic (serial mismatch / bad type / a swap the validator catches) -- only
+    //      meaningful once BOTH files are loaded and the current build has caught up (a stale
+    //      diagnostic from the PREVIOUS generation must not flash).
+    juce::String leftProblem, rightProblem;
+
+    // (1) Per-slot side check (independent of the other slot).
+    if (leftCal.hasCal()
+        && eb::calSideMismatched (true, leftCal.calFile()->side, eb::CalSide::Left))
+        leftProblem = "This looks like the RIGHT cal, but it's in the LEFT slot - swap the files.";
+    if (rightCal.hasCal()
+        && eb::calSideMismatched (true, rightCal.calFile()->side, eb::CalSide::Right))
+        rightProblem = "This looks like the LEFT cal, but it's in the RIGHT slot - swap the files.";
+
+    // (2) Pair diagnostic (only when both loaded + the build is current + the pair was rejected).
     const bool building = engine.requestedGeneration() != engine.builtGeneration();
     const auto diag     = building ? juce::String() : engine.calibrationDiagnostic();
-    const bool reject   = leftCal.hasCal() && rightCal.hasCal()
-                       && ! engine.calibrationApplied() && diag.isNotEmpty();
-    if (! reject) { leftCal.setProblem ({}); rightCal.setProblem ({}); return; }
-
-    // Which ear does the diagnostic implicate? A swap names exactly one slot; map it to a plain
-    // "this looks like the X cal, but it's in the Y slot" worded for that card. Serial/type problems
-    // implicate both files, so the message goes on both. (Diagnostic strings come from
-    // validateCalibrationPair: "Left calibration slot holds a file declaring the RIGHT side", etc.)
-    const bool leftSlotSwapped  = diag.containsIgnoreCase ("Left calibration slot holds");
-    const bool rightSlotSwapped = diag.containsIgnoreCase ("Right calibration slot holds");
-    if (leftSlotSwapped || rightSlotSwapped) {
-        if (leftSlotSwapped)
-            leftCal.setProblem ("This looks like the RIGHT cal, but it's in the LEFT slot - swap the files.");
-        else
-            leftCal.setProblem ({});
-        if (rightSlotSwapped)
-            rightCal.setProblem ("This looks like the LEFT cal, but it's in the RIGHT slot - swap the files.");
-        else
-            rightCal.setProblem ({});
-    } else {
-        // Serial mismatch / HEQ / unknown-type: not ear-specific. Show the full reason on both cards.
-        leftCal.setProblem (diag);
-        rightCal.setProblem (diag);
+    const bool pairReject = leftCal.hasCal() && rightCal.hasCal()
+                         && ! engine.calibrationApplied() && diag.isNotEmpty();
+    if (pairReject) {
+        const bool leftSlotSwapped  = diag.containsIgnoreCase ("Left calibration slot holds");
+        const bool rightSlotSwapped = diag.containsIgnoreCase ("Right calibration slot holds");
+        if (leftSlotSwapped || rightSlotSwapped) {
+            // A swap the validator named -- but the per-slot check above usually already set it.
+            if (leftSlotSwapped && leftProblem.isEmpty())
+                leftProblem = "This looks like the RIGHT cal, but it's in the LEFT slot - swap the files.";
+            if (rightSlotSwapped && rightProblem.isEmpty())
+                rightProblem = "This looks like the LEFT cal, but it's in the RIGHT slot - swap the files.";
+        } else {
+            // Serial mismatch / HEQ / unknown-type: not ear-specific. Show on both, but never clobber
+            // a more specific per-slot swap message.
+            if (leftProblem.isEmpty())  leftProblem  = diag;
+            if (rightProblem.isEmpty()) rightProblem = diag;
+        }
     }
+
+    leftCal.setProblem (leftProblem);
+    rightCal.setProblem (rightProblem);
 }
 
 void MainComponent::updateControlsEnabled() {
