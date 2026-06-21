@@ -86,6 +86,7 @@ private:
     DevicePicker outputPicker { "OUTPUT (VIRTUAL CABLE)" };
     juce::Label  outputHint;     // "set this device's capture side as Dirac's Recording device"
     juce::Label  preflightLabel; // warnings (yellow)
+    juce::Label  preflightInfo;  // calm, neutral fact line (e.g. the 32-bit-float / shared-mode note)
     // Shown only when the chosen output is a STANDARD VB-CABLE: Dirac records it in exclusive mode,
     // which that cable can't do (error 600007). Warns to use Hi-Fi Cable + a one-click shared-mode fix.
     juce::Label      diracCableHint;
@@ -140,6 +141,11 @@ private:
     // setRequestedGeneration(); together they form the stale-guard for the Start gate (P0-02).
     std::atomic<int> calGenCounter_ { 0 };
     int themeTick = 0;                          // throttles the live light/dark poll
+
+    // Hosts hover tooltips (e.g. the full 32-bit-float explanation on the neutral info line). A single
+    // window owned by the component is enough for the whole app; declared last so it is destroyed
+    // first (before the labels it serves).
+    juce::TooltipWindow tooltips { this };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

@@ -2,6 +2,7 @@
 #include "gui/ClipStatus.h"
 #include "gui/RawRailStatus.h"
 #include "gui/StartGate.h"   // eb::startReady (Task 3 / #3 advanced override)
+#include "gui/StartNotes.h"  // eb::buildStartNotes (Task 4 / #8 calm bit-depth note)
 #include "platform/DiracCompat.h"
 #include "cal/CalibrationPairValidator.h"   // eb::validateCalibrationPair (P0-07)
 #include "audio/CalibrationGeneration.h"    // eb::CalibrationGeneration (generation lifecycle)
@@ -116,6 +117,13 @@ MainComponent::MainComponent() {
     preflightLabel.setColour (juce::Label::textColourId, Theme::warn());
     preflightLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     addAndMakeVisible (preflightLabel);
+    // Calm, neutral fact line (NOT a warning): e.g. "Output: 32-bit float (shared mode) - normal."
+    // The full honest explanation lives in its tooltip so the short line always fits one rail line.
+    preflightInfo.setColour (juce::Label::textColourId, Theme::textDim());
+    preflightInfo.setFont (juce::Font (juce::FontOptions (12.0f)));
+    preflightInfo.setTooltip ("WASAPI shared mode always delivers 32-bit float; your bit-depth is a "
+                              "stored preference and doesn't affect quality - this is expected.");
+    addAndMakeVisible (preflightInfo);
 
     // Standard-VB-CABLE-vs-Dirac compatibility hint + one-click fix (hidden unless that cable is chosen).
     diracCableHint.setFont (juce::Font (juce::FontOptions (12.0f)));
@@ -403,6 +411,7 @@ void MainComponent::onOutputChosen (const DeviceId& d) {
     preflightLabel.setText (d.isVirtualSink ? juce::String()
                                             : "Selected output is not a known virtual cable.",
                             juce::dontSendNotification);
+    preflightInfo.setText ({}, juce::dontSendNotification);   // a fresh pick clears any prior-run fact line
     rebuildBitDepthMenu();
     updateDiracCableHint();
     updateStartGate();   // output now selected -> may enable Start
@@ -602,21 +611,19 @@ void MainComponent::onStartStop() {
             startStop.setButtonText ("Stop");
             inputClipHold_ = 0; silentTicks_ = 0; lowLevelTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
             // Surface a silent format downgrade: WASAPI shared mode can grant a different rate/depth
-            // than the user selected, which would otherwise resample with no indication.
-            juce::StringArray notes;
-            const double gr = engine.grantedSampleRate();
-            if (std::abs (gr - settings.sampleRate()) > 0.5)
-                notes.add ("Running at " + juce::String (gr / 1000.0, 1) + " kHz, not the selected "
-                           + juce::String (settings.sampleRate() / 1000.0, 1) + " kHz (resampled).");
-            const int gb = engine.grantedOutputBitDepth();
-            if (gb > 0 && gb != settings.outputBitDepth())
-                notes.add ("Output running " + juce::String (gb) + "-bit float (shared mode); your "
-                           + juce::String (settings.outputBitDepth()) + "-bit setting is a preference only.");
-            const auto railNote = eb::rawRailNote (engine.rawRail());
-            if (railNote.isNotEmpty()) notes.add (railNote);
-            preflightLabel.setText (notes.joinIntoString (" "), juce::dontSendNotification);
+            // than the user selected, which would otherwise resample with no indication. The split:
+            // genuine cautions (a real resample, an unverifiable rail) go on preflightLabel (yellow);
+            // the 32-bit-float fact is NORMAL, so it goes on the neutral preflightInfo line (#8).
+            const auto notes = eb::buildStartNotes (engine.grantedSampleRate(), settings.sampleRate(),
+                                                    engine.grantedOutputBitDepth(), settings.outputBitDepth(),
+                                                    engine.rawRail());
+            preflightLabel.setText (notes.warnings.joinIntoString (" "), juce::dontSendNotification);
+            preflightInfo.setText (notes.info, juce::dontSendNotification);
+            resized();   // the info line claims a row only when non-empty -> relayout the rail
         } else {
             preflightLabel.setText ("Start failed: " + err, juce::dontSendNotification);
+            preflightInfo.setText ({}, juce::dontSendNotification);
+            resized();
         }
     }
     updateStartGate();
@@ -723,6 +730,7 @@ void MainComponent::applyTextColours() {
     inputGainHint.setColour  (juce::Label::textColourId, Theme::textDim());
     outputHint.setColour     (juce::Label::textColourId, Theme::textDim());
     preflightLabel.setColour (juce::Label::textColourId, Theme::warn());
+    preflightInfo.setColour  (juce::Label::textColourId, Theme::textDim());
     rateWarn.setColour       (juce::Label::textColourId, Theme::warn());
     inputPicker.applyTheme();
     outputPicker.applyTheme();
@@ -1056,6 +1064,12 @@ void MainComponent::resized() {
         rr.removeFromTop (4);
         outputHint.setBounds (rr.removeFromTop (30));
         preflightLabel.setBounds (rr.removeFromTop (14));
+        // The neutral fact line sits just below the warnings; it only claims a row when it has text,
+        // so an empty info line never pushes the rest of the rail down.
+        if (preflightInfo.getText().isNotEmpty())
+            preflightInfo.setBounds (rr.removeFromTop (14));
+        else
+            preflightInfo.setBounds ({});
         if (diracCableHint.isVisible()) {
             rr.removeFromTop (6);
             diracCableHint.setBounds (rr.removeFromTop (48));
