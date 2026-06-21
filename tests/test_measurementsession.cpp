@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include "audio/MeasurementSession.h"
 
+using Catch::Approx;
 using eb::MeasurementSession;
 using eb::SessionPhase;
 
@@ -138,4 +140,66 @@ TEST_CASE("MeasurementSession: reset returns to Idle and clears the arm run") {
     CHECK (s.phase() == SessionPhase::Idle);
     arm (s);                                                  // a fresh full run arms cleanly
     CHECK (s.phase() == SessionPhase::SweepActive);
+}
+
+// ---- SNR Task 1: the pre-sweep noise floor is frozen + published at the arm instant ----
+
+TEST_CASE("MeasurementSession: arm-floor freezes at the pre-sweep value and does not move once SweepActive") {
+    MeasurementSession s; s.reset();
+    CHECK (s.armNoiseFloor() == 0.0f);                             // 0 until armed
+    // A genuine quiet pre-sweep window (0.003 ~ -50 dBFS) settles the floor low, then a rise arms.
+    blocks (s, MeasurementSession::kArmWarmupBlocks + 12, 0.003f); // quiet floor settles to ~kSilenceFloorLinear
+    CHECK (s.armNoiseFloor() == 0.0f);                             // still Preflight: not snapshotted yet
+    blocks (s, MeasurementSession::kArmSustainBlocks, 0.2f);       // the rise that arms
+    CHECK (s.phase() == SessionPhase::SweepActive);
+
+    const float armed = s.armNoiseFloor();
+    // The snapshot reflects the quiet pre-sweep floor, NOT the loud sweep level. (The Phase-1 EWMA folds
+    // in the first onset block before the arm latches, so it sits a touch above the silence seed but
+    // stays an order of magnitude below the sweep.)
+    CHECK (armed >= MeasurementSession::kSilenceFloorLinear);
+    CHECK (armed < 0.05f);                                         // far below the 0.2 sweep peak
+
+    // FROZEN: feeding more loud blocks (the body of the sweep) must not move the published arm-floor.
+    blocks (s, 50, 0.5f);
+    CHECK (s.armNoiseFloor() == Approx (armed));
+}
+
+TEST_CASE("MeasurementSession: the arm-floor is per-onset (a second sweep with a louder floor)") {
+    MeasurementSession s; s.reset();
+    // First onset off a near-silent floor.
+    blocks (s, MeasurementSession::kArmWarmupBlocks + 12, 0.003f);
+    blocks (s, MeasurementSession::kArmSustainBlocks, 0.2f);
+    CHECK (s.phase() == SessionPhase::SweepActive);
+    const float firstFloor = s.armNoiseFloor();
+    CHECK (s.consumeSweepStarted());
+
+    // Drive to a provisional Complete (the floor reseeds low on the SweepActive->Complete edge).
+    blocks (s, MeasurementSession::kDefaultSilenceBlocks + 2, kQuiet);
+    CHECK (s.phase() == SessionPhase::Complete);
+
+    // SECOND quiet window at a DISTINCTLY louder (but still sub-arm) floor, then a rise re-arms.
+    blocks (s, 30, 0.02f);                                         // ~ -34 dBFS room: a louder floor
+    blocks (s, MeasurementSession::kArmSustainBlocks, 0.3f);       // rise above floor*kArmRiseRatio
+    CHECK (s.phase() == SessionPhase::SweepActive);
+    const float secondFloor = s.armNoiseFloor();
+
+    // The published floor reflects the SECOND window, not the first.
+    CHECK (secondFloor > firstFloor + 0.005f);
+    CHECK (secondFloor < 0.3f);                                    // still below the sweep level
+}
+
+TEST_CASE("MeasurementSession: pre-sweep floor-confidence reflects the warm-up spread") {
+    SECTION("a steady quiet warm-up reads stable") {
+        MeasurementSession s; s.reset();
+        blocks (s, MeasurementSession::kArmWarmupBlocks + 12, 0.003f);
+        CHECK (s.preSweepFloorStable());
+    }
+    SECTION("a warm-up whose block peaks swing wildly reads NOT stable") {
+        MeasurementSession s; s.reset();
+        // Alternating 0.003 / 0.05 -> a >10x spread in the pre-sweep window: non-stationary, untrustworthy.
+        for (int i = 0; i < MeasurementSession::kArmWarmupBlocks + 12; ++i)
+            s.observeBlockPeak ((i % 2 == 0) ? 0.003f : 0.05f);
+        CHECK_FALSE (s.preSweepFloorStable());
+    }
 }

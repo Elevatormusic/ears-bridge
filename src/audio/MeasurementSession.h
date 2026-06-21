@@ -39,6 +39,12 @@ public:
     // Below this counts as silence for the sweep-end detector. Same -50 dBFS no-signal floor the level
     // guidance uses, kept independent so the two can't desync by accident. Also the noiseFloor_ seed.
     static constexpr float kSilenceFloorLinear    = 0.00316f;   // -50 dBFS
+    // SNR: the pre-sweep window is "stable" (trustworthy as a noise floor) when the spread of its block
+    // peaks is within this ratio (3.0 ~ +9.5 dB). A genuinely quiet, stationary room hugs a narrow band;
+    // a non-stationary pre-sweep window (HVAC cycling, a passing transient) swings wider and reads false,
+    // so the SNR check falls back to honest silence instead of warning off a contaminated floor.
+    // PROVISIONAL: on-device ratification needed (does a normal quiet room read stable?).
+    static constexpr float kFloorStableRatio      = 3.0f;
     // Terminal post-signal silence that ends a sweep segment, expressed in TIME. configure() converts
     // it to a block count for the real block size; kDefaultSilenceBlocks is the pre-configure default
     // (~1.5 s @ 512/48k) used by unit tests. 1.5 s is long enough that the quiet tail of a sweep (or a
@@ -61,6 +67,15 @@ public:
 
     SessionPhase phase() const noexcept { return static_cast<SessionPhase> (phase_.load()); }
     bool sweepActive()   const noexcept { return phase() == SessionPhase::SweepActive; }   // D6 consumer
+
+    // SNR: the pre-sweep room noise floor (linear peak) SNAPSHOTTED at the arm instant (Preflight ->
+    // SweepActive), then FROZEN for that onset; 0.0 until the session has armed at least once. Per-onset:
+    // a Complete -> re-arm reseeds the tracker low, so a second sweep publishes its own pre-sweep floor.
+    // Read off the GUI thread via the fixed-point atomic (the project's peak*1000 publish idiom).
+    float armNoiseFloor() const noexcept { return armFloorMilli_.load() / 1000.0f; }
+    // SNR: true when the pre-sweep warm-up window was quiet/stationary enough to trust the floor (its
+    // block-peak spread stayed within kFloorStableRatio). The SNR check only warns off a trusted floor.
+    bool preSweepFloorStable() const noexcept { return floorStable_.load(); }
     // True once the measurement has started (armed or later) — the engine marks Invalid only here, so a
     // pre-sweep room event in Idle/Preflight is never scored, but a same-block silence->Complete plus a
     // late-latched dropout still invalidates.
@@ -75,6 +90,13 @@ private:
     // requireWarmup gates the FIRST onset on kArmWarmupBlocks (Complete re-arm doesn't need it).
     bool advanceArmRun (float peak, bool requireWarmup) noexcept;
 
+    // SNR (capture-thread, single writer, no alloc/lock): fold one pre-sweep block peak into the
+    // floor-confidence spread (floorMin_/floorMax_) and republish floorStable_. Skipped once a rise is
+    // underway (armRun_ > 0) so the sweep's loud onset blocks can't poison the floor-spread estimate.
+    void observePreSweepFloor (float peak) noexcept;
+    // SNR: snapshot the tracked noiseFloor_ into the frozen, published arm-floor at the arm instant.
+    void freezeArmFloor() noexcept;
+
     std::atomic<int>  phase_        { (int) SessionPhase::Idle };
     std::atomic<bool> sweepStarted_ { false };   // edge, drained by consumeSweepStarted()
     int  armRun_            = 0;                  // CAPTURE-THREAD scratch: consecutive rise-above-floor blocks
@@ -85,6 +107,18 @@ private:
     // so a rising sweep can't poison it; an arm block requires peak >= noiseFloor_ * kArmRiseRatio.
     float noiseFloor_      = kSilenceFloorLinear; // CAPTURE-THREAD scratch: EWMA of the pre-sweep room floor
     int   preflightBlocks_ = 0;                   // CAPTURE-THREAD scratch: Preflight blocks seen (warm-up gate)
+
+    // SNR: the pre-sweep floor frozen at the arm instant, published to the GUI via armFloorMilli_
+    // (peak*1000 fixed-point, same idiom as HealthMonitor's level atomics). armFloor_ is the capture-thread
+    // scalar; armFloorMilli_ is the lock-free read.
+    float            armFloor_      = 0.0f;        // CAPTURE-THREAD scratch: noiseFloor_ snapshot at arm
+    std::atomic<int> armFloorMilli_ { 0 };        // published: int(armFloor_ * 1000); 0 until armed
+    // SNR: floor-confidence over the pre-sweep window. floorMin_/floorMax_ track the per-block-peak spread
+    // (capture-thread scalars, single writer); floorStable_ publishes whether it stayed within
+    // kFloorStableRatio. All three re-evaluate per onset (reset on reset() + the SweepActive->Complete edge).
+    float            floorMin_      = 0.0f;        // CAPTURE-THREAD scratch: min pre-sweep block peak (0 = unset)
+    float            floorMax_      = 0.0f;        // CAPTURE-THREAD scratch: max pre-sweep block peak
+    std::atomic<bool> floorStable_  { false };     // published: pre-sweep window quiet/stationary enough
 };
 
 } // namespace eb
