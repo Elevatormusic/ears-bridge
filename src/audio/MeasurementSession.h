@@ -62,6 +62,11 @@ public:
     // the one validity re-scope in the engine. Re-arms out of a provisional Complete do NOT set it.
     bool consumeSweepStarted() noexcept;
 
+    // SNR edge: true exactly once per SweepActive->Complete transition (terminal post-sweep silence) —
+    // drives the engine's ONE per-sweep SNR verdict (mirrors consumeSweepStarted). Each completed sweep
+    // segment (e.g. the right-earcup re-arm that later goes silent again) fires it once.
+    bool consumeSweepComplete() noexcept;
+
     // Latch Invalid (an invalidating HealthMonitor flag fired in-measurement). Absorbing.
     void markInvalid() noexcept;
 
@@ -75,7 +80,16 @@ public:
     float armNoiseFloor() const noexcept { return armFloorMilli_.load() / 1000.0f; }
     // SNR: true when the pre-sweep warm-up window was quiet/stationary enough to trust the floor (its
     // block-peak spread stayed within kFloorStableRatio). The SNR check only warns off a trusted floor.
+    // NOTE: this is the LIVE floor confidence — it is reseeded to false at the SweepActive->Complete
+    // edge for the NEXT onset. The engine's per-sweep verdict (drained via consumeSweepComplete) must
+    // read completedFloorStable() instead, which is snapshotted at that edge for the sweep that finished.
     bool preSweepFloorStable() const noexcept { return floorStable_.load(); }
+
+    // SNR: the floor confidence of the JUST-COMPLETED sweep, snapshotted at the SweepActive->Complete
+    // edge BEFORE floorStable_ is reseeded for the next onset. This is the value the SNR verdict must use
+    // (consumeSweepComplete pairs with it); preSweepFloorStable() would already read the next onset's
+    // (false) state by the time the engine drains the edge on the same capture block.
+    bool completedFloorStable() const noexcept { return completedFloorStable_.load(); }
     // True once the measurement has started (armed or later) — the engine marks Invalid only here, so a
     // pre-sweep room event in Idle/Preflight is never scored, but a same-block silence->Complete plus a
     // late-latched dropout still invalidates.
@@ -99,6 +113,7 @@ private:
 
     std::atomic<int>  phase_        { (int) SessionPhase::Idle };
     std::atomic<bool> sweepStarted_ { false };   // edge, drained by consumeSweepStarted()
+    std::atomic<bool> sweepCompleted_ { false }; // SNR edge, drained by consumeSweepComplete()
     int  armRun_            = 0;                  // CAPTURE-THREAD scratch: consecutive rise-above-floor blocks
     int  silenceRun_        = 0;                  // CAPTURE-THREAD scratch: consecutive below-floor blocks in-sweep
     bool sawSignal_         = false;              // CAPTURE-THREAD scratch: signal seen since SweepActive entry
@@ -119,6 +134,9 @@ private:
     float            floorMin_      = 0.0f;        // CAPTURE-THREAD scratch: min pre-sweep block peak (0 = unset)
     float            floorMax_      = 0.0f;        // CAPTURE-THREAD scratch: max pre-sweep block peak
     std::atomic<bool> floorStable_  { false };     // published: pre-sweep window quiet/stationary enough
+    // SNR: floorStable_ snapshotted at the SweepActive->Complete edge (the confidence of the sweep that
+    // just finished), so the engine's per-sweep verdict isn't poisoned by the next onset's reseed.
+    std::atomic<bool> completedFloorStable_ { false };
 };
 
 } // namespace eb

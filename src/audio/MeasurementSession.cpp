@@ -6,6 +6,8 @@ namespace eb {
 void MeasurementSession::reset() noexcept {
     phase_.store ((int) SessionPhase::Idle);
     sweepStarted_.store (false);
+    sweepCompleted_.store (false);
+    completedFloorStable_.store (false);
     armRun_ = 0; silenceRun_ = 0; sawSignal_ = false;
     noiseFloor_ = kSilenceFloorLinear; preflightBlocks_ = 0;
     // SNR: clear the frozen arm-floor + the floor-confidence trackers (re-evaluated per onset).
@@ -44,6 +46,12 @@ void MeasurementSession::observePreSweepFloor (float peak) noexcept {
     // Only fold the genuine pre-sweep window (no rise underway): the same gate noiseFloor_ uses, so the
     // floor-spread reflects the quiet room, not the ramp that arms.
     if (armRun_ != 0)
+        return;
+    // SNR fix: also exclude the FIRST qualifying onset block. observePreSweepFloor runs BEFORE
+    // advanceArmRun, so on the block that STARTS the arm run armRun_ is still 0 and the loud onset peak
+    // would otherwise widen the floor spread and falsely read the floor "unstable" — poisoning the
+    // SweepActive->Complete SNR verdict. A block at/above the rise gate is a sweep onset, not floor.
+    if (peak >= kSweepStartLinear && peak >= noiseFloor_ * kArmRiseRatio)
         return;
     if (floorMin_ <= 0.0f) {                 // first pre-sweep block of this onset: seed both ends
         floorMin_ = floorMax_ = std::max (peak, kSilenceFloorLinear);
@@ -107,6 +115,12 @@ void MeasurementSession::observeBlockPeak (float peak) noexcept {
     if (peak < kSilenceFloorLinear) {
         if (sawSignal_ && ++silenceRun_ >= silenceBlocksNeeded_) {
             phase_.store ((int) SessionPhase::Complete);
+            // SNR: latch the once-per-sweep edge for the engine's SNR verdict (drained by
+            // consumeSweepComplete), and snapshot THIS sweep's floor confidence BEFORE the reseed below
+            // clears floorStable_ for the next onset — so the verdict reads the confidence of the sweep
+            // that just finished, not the (false) freshly-reseeded next-onset state.
+            completedFloorStable_.store (floorStable_.load());
+            sweepCompleted_.store (true);
             // Reseed the floor low so the right-earcup re-arm (out of Complete) sees a fresh quiet floor
             // and the rise gate triggers on the next sweep instead of an inflated post-sweep floor.
             noiseFloor_ = kSilenceFloorLinear;
@@ -121,6 +135,10 @@ void MeasurementSession::observeBlockPeak (float peak) noexcept {
 
 bool MeasurementSession::consumeSweepStarted() noexcept {
     return sweepStarted_.exchange (false);
+}
+
+bool MeasurementSession::consumeSweepComplete() noexcept {
+    return sweepCompleted_.exchange (false);
 }
 
 void MeasurementSession::markInvalid() noexcept {
