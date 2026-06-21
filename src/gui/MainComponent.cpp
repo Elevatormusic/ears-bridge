@@ -793,8 +793,17 @@ void MainComponent::updateStatusLine() {
         } else if (h.session == SessionPhase::Idle || h.session == SessionPhase::Preflight) {
             // Before the sweep arms: validity isn't scoped to anything yet, so don't claim "clean" and
             // suppress the in-sweep warnings below (output-clip / silent / low-level), which are only
-            // meaningful once Dirac is actually driving the sweep.
-            statusLine.setText ("Running - waiting for the Dirac sweep...", juce::dontSendNotification);
+            // meaningful once Dirac is actually driving the sweep. With a reference loaded the grade no
+            // longer depends on the (gradual-sweep-blind) level arm — the engine listens via the rolling
+            // ring + the deterministic match — so say "Listening" (NOT "waiting", which implied the old,
+            // broken arm). Non-adopters (no reference learned, no verdict yet) keep the unchanged wording.
+            const bool refEngaged = engine.referenceLoaded()
+                                 && (eb::RefMonState) engine.refMonState() != eb::RefMonState::GradedClean
+                                 && (eb::RefMonState) engine.refMonState() != eb::RefMonState::GradedSuspect
+                                 && (eb::RefMonState) engine.refMonState() != eb::RefMonState::ReferenceStale;
+            statusLine.setText (refEngaged ? "Listening for the Dirac sweep..."
+                                           : "Running - waiting for the Dirac sweep...",
+                                juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::textDim());
         } else if (any (h.flags & HealthFlag::ClipOutput)) {
             // The output hit full scale (e.g. Sum's uncompensated +6 dB drove past the clamp). The
@@ -1086,33 +1095,37 @@ void MainComponent::onLearnReference() {
 }
 
 void MainComponent::pollReferenceGrade() {
-    // Timer-driven: a sweep COMPLETED with a reference loaded (the engine set pendingGrade_ at the edge).
-    // Run the OFFLINE deconvolution + gradeMeasurement on the worker (NOT the audio thread, NOT the message
-    // thread — gradeMeasurement is two FFT passes), then publish the verdict via the engine atomics so
-    // updateStatusLine reflects it. Both halves are now live: the learned reference is held in
-    // loadedReference_ and the per-sweep mic response is buffered by the capture thread into the engine's
-    // pre-allocated response buffer (copied out here via copyGradingResponse).
+    // Timer-driven: the engine's DETERMINISTIC activity-edge trigger (#7 fix) fired pendingGrade_ after a
+    // measurement sequence finished with a reference loaded. Run the OFFLINE alignment + deconvolution +
+    // gradeMeasurement on the worker (NOT the audio thread, NOT the message thread — it is several FFT
+    // passes), then publish the verdict via the engine atomics so updateStatusLine reflects it. Both halves
+    // are live: the learned reference is held in loadedReference_, and the mic response is buffered
+    // CONTINUOUSLY by the capture thread into the engine's rolling ring (copied out here as a long WINDOW).
+    // The match-gate (inside gradeMeasurementWindow) is the correctness decision: a non-sweep window (a
+    // finger snap, music, the inter-sweep gap) fails it and grades ReferenceStale — never a false clean grade.
     // Check the act-on-it preconditions BEFORE draining pendingGrade_, so a grade isn't silently consumed
     // while a prior one is still running (it stays pending and the next poll picks it up).
     if (gradeInFlight_.load()) return;                                    // a prior grade is still running
     if (loadedReference_.empty() || ! engine.referenceLoaded()) return;   // nothing to grade against
-    if (! engine.consumePendingGrade()) return;                          // no completed-sweep grade to run
+    if (! engine.consumePendingGrade()) return;                          // no completed-sequence grade to run
 
-    // Copy the ready response OUT of the engine into our own buffer (the allocation lives here, not the
-    // engine). Sized to the reference length so deconvolve works on equal-length segments; copyGradingResponse
-    // returns the number of valid samples it actually captured this sweep.
-    std::vector<float> response (loadedReference_.size(), 0.0f);
-    const int got = engine.copyGradingResponse (response.data(), (int) response.size());
-    if (got <= 0) return;   // no fresh response ready (shouldn't happen when pendingGrade fired, but be safe)
+    // Copy the FULL rolling-ring WINDOW out of the engine into our own buffer (the allocation lives here,
+    // not the engine). The window is leading silence + the sweep somewhere inside it; the worker aligns
+    // the reference inside it via cross-correlation, so we must NOT truncate it to the reference length.
+    std::vector<float> window ((size_t) juce::jmax (1, (int) std::lround (engine.gradingResponseRate() * 28.0)), 0.0f);
+    const int got = engine.copyGradingResponse (window.data(), (int) window.size());
+    if (got <= 0) return;   // no fresh window ready (shouldn't happen when pendingGrade fired, but be safe)
+    window.resize ((size_t) got);
 
     gradeInFlight_.store (true);
     juce::Component::SafePointer<MainComponent> safe (this);
     auto reference = loadedReference_;                 // copy for the worker (message-thread snapshot)
     const double rate = loadedReferenceRate_;
-    const int n = juce::jmin ((int) reference.size(), (int) response.size());
-    firPool->addJob ([safe, reference = std::move (reference), response = std::move (response), rate, n]() mutable {
-        // OFFLINE on the worker: match-gate FIRST, then quality (gradeMeasurement enforces the order).
-        auto g = eb::gradeMeasurement (reference.data(), response.data(), n, rate);
+    const int refLen = (int) reference.size();
+    firPool->addJob ([safe, reference = std::move (reference), window = std::move (window), rate, refLen]() mutable {
+        // OFFLINE on the worker: locate the sweep inside the window (align), then match-gate FIRST, then
+        // quality (gradeMeasurementWindow enforces the order). A non-sweep window fails the gate -> stale.
+        auto g = eb::gradeMeasurementWindow (reference.data(), refLen, window.data(), (int) window.size(), rate);
         const int   state   = (int) g.state;
         const bool  mismatch = (g.state == eb::RefMonState::ReferenceStale);
         const float irSnr   = g.quality.irSnrDb;

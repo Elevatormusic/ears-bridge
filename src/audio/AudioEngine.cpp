@@ -42,10 +42,8 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
         // pre-sweep region; a clip on the block that COMPLETES the arm still latches.
         const float pk = eb::HealthMonitor::blockPeak (l, r, numSamples);
         e.session_.observeBlockPeak (pk);
-        if (e.session_.consumeSweepStarted()) {
+        if (e.session_.consumeSweepStarted())
             e.hm.resetMeasurementLatches();
-            e.responseWriteIdx_ = 0;   // fresh sweep onset: restart the response capture from the top
-        }
         e.bridge.setSweepActive (e.session_.sweepActive());   // D6: freeze the SRC ratio during the sweep, release between sweeps
 
         e.hm.analyzeInputBlock (l, r, numSamples);             // detection (raw input): peak, run, NaN
@@ -57,22 +55,12 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
             float spkL = 0.0f, spkR = 0.0f;
             eb::HealthMonitor::blockPeakPerEar (l, r, numSamples, spkL, spkR);
             e.hm.observeSweepPeak (spkL, spkR);
-
-            // Live grading (Plan 5): buffer THIS block's mic RESPONSE into the pre-allocated response
-            // buffer so the worker can deconvolve it OFFLINE at the sweep-complete edge. RT-safe: a
-            // bounded memcpy into pre-allocated storage, capped at the buffer end (a ~25 s sweep can't
-            // exceed it; if it ever did we keep the first 25 s and never write past the end). The
-            // reference is mono, so we capture the LEFT channel (Dirac feeds one earcup at a time;
-            // the response we grade is the captured mono path). Single writer (capture thread).
-            if (! e.responseBuffer_.empty()) {
-                const int room = (int) e.responseBuffer_.size() - e.responseWriteIdx_;
-                const int cpy  = juce::jmin (numSamples, juce::jmax (0, room));
-                if (cpy > 0) {
-                    std::memcpy (e.responseBuffer_.data() + e.responseWriteIdx_, l, (size_t) cpy * sizeof (float));
-                    e.responseWriteIdx_ += cpy;
-                }
-            }
         }
+
+        // Live grading (Plan 5, #7 fix): the mic RESPONSE is buffered CONTINUOUSLY (NOT gated on the level
+        // arm — a gradual Dirac sweep never arms it) and the grade fires on a deterministic activity edge.
+        // Reference is mono, so we grade the LEFT channel (the captured mono path). Single writer, RT-safe.
+        e.processGradeDetection (l, numSamples, pk);
         // SNR: once per SweepActive->Complete edge (the sweep just finished), compute the per-ear SNR
         // verdict ONCE and raise the LowSnr GUIDANCE flag on a noisy sweep. RT-safe: evaluateSnr is a few
         // log10 + compares + atomic reads, raiseLowSnr is one atomic OR -- NO alloc/lock, and NO String
@@ -93,19 +81,12 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
             e.hm.publishCompletedSnrDb (v.snrDbMin);
             e.hm.resetSweepPeaks();
 
-            // Reference-Based Measurement Monitor (Plan 5): the completed-sweep edge is where measurement
-            // grading hooks. KEEP IT LIGHTWEIGHT — NO deconvolution on the audio thread. If a reference is
-            // loaded, SNAPSHOT the response length captured this sweep and flag that there is a measurement
-            // to grade + a fresh response to copy, so the GUI worker can run gradeMeasurement OFFLINE; with
-            // NO reference, publish the honest NotGraded state (RefMonState::NotGraded == 5) so the GUI
-            // shows "not graded - learn a reference" and never green. All single atomic stores — RT-safe.
-            if (e.referenceLoaded_.load()) {
-                e.responseReadyLen_.store (e.responseWriteIdx_);   // length captured this sweep (snapshot)
-                e.responseReady_.store (true);                     // a complete response is ready to grade
-                e.pendingGrade_.store (true);
-            } else {
+            // Reference-Based Measurement Monitor (Plan 5, #7 fix): grading is now TRIGGERED DETERMINISTICALLY
+            // by processGradeDetection's activity edge (not this level-arm edge, which a gradual Dirac sweep
+            // never reaches). Here we ONLY publish the honest NotGraded state when NO reference is loaded, so a
+            // non-adopter run still reads "not graded - learn a reference" and never green. RT-safe single store.
+            if (! e.referenceLoaded_.load())
                 e.hm.publishRefGrade ((int) RefMonState::NotGraded, 0.0f, 0.0f);
-            }
         }
         // In-measurement only: an invalidating flag (clip/NaN/dropout/drift) latches the session Invalid
         // so the GUI's phase-gated wording matches cleanCapture(). Single-writer: the capture thread is
@@ -330,13 +311,89 @@ void AudioEngine::setReferenceLoaded (bool loaded) noexcept { referenceLoaded_.s
 bool AudioEngine::referenceLoaded()        const noexcept { return referenceLoaded_.load(); }
 bool AudioEngine::consumePendingGrade()    noexcept      { return pendingGrade_.exchange (false); }
 
-void AudioEngine::allocateResponseBuffer (double rate) {
+void AudioEngine::allocateResponseBuffer (double rate, int blockLen) {
     // Pre-allocate (message thread) for kGradingSeconds at this rate so the capture thread NEVER resizes.
+    // BOTH the rolling ring and the contiguous snapshot are sized identically; the capture thread only
+    // memcpy's into them (never grows them). Reset all capture-thread trigger scratch for a fresh run.
     const int len = juce::jmax (1, (int) std::lround (rate * kGradingSeconds));
+    gradeRing_.assign ((size_t) len, 0.0f);
     responseBuffer_.assign ((size_t) len, 0.0f);
-    responseWriteIdx_ = 0;
+    gradeRingWrite_     = 0;
+    gradeRingFilled_    = 0;
+    gradeActiveBlocks_  = 0;
+    gradeSilenceBlocks_ = 0;
+    gradeArmed_         = false;
+    // Trailing-silence count for THIS block size/rate: the trigger counts WHOLE capture blocks, so convert
+    // kGradeSilenceSeconds into blocks for the real block size (>= 1 so a degenerate block can't disable it).
+    const int blk = juce::jmax (1, blockLen);
+    gradeSilenceNeeded_ = juce::jmax (1, (int) std::lround (kGradeSilenceSeconds * rate / (double) blk));
     responseReadyLen_.store (0);
     responseReady_.store (false);
+}
+
+void AudioEngine::snapshotGradeRing() noexcept {
+    // Capture-thread: copy the rolling ring into responseBuffer_ in OLDEST->NEWEST order, then publish the
+    // length + ready flag. Two bounded memcpy into pre-allocated storage -> RT-safe (no alloc/lock). When
+    // the run has not yet filled the ring, the valid span is [0, gradeRingFilled_) starting at index 0;
+    // once wrapped, the oldest sample sits at gradeRingWrite_ and the span is the whole ring.
+    const int size = (int) gradeRing_.size();
+    if (size <= 0 || (int) responseBuffer_.size() < size) { responseReadyLen_.store (0); responseReady_.store (true); return; }
+    if (gradeRingFilled_ < (long long) size) {
+        // Not wrapped yet: the valid samples are the first gradeRingFilled_ entries, already in order.
+        const int n = (int) gradeRingFilled_;
+        if (n > 0) std::memcpy (responseBuffer_.data(), gradeRing_.data(), (size_t) n * sizeof (float));
+        responseReadyLen_.store (n);
+    } else {
+        // Wrapped: oldest is at gradeRingWrite_. Copy [write..end) then [0..write).
+        const int tail = size - gradeRingWrite_;
+        if (tail > 0) std::memcpy (responseBuffer_.data(), gradeRing_.data() + gradeRingWrite_, (size_t) tail * sizeof (float));
+        if (gradeRingWrite_ > 0) std::memcpy (responseBuffer_.data() + tail, gradeRing_.data(), (size_t) gradeRingWrite_ * sizeof (float));
+        responseReadyLen_.store (size);
+    }
+    responseReady_.store (true);
+}
+
+void AudioEngine::processGradeDetection (const float* respCh, int numSamples, float blockPeak) noexcept {
+    // The #7 deterministic, reference-driven grade detection. Runs ONLY when a reference is loaded (so
+    // non-adopters are completely unaffected) and is INDEPENDENT of MeasurementSession's rise-ratio arm.
+    if (! referenceLoaded_.load() || gradeRing_.empty() || respCh == nullptr || numSamples <= 0)
+        return;
+
+    // 1) Continuous rolling-ring write (single writer, capture thread, pre-allocated -> RT-safe). Copy the
+    //    block in, wrapping at the ring end; advance the head + the running fill count. A ~25 s sequence is
+    //    far shorter than the ring, so the most-recent kGradingSeconds always holds the whole sequence.
+    const int size = (int) gradeRing_.size();
+    int idx = gradeRingWrite_;
+    const int first = juce::jmin (numSamples, size - idx);
+    if (first > 0) std::memcpy (gradeRing_.data() + idx, respCh, (size_t) first * sizeof (float));
+    const int rest = numSamples - first;
+    if (rest > 0) std::memcpy (gradeRing_.data(), respCh + first, (size_t) juce::jmin (rest, size) * sizeof (float));
+    idx += numSamples;
+    while (idx >= size) idx -= size;
+    gradeRingWrite_  = idx;
+    gradeRingFilled_ += numSamples;
+
+    // 2) Absolute-energy activity edge (NO floor-ratio, NO warm-up -> a gradual log-sweep clears it). Count
+    //    sustained above-floor blocks to ARM, then count trailing below-floor blocks; when the trailing
+    //    silence exceeds Dirac's inter-sweep gap, the FULL L+R sequence has finished -> grade ONCE.
+    if (blockPeak >= kGradeActiveLinear) {
+        gradeSilenceBlocks_ = 0;
+        if (++gradeActiveBlocks_ >= kGradeActiveMinBlocks)
+            gradeArmed_ = true;     // enough sustained energy to treat the next silence as a sequence end
+    } else {
+        gradeActiveBlocks_ = 0;
+        if (gradeArmed_ && ++gradeSilenceBlocks_ >= gradeSilenceNeeded_) {
+            // Trailing silence after sustained activity -> the sequence completed. Snapshot the ring (the
+            // last ~kGradingSeconds, which contains the whole L+R sequence) and flag a grade to run OFFLINE.
+            // The match-gate in the GUI worker is the correctness decision; a non-sweep transient (snap,
+            // music) will fail referenceMatches and is silently dropped. DEBOUNCE: disarm so the same
+            // sequence isn't re-graded until fresh sustained activity re-arms it.
+            snapshotGradeRing();
+            pendingGrade_.store (true);
+            gradeArmed_         = false;
+            gradeSilenceBlocks_ = 0;
+        }
+    }
 }
 
 int AudioEngine::copyGradingResponse (float* dst, int maxLen) noexcept {
@@ -491,7 +548,7 @@ bool AudioEngine::start (juce::String& errorOut) {
     hm.reportRawRail (rawRail_.verified);
     session_.configure (maxBlk, capRate);   // D5: size the terminal-silence window for this BLOCK size/rate (NOT the FIFO capacity)
     session_.reset();                    // fresh measurement session each run (Idle -> Preflight -> ...)
-    allocateResponseBuffer (capRate);    // Plan 5: pre-allocate the live-grading response buffer (off the audio thread)
+    allocateResponseBuffer (capRate, maxBlk);   // Plan 5: pre-allocate the live-grading ring + size the trigger (off the audio thread)
     bridge.reset();
     // Pre-fill the FIFO to the PI controller's half-full target BEFORE the streams start. The two
     // device callbacks begin asynchronously and the render callback can pull before capture has
@@ -557,7 +614,7 @@ void AudioEngine::prepareForTest (double sampleRate, int block) {
     session_.configure (block, sampleRate);
     session_.reset();
     grantedRate_ = sampleRate;             // so gradingResponseRate() reports the seam's capture rate
-    allocateResponseBuffer (sampleRate);   // Plan 5: pre-allocate the live-grading response buffer
+    allocateResponseBuffer (sampleRate, block);   // Plan 5: pre-allocate the live-grading ring + size the trigger
     hm.notifyPreparedFormat (sampleRate, 32, 2);   // D8: register the test format so simulateFormatChangeForTest has a reference
 }
 void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR,
@@ -566,24 +623,17 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
     // onset, analyze, then latch Invalid if an invalidating flag fired in-measurement.
     const float pk = eb::HealthMonitor::blockPeak (inL, inR, numSamples);
     session_.observeBlockPeak (pk);
-    if (session_.consumeSweepStarted()) { hm.resetMeasurementLatches(); responseWriteIdx_ = 0; }
+    if (session_.consumeSweepStarted()) hm.resetMeasurementLatches();
     bridge.setSweepActive (session_.sweepActive());                  // D6: mirror the capture-callback freeze sync
     hm.analyzeInputBlock (inL, inR, numSamples);                      // same analysis as the capture callback
     if (session_.sweepActive()) {                                    // SNR numerator (mirror the capture callback)
         float spkL = 0.0f, spkR = 0.0f;
         eb::HealthMonitor::blockPeakPerEar (inL, inR, numSamples, spkL, spkR);
         hm.observeSweepPeak (spkL, spkR);
-        // Live grading: buffer the mic response (left channel) into the pre-allocated buffer (mirror
-        // the capture callback). RT-safe bounded memcpy; single writer (this thread in the seam).
-        if (! responseBuffer_.empty()) {
-            const int room = (int) responseBuffer_.size() - responseWriteIdx_;
-            const int cpy  = juce::jmin (numSamples, juce::jmax (0, room));
-            if (cpy > 0) {
-                std::memcpy (responseBuffer_.data() + responseWriteIdx_, inL, (size_t) cpy * sizeof (float));
-                responseWriteIdx_ += cpy;
-            }
-        }
     }
+    // Live grading (#7 fix): continuous ring write + deterministic activity-edge trigger (mirror the
+    // capture callback). Independent of the level arm so a gradual sweep still grades. Single writer here.
+    processGradeDetection (inL, numSamples, pk);
     // SNR: per-sweep verdict at the SweepActive->Complete edge (mirror the capture callback) -- raise
     // LowSnr on a noisy sweep, SNAPSHOT the verdict dB, then scope the per-ear peaks to ONE sweep.
     if (session_.consumeSweepComplete()) {
@@ -593,16 +643,10 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
         if (v.lowSnr) hm.raiseLowSnr();
         hm.publishCompletedSnrDb (v.snrDbMin);
         hm.resetSweepPeaks();
-        // Plan 5: mirror the capture-callback reference-grade trigger (see CaptureCallback). Lightweight:
-        // if a reference is loaded, snapshot the captured response length + flag pending/ready; else
-        // publish NotGraded. No deconvolution here.
-        if (referenceLoaded_.load()) {
-            responseReadyLen_.store (responseWriteIdx_);
-            responseReady_.store (true);
-            pendingGrade_.store (true);
-        } else {
+        // Plan 5 (#7 fix): grading is triggered by processGradeDetection, not this edge. Only publish the
+        // honest NotGraded state when NO reference is loaded (mirror the capture callback).
+        if (! referenceLoaded_.load())
             hm.publishRefGrade ((int) RefMonState::NotGraded, 0.0f, 0.0f);
-        }
     }
     if (session_.inMeasurement() && ! hm.cleanCapture()) session_.markInvalid();
     if (graph.process (inL, inR, outMono, numSamples)) hm.reportNonFinite();
@@ -624,7 +668,7 @@ void AudioEngine::prepareCallbacksForTest (double sampleRate, int block, int fif
     session_.configure (block, sampleRate);            // D5: size the silence window for this block/rate
     session_.reset();                                  // D5: fresh session each run (Idle -> Preflight -> ...)
     grantedRate_ = sampleRate;                         // gradingResponseRate() reports the seam's capture rate
-    allocateResponseBuffer (sampleRate);               // Plan 5: pre-allocate the live-grading response buffer
+    allocateResponseBuffer (sampleRate, block);        // Plan 5: pre-allocate the live-grading ring + size the trigger
     bridge.reset();
     bridge.primeToTarget();                            // mirror start(): prime to the PI setpoint, no startup underrun
     bridge.setSweepActive (false);                     // D6: a fresh run free-runs; the session arms the sweep later
