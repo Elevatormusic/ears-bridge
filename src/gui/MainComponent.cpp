@@ -1011,16 +1011,22 @@ void MainComponent::onLearnReference() {
     learnCancelRequested_.store (false, std::memory_order_relaxed);
     learnRefButton.setButtonText ("Cancel learning");
     learnRefButton.setEnabled (true);
-    learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    learnRefResultLabel.setText ("Learning - run a Dirac measurement now (~25 s)...", juce::dontSendNotification);
+    // The loopback target is the device DIRAC PLAYS THE SWEEP TO -- read straight from Dirac's own
+    // settings (DEVICESETUP audioOutputDeviceName, e.g. "Realtek ... (Realtek USB Audio)"). NOT EARS
+    // Bridge's output: the VB-CABLE carries the RESPONSE Dirac records, not the sweep, so loopback-ing it
+    // captures the wrong signal (and is silent unless the bridge is feeding it). Fall back to the OUTPUT
+    // picker, then "CABLE", only when Dirac's settings can't be read.
+    juce::String renderTarget = eb::readDiracOutputDeviceName();
+    if (renderTarget.isEmpty()) {
+        if (auto out = outputPicker.selectedDevice(); out.has_value() && out->name.isNotEmpty())
+            renderTarget = out->name;
+        else
+            renderTarget = "CABLE";
+    }
 
-    // Fix 3 (review): do NOT hard-code "CABLE". Loopback-capture the render endpoint DIRAC PLAYS TO — which
-    // is the device the user selected in the OUTPUT picker (the virtual cable feeding Dirac). Pass that
-    // device's name as the loopback target so a differently-named cable (Voicemeeter, a renamed VB-CABLE,
-    // a second cable) still works. Fall back to "CABLE" only when no output is selected, with a clear note.
-    juce::String renderTarget = "CABLE";
-    if (auto out = outputPicker.selectedDevice(); out.has_value() && out->name.isNotEmpty())
-        renderTarget = out->name;
+    learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
+    learnRefResultLabel.setText ("Learning from \"" + renderTarget + "\" - run a Dirac measurement now (~25 s)...",
+                                 juce::dontSendNotification);
 
     juce::Component::SafePointer<MainComponent> safe (this);
     const double rate = activeRate();
@@ -1030,9 +1036,9 @@ void MainComponent::onLearnReference() {
     const std::atomic<bool>* cancel = &learnCancelRequested_;
     firPool->addJob ([safe, rate, renderTarget, cancel]() mutable {
         // Capture the loopback for the full L-then-R sweep sequence (~26 s), then validate the PURE core.
-        // renderTarget is the OUTPUT picker's selected device name (the endpoint Dirac plays to). The
-        // cancel token lets a Cancel click abort this capture promptly.
-        auto cap = eb::captureLoopback (renderTarget, 26.0, rate, cancel);   // the selected output render endpoint
+        // renderTarget is the device Dirac plays the sweep to (from Dirac's settings). The cancel token
+        // lets a Cancel click abort this capture promptly.
+        auto cap = eb::captureLoopback (renderTarget, 26.0, rate, cancel);   // Dirac's output render endpoint
         juce::String resultMsg; bool ok = false; bool cancelled = cap.cancelled;
         std::vector<float> samples; double capRate = rate;
         if (cap.cancelled) {

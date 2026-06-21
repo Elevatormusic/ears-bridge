@@ -220,3 +220,30 @@ TEST_CASE("captureLoopback returns promptly with a cancelled result when the can
     CHECK (elapsedMs < 2000);                           // promptly — nowhere near the 26 s capture window
     INFO ("elapsedMs=" << elapsedMs);
 }
+
+// The loopback target is the device DIRAC plays the sweep to -- parsed from Dirac's settings file.
+// This was a real bug: the learn used to target EARS Bridge's OUTPUT (the cable), capturing the wrong
+// signal. parseDiracOutputDeviceName must pick audioOutputDeviceName (the render device), NOT the
+// usually-blank audioInputDeviceName (the recording side / cable).
+TEST_CASE("LoopbackReference::parseDiracOutputDeviceName reads the OUTPUT device, not the input") {
+    const juce::String xml =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<PROPERTIES>\n"
+        "  <VALUE name=\"audioSetup\">\n"
+        "    <DEVICESETUP deviceType=\"Windows Audio\" audioOutputDeviceName=\"Speakers (USB Audio)\"\n"
+        "                 audioInputDeviceName=\"\" audioDeviceRate=\"48000.0\"/>\n"
+        "  </VALUE>\n"
+        "</PROPERTIES>\n";
+    CHECK (eb::parseDiracOutputDeviceName (xml) == juce::String ("Speakers (USB Audio)"));
+
+    // Absent / empty / malformed -> "" (so the caller falls back rather than targeting garbage).
+    CHECK (eb::parseDiracOutputDeviceName ("")              == juce::String());
+    CHECK (eb::parseDiracOutputDeviceName ("<PROPERTIES/>") == juce::String());
+
+    // A blank output name is not a match -> "" (don't return an empty device name as if it were real).
+    const juce::String blank =
+        "<PROPERTIES><VALUE name=\"audioSetup\">"
+        "<DEVICESETUP deviceType=\"ASIO\" audioOutputDeviceName=\"\" audioInputDeviceName=\"\"/>"
+        "</VALUE></PROPERTIES>";
+    CHECK (eb::parseDiracOutputDeviceName (blank) == juce::String());
+}

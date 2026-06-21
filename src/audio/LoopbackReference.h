@@ -73,6 +73,17 @@ juce::String readDiracVersion();
 // file is absent/unparseable or on a non-Windows platform.
 juce::String readDiracDeviceType();
 
+// READ-ONLY: the output device Dirac PLAYS THE SWEEP TO -- the correct loopback target for the
+// reference capture. The VB-CABLE (EARS Bridge's output) carries the RESPONSE Dirac records, not
+// the sweep; the sweep plays out Dirac's own output device. Parsed from the settings file's
+// DEVICESETUP audioOutputDeviceName attribute (e.g. "Realtek ... (Realtek USB Audio)"). Never
+// written. Returns "" when the file is absent/unparseable or on a non-Windows platform.
+juce::String readDiracOutputDeviceName();
+
+// Pure parser (cross-platform, testable) behind readDiracOutputDeviceName(): extract the OUTPUT
+// device name (audioOutputDeviceName on <DEVICESETUP>) from a settings XML document. "" if absent.
+[[nodiscard]] juce::String parseDiracOutputDeviceName (const juce::String& settingsXml);
+
 // True iff readDiracDeviceType() looks like a Windows-Audio / WASAPI shared mode
 // (the only mode in which a learn capture succeeds). A pure string classifier so it
 // is testable without the file; "" (unknown) returns false (we can't confirm it's
