@@ -1,25 +1,72 @@
 #include "platform/EndpointFormat.h"
 
+namespace eb {
+
+// PURE field interpreter — no platform types, compiles + unit-tests everywhere. WAVE_FORMAT_PCM (1),
+// WAVE_FORMAT_IEEE_FLOAT (3), WAVE_FORMAT_EXTENSIBLE (0xFFFE) are the relevant tags; for EXTENSIBLE the
+// SubFormat (passed in as extensibleSubFormatIsFloat) decides float-vs-int, since the tag alone is opaque.
+EndpointFormat interpretMixFormat (unsigned formatTag, unsigned long rateHz, unsigned channels,
+                                   unsigned bits, bool extensibleSubFormatIsFloat,
+                                   bool exclusive48kSupported) {
+    constexpr unsigned kFormatIeeeFloat  = 3;       // WAVE_FORMAT_IEEE_FLOAT
+    constexpr unsigned kFormatExtensible = 0xFFFE;  // WAVE_FORMAT_EXTENSIBLE
+
+    EndpointFormat f;
+    f.valid     = true;
+    f.mixRateHz = (double) rateHz;
+    f.channels  = (int) channels;
+    f.bits      = (int) bits;
+    f.isFloat   = (formatTag == kFormatIeeeFloat)
+               || (formatTag == kFormatExtensible && extensibleSubFormatIsFloat);
+    f.exclusive48kSupported = exclusive48kSupported;
+    return f;
+}
+
+} // namespace eb
+
 #if JUCE_WINDOWS
 
+#include "platform/EndpointUid.h"   // endpointUidForName: the stable UID we key the lookup on
 #include <objbase.h>
 #include <mmdeviceapi.h>
-#include <mmreg.h>          // WAVEFORMATEX
+#include <audioclient.h>            // IAudioClient::GetMixFormat / IsFormatSupported
+#include <mmreg.h>                  // WAVEFORMATEX / WAVEFORMATEXTENSIBLE
+#include <ksmedia.h>                // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, SPEAKER_* masks
 
 namespace eb {
 
-double endpointMixSampleRateForName (const juce::String& deviceName, bool isInput) {
-    // PKEY_Device_FriendlyName = {a45c254e-df1c-4efd-8020-67d146a850e0},14 (same string JUCE shows).
-    const PROPERTYKEY kFriendlyName = {
-        { 0xa45c254e, 0xdf1c, 0x4efd, { 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0 } }, 14 };
-    // PKEY_AudioEngine_DeviceFormat = {f19f064d-082c-4e27-bc73-6882a1bb8e4c},0 -> the device's shared
-    // mix format (a WAVEFORMATEX blob). Its nSamplesPerSec is the rate the OS mixer runs the endpoint at.
-    const PROPERTYKEY kDeviceFormat = {
-        { 0xf19f064d, 0x082c, 0x4e27, { 0xbc, 0x73, 0x68, 0x82, 0xa1, 0xbb, 0x8e, 0x4c } }, 0 };
+// PKEY_Device_FriendlyName = {a45c254e-df1c-4efd-8020-67d146a850e0},14 (the string JUCE shows). Declared
+// inline so this TU needs no INITGUID / propsys linkage just for one property key (matches EndpointUid.cpp).
+static const PROPERTYKEY kFriendlyNameKey = {
+    { 0xa45c254e, 0xdf1c, 0x4efd, { 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0 } }, 14 };
+
+// Build a WAVEFORMATEXTENSIBLE for the IsFormatSupported(EXCLUSIVE) probe (same shape as eb_diag's makeWfx).
+static void makeWfx (WAVEFORMATEXTENSIBLE& w, int rate, int ch, int bits, bool isFloat) {
+    ZeroMemory (&w, sizeof (w));
+    w.Format.wFormatTag      = WAVE_FORMAT_EXTENSIBLE;
+    w.Format.nChannels       = (WORD) ch;
+    w.Format.nSamplesPerSec  = (DWORD) rate;
+    w.Format.wBitsPerSample  = (WORD) bits;
+    w.Format.nBlockAlign     = (WORD) (ch * bits / 8);
+    w.Format.nAvgBytesPerSec = (DWORD) (rate * w.Format.nBlockAlign);
+    w.Format.cbSize          = 22;
+    w.Samples.wValidBitsPerSample = (WORD) bits;
+    w.dwChannelMask = (ch == 1) ? SPEAKER_FRONT_CENTER : (SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT);
+    w.SubFormat     = isFloat ? KSDATAFORMAT_SUBTYPE_IEEE_FLOAT : KSDATAFORMAT_SUBTYPE_PCM;
+}
+
+// Read the active endpoint matching `nameOrUid` (UID-keyed via IMMDevice::GetId, else FriendlyName
+// contains-match), activate an IAudioClient, GetMixFormat for the shared-mode ground truth, and probe
+// EXCLUSIVE support at 48k in that same format. Returns {valid=false} on any miss/failure.
+EndpointFormat readEndpointFormat (const juce::String& nameOrUid, bool isInput) {
+    // Resolve the caller's hint to a stable endpoint id once. If they passed a friendly name we get its
+    // UID here; if they passed a UID this just returns it back (no enumeration matched -> empty, and we
+    // then fall back to a FriendlyName contains-match on the raw hint below).
+    const juce::String wantUid = endpointUidForName (nameOrUid, isInput);
 
     const HRESULT co = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
     const bool weInited = SUCCEEDED (co);
-    double result = 0.0;
+    EndpointFormat result;   // valid=false until a successful read
 
     IMMDeviceEnumerator* en = nullptr;
     if (SUCCEEDED (CoCreateInstance (__uuidof (MMDeviceEnumerator), nullptr, CLSCTX_ALL,
@@ -28,26 +75,61 @@ double endpointMixSampleRateForName (const juce::String& deviceName, bool isInpu
         const EDataFlow flow = isInput ? eCapture : eRender;
         if (SUCCEEDED (en->EnumAudioEndpoints (flow, DEVICE_STATE_ACTIVE, &coll)) && coll != nullptr) {
             UINT count = 0; coll->GetCount (&count);
-            for (UINT i = 0; i < count && result == 0.0; ++i) {
+            for (UINT i = 0; i < count && ! result.valid; ++i) {
                 IMMDevice* dev = nullptr;
                 if (SUCCEEDED (coll->Item (i, &dev)) && dev != nullptr) {
-                    IPropertyStore* store = nullptr;
-                    if (SUCCEEDED (dev->OpenPropertyStore (STGM_READ, &store)) && store != nullptr) {
-                        PROPVARIANT name = {};
-                        if (SUCCEEDED (store->GetValue (kFriendlyName, &name))
-                            && name.vt == VT_LPWSTR && name.pwszVal != nullptr
-                            && deviceName == juce::String (name.pwszVal)) {
-                            PROPVARIANT fmt = {};
-                            if (SUCCEEDED (store->GetValue (kDeviceFormat, &fmt))
-                                && fmt.vt == VT_BLOB && fmt.blob.pBlobData != nullptr
-                                && fmt.blob.cbSize >= sizeof (WAVEFORMATEX)) {
-                                auto* wfx = reinterpret_cast<const WAVEFORMATEX*> (fmt.blob.pBlobData);
-                                result = (double) wfx->nSamplesPerSec;
-                            }
-                            PropVariantClear (&fmt);
+                    // Match this endpoint: prefer the stable UID (IMMDevice::GetId == wantUid); else fall
+                    // back to a case-insensitive FriendlyName contains-match on the raw caller hint.
+                    bool match = false;
+                    LPWSTR id = nullptr;
+                    if (SUCCEEDED (dev->GetId (&id)) && id != nullptr) {
+                        if (wantUid.isNotEmpty() && wantUid == juce::String (id)) match = true;
+                        CoTaskMemFree (id);
+                    }
+                    if (! match) {
+                        IPropertyStore* store = nullptr;
+                        if (SUCCEEDED (dev->OpenPropertyStore (STGM_READ, &store)) && store != nullptr) {
+                            PROPVARIANT nm = {};
+                            if (SUCCEEDED (store->GetValue (kFriendlyNameKey, &nm))
+                                && nm.vt == VT_LPWSTR && nm.pwszVal != nullptr
+                                && juce::String (nm.pwszVal).containsIgnoreCase (nameOrUid))
+                                match = true;
+                            if (nm.vt == VT_LPWSTR && nm.pwszVal != nullptr) CoTaskMemFree (nm.pwszVal);
+                            store->Release();
                         }
-                        if (name.vt == VT_LPWSTR && name.pwszVal != nullptr) CoTaskMemFree (name.pwszVal);
-                        store->Release();
+                    }
+
+                    if (match) {
+                        IAudioClient* ac = nullptr;
+                        if (SUCCEEDED (dev->Activate (__uuidof (IAudioClient), CLSCTX_ALL, nullptr,
+                                                      (void**) &ac)) && ac != nullptr) {
+                            WAVEFORMATEX* mix = nullptr;
+                            if (SUCCEEDED (ac->GetMixFormat (&mix)) && mix != nullptr) {
+                                bool extFloat = false;
+                                if (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix->cbSize >= 22) {
+                                    auto* wx = reinterpret_cast<WAVEFORMATEXTENSIBLE*> (mix);
+                                    extFloat = (wx->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+                                }
+                                // Probe EXCLUSIVE support at 48k in the endpoint's own mix shape
+                                // (channels/bits/float), same call Dirac's audio layer uses.
+                                bool excl48k = false;
+                                {
+                                    const bool mixIsFloat =
+                                        (mix->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) || extFloat;
+                                    WAVEFORMATEXTENSIBLE w;
+                                    makeWfx (w, 48000, (int) mix->nChannels,
+                                             (int) mix->wBitsPerSample, mixIsFloat);
+                                    const HRESULT ex = ac->IsFormatSupported (
+                                        AUDCLNT_SHAREMODE_EXCLUSIVE, (WAVEFORMATEX*) &w, nullptr);
+                                    excl48k = (ex == S_OK);
+                                }
+                                result = interpretMixFormat (mix->wFormatTag, mix->nSamplesPerSec,
+                                                             mix->nChannels, mix->wBitsPerSample,
+                                                             extFloat, excl48k);
+                                CoTaskMemFree (mix);
+                            }
+                            ac->Release();
+                        }
                     }
                     dev->Release();
                 }
@@ -60,10 +142,21 @@ double endpointMixSampleRateForName (const juce::String& deviceName, bool isInpu
     return result;
 }
 
+double endpointMixSampleRateForName (const juce::String& deviceName, bool isInput) {
+    // Delegate to the full read so there is one Windows mix-format code path. readEndpointFormat keys on
+    // the stable UID (then FriendlyName contains) — strictly more robust than the old exact-name match,
+    // and it returns 0.0/{valid=false} on any miss, preserving the documented "unknown => 0.0" contract.
+    const EndpointFormat f = readEndpointFormat (deviceName, isInput);
+    return f.valid ? f.mixRateHz : 0.0;
+}
+
 } // namespace eb
 
 #elif ! JUCE_MAC   // Linux / other: no mix-rate side channel (macOS impl in EndpointFormat_mac.mm)
 
-namespace eb { double endpointMixSampleRateForName (const juce::String&, bool) { return 0.0; } }
+namespace eb {
+double endpointMixSampleRateForName (const juce::String&, bool) { return 0.0; }
+EndpointFormat readEndpointFormat (const juce::String&, bool) { return {}; }   // valid=false
+}
 
 #endif
