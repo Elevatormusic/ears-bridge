@@ -27,6 +27,7 @@ public:
     int          firLength() const;   void setFirLength (int);   // 0 = Auto (numTapsForRate); else explicit override
     bool         complexPhase() const; void setComplexPhase (bool);
     bool         autoCheckUpdates() const; void setAutoCheckUpdates (bool);
+    bool         advancedOverride() const; void setAdvancedOverride (bool);
 
     void flush();   // force the PropertiesFile to disk immediately
 

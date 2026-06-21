@@ -1,6 +1,7 @@
 #include "gui/MainComponent.h"
 #include "gui/ClipStatus.h"
 #include "gui/RawRailStatus.h"
+#include "gui/StartGate.h"   // eb::startReady (Task 3 / #3 advanced override)
 #include "platform/DiracCompat.h"
 #include "cal/CalibrationPairValidator.h"   // eb::validateCalibrationPair (P0-07)
 #include "audio/CalibrationGeneration.h"    // eb::CalibrationGeneration (generation lifecycle)
@@ -168,6 +169,14 @@ MainComponent::MainComponent() {
         }
     };
     addChildComponent (autoUpdateToggle);
+    // #3: advanced override toggle. Restore its persisted state; on click, persist + re-run the gate.
+    overrideToggle.setToggleState (settings.advancedOverride(), juce::dontSendNotification);
+    overrideToggle.onClick = [this] {
+        settings.setAdvancedOverride (overrideToggle.getToggleState());
+        settings.flush();
+        updateStartGate();   // recompute Start enabled-ness + the status line for the new policy
+    };
+    addChildComponent (overrideToggle);
     styleEyebrow (firLenLabel, "FIR LENGTH");
     addChildComponent (firLenLabel);
     firLenBox.addItem ("Auto (scales with rate)", kFirLenAutoId);
@@ -628,7 +637,10 @@ void MainComponent::updateStartGate() {
     const bool physicalOutput = isRealEarsInput()
                              && outputPicker.selectedDevice().has_value()
                              && ! outputPicker.selectedDevice()->isVirtualSink;
-    const bool ready    = haveDevs && haveCals && ! wrongMode && ! physicalOutput;
+    // #3: the advanced override relaxes ONLY the two policy gates (wrongMode, physicalOutput)
+    // for non-Dirac use cases. It NEVER bypasses haveDevs/haveCals (devices + applied calibration).
+    const bool ready    = eb::startReady (haveDevs, haveCals, wrongMode, physicalOutput,
+                                          settings.advancedOverride());
     startStop.setEnabled (running || ready);
     verifyButton.setEnabled (! running && inputPicker.selectedDevice().has_value());   // needs the EARS, while stopped
     updateCalProblems();
@@ -784,25 +796,41 @@ void MainComponent::updateStatusLine() {
         statusLine.setColour (juce::Label::textColourId, Theme::textDim());
     } else if (isRealEarsInput()
                && outputPicker.selectedDevice().has_value()
-               && ! outputPicker.selectedDevice()->isVirtualSink) {
+               && ! outputPicker.selectedDevice()->isVirtualSink
+               && ! settings.advancedOverride()) {
         // P1-09: a real EARS into a physical output can't reach Dirac. Start is disabled;
-        // point the user at the virtual cable.
+        // point the user at the virtual cable. Skipped when the advanced override is on:
+        // the user has explicitly opted into a non-Dirac configuration.
         statusLine.setText ("Select the virtual audio cable as the output to start", juce::dontSendNotification);
         statusLine.setColour (juce::Label::textColourId, Theme::warn());
     } else if (isRealEarsWithCable()
-               && settings.combineMode() != CombineMode::AutoPerEar) {
+               && settings.combineMode() != CombineMode::AutoPerEar
+               && ! settings.advancedOverride()) {
         // D7 / R17: non-Auto combine mode selected with a real EARS + virtual cable.
-        // Start is disabled; tell the user exactly why and what to change.
+        // Start is disabled; tell the user exactly why and what to change. Skipped when the
+        // advanced override is on (the user has opted into a non-Dirac use).
         statusLine.setText ("Set Combine Mode to Auto per-ear (Dirac) to start", juce::dontSendNotification);
         statusLine.setColour (juce::Label::textColourId, Theme::warn());
     } else if (engine.calibrationApplied()) {
         // Ready: a valid generation is applied. Normally no redundant label (the enabled Start button is
-        // the affordance) -- BUT if NEITHER file carried a side marker (no content line, no filename L/R),
-        // the validator could not have caught a swap. Say so honestly; this is advisory, NOT a Start block.
+        // the affordance) -- BUT call out two advisory states (dim, never a Start block):
+        //   (a) the advanced override is ON and is actually relaxing a gate (the config would otherwise be
+        //       blocked as a non-Dirac path) -- make the relaxed state visible so it isn't silent;
+        //   (b) NEITHER cal file carried a side marker (no content line, no filename L/R), so the validator
+        //       could not have caught a swap.
+        const bool overrideRelaxing =
+            settings.advancedOverride()
+         && ((isRealEarsInput() && outputPicker.selectedDevice().has_value()
+              && ! outputPicker.selectedDevice()->isVirtualSink)
+             || (isRealEarsWithCable() && settings.combineMode() != CombineMode::AutoPerEar));
         const bool bothSideUnknown =
             leftCal.calFile().has_value()  && leftCal.calFile()->side  == eb::CalSide::Unknown
          && rightCal.calFile().has_value() && rightCal.calFile()->side == eb::CalSide::Unknown;
-        if (bothSideUnknown) {
+        if (overrideRelaxing) {
+            statusLine.setText ("Advanced override on - not the standard Dirac path.",
+                                juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+        } else if (bothSideUnknown) {
             statusLine.setText ("Couldn't confirm left/right from these files - double-check the slots.",
                                 juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::textDim());
@@ -1055,6 +1083,7 @@ void MainComponent::resized() {
         trimLabel.setVisible (adv);   trimSlider.setVisible (adv);
         verifyButton.setVisible (adv); verifyResultLabel.setVisible (adv);
         autoUpdateToggle.setVisible (adv);
+        overrideToggle.setVisible (adv);   // #3: only reachable with Advanced expanded
         if (adv) {
             rr.removeFromTop (4);
             complexPhaseToggle.setBounds (rr.removeFromTop (26));
@@ -1070,6 +1099,8 @@ void MainComponent::resized() {
             verifyResultLabel.setBounds (rr.removeFromTop (16));
             rr.removeFromTop (10);
             autoUpdateToggle.setBounds (rr.removeFromTop (26));
+            rr.removeFromTop (6);
+            overrideToggle.setBounds (rr.removeFromTop (26));
         }
     }
 
