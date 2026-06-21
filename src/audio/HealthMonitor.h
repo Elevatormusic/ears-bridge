@@ -135,9 +135,31 @@ public:
     float maxSweepPeakL() const noexcept { return maxSweepPeakLMilli_.load() / 1000.0f; }
     float maxSweepPeakR() const noexcept { return maxSweepPeakRMilli_.load() / 1000.0f; }
 
+    // SNR review fix: zero ONLY the two per-ear sweep-peak atomics, leaving every other latch (clip-run,
+    // validity, drift, meters) untouched. Called by the engine at the SweepActive->Complete edge AFTER
+    // the verdict is computed, so the NEXT earcup sweep accumulates a FRESH numerator instead of reading
+    // max() across both sweeps. resetMeasurementLatches() is tied to the FIRST onset only, so the per-ear
+    // peaks must be scoped to one sweep HERE (per Complete). RT-safe: two atomic stores, no alloc/lock.
+    void resetSweepPeaks() noexcept {
+        maxSweepPeakLMilli_.store (0); maxSweepPeakRMilli_.store (0);
+    }
+
     // Raise the LowSnr GUIDANCE flag (NOT invalidating). Called by the engine (Task 3) on a low-SNR
     // verdict at the SweepActive->Complete edge. Public entry to the private raise() for that one flag.
     void raiseLowSnr() noexcept { raise (HealthFlag::LowSnr); }
+
+    // SNR review fix (Finding 3): publish the verdict's min-ear dB SNAPSHOTTED at the SweepActive->Complete
+    // edge (dB*1000 fixed-point), the instant the verdict is computed. The GUI reads THIS frozen value to
+    // name the dB, NOT a live recompute from the maxSweepPeak*/armFloor atomics, so the displayed number
+    // can never drift away from the dB that raised the sticky LowSnr flag once the next sweep mutates the
+    // atomics. RT-safe: one atomic store on the capture thread. NaN/Inf clamped to a sentinel before store.
+    void publishCompletedSnrDb (float snrDbMin) noexcept {
+        const float clamped = std::isfinite (snrDbMin) ? juce::jlimit (-200.0f, 200.0f, snrDbMin) : 0.0f;
+        completedSnrDbMilli_.store ((int) std::lround (clamped * 1000.0f));
+    }
+    // Read the published min-ear sweep SNR dB of the sweep that last completed; 0.0 until one completes.
+    // Message-thread read of the lock-free snapshot (the project's int-milli publish idiom).
+    float completedSnrDb() const noexcept { return completedSnrDbMilli_.load() / 1000.0f; }
 
     // ---- D8 addition: runtime format revalidation ----
     // Call once from RenderCallback::audioDeviceAboutToStart with the device's granted format.
@@ -174,8 +196,14 @@ private:
 
     // SNR numerator: per-ear running max |sample| over the SweepActive window (peak*1000 fixed-point,
     // matching the level atomics). Capture-thread single writer (observeSweepPeak); reset on
-    // resetMeasurementLatches() + reset(). 0 until a sweep runs.
+    // resetMeasurementLatches() + reset() + resetSweepPeaks() (per-Complete scope). 0 until a sweep runs.
     std::atomic<int>       maxSweepPeakLMilli_ { 0 }, maxSweepPeakRMilli_ { 0 };
+
+    // SNR review fix (Finding 3): the min-ear sweep SNR dB published at the SweepActive->Complete edge
+    // (dB*1000 fixed-point). Capture-thread single writer (publishCompletedSnrDb at the edge); GUI reads
+    // completedSnrDb(). Frozen at the moment the verdict is computed so the displayed dB can't drift away
+    // from the dB that raised the sticky LowSnr flag. 0 until a sweep completes; cleared in reset().
+    std::atomic<int>       completedSnrDbMilli_ { 0 };
 
     // Confirmed-clip detection. railRun*_ / longestRun_ are CAPTURE-THREAD-ONLY scratch (written only
     // in analyzeInputBlock); the *_A_ atomics publish to the GUI thread.

@@ -242,6 +242,44 @@ TEST_CASE("HealthMonitor: in-sweep peak latches reset on resetMeasurementLatches
     CHECK (h.maxSweepPeakR() == Catch::Approx (0.0f));
 }
 
+TEST_CASE("HealthMonitor: resetSweepPeaks zeros ONLY the SNR peaks; clip + validity latches untouched") {
+    // SNR review fix (Finding 1/2): the engine calls resetSweepPeaks() at the SweepActive->Complete edge
+    // so the NEXT earcup sweep starts a fresh numerator. It must zero ONLY the two per-ear peak atomics --
+    // a confirmed clip latched during the sweep (ClipConfirmed + cleanCapture=false) must SURVIVE the reset.
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    h.observeSweepPeak (0.30f, 0.22f);
+    // Drive a confirmed flat-topped clip run (>= kRailRunMin consecutive flat rail samples) on L.
+    std::vector<float> clip (8, 1.0f), quiet (8, 0.0f);
+    h.analyzeInputBlock (clip.data(), quiet.data(), 8);
+    REQUIRE (h.clipConfirmed());
+    REQUIRE_FALSE (h.cleanCapture());
+    REQUIRE (h.maxSweepPeakL() == Catch::Approx (0.30f).margin (2e-3));
+
+    h.resetSweepPeaks();   // the per-Complete scope: zero the peaks only
+    CHECK (h.maxSweepPeakL() == Catch::Approx (0.0f));
+    CHECK (h.maxSweepPeakR() == Catch::Approx (0.0f));
+    // The clip/validity latches are NOT disturbed (they belong to the whole run / next re-scope, not here).
+    CHECK (h.clipConfirmed());
+    CHECK_FALSE (h.cleanCapture());
+    CHECK (eb::any (h.flags() & eb::HealthFlag::ClipConfirmed));
+}
+
+TEST_CASE("HealthMonitor: publishCompletedSnrDb snapshots the verdict dB; completedSnrDb reads it back") {
+    // SNR review fix (Finding 3): the GUI reads this frozen snapshot, not a live recompute, so the
+    // displayed dB can't drift away from the dB that raised LowSnr once the next sweep mutates the peaks.
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    CHECK (h.completedSnrDb() == Catch::Approx (0.0f));    // 0 until a sweep completes
+    h.publishCompletedSnrDb (24.0f);
+    CHECK (h.completedSnrDb() == Catch::Approx (24.0f).margin (1e-3));   // milli round-trip
+    h.publishCompletedSnrDb (-12.5f);                                     // a later sweep overwrites it
+    CHECK (h.completedSnrDb() == Catch::Approx (-12.5f).margin (1e-3));
+    // A non-finite verdict (e.g. a degenerate floor) must not poison the atomic.
+    h.publishCompletedSnrDb (std::numeric_limits<float>::infinity());
+    CHECK (h.completedSnrDb() == Catch::Approx (0.0f));
+    h.reset();                                            // a fresh run clears the snapshot
+    CHECK (h.completedSnrDb() == Catch::Approx (0.0f));
+}
+
 TEST_CASE("HealthMonitor: in-sweep peaks do NOT accumulate when the sweep is not active") {
     // The engine gates observeSweepPeak on session_.sweepActive(); when the sweep is NOT active it is
     // simply never called, so the latches stay 0 even though analyzeInputBlock sees loud blocks.

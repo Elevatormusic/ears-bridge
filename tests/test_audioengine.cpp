@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>   // SNR review fix: Catch::Approx for the per-ear sweep-peak checks
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "audio/AudioEngine.h"
 #include "audio/CalibrationGeneration.h"
@@ -208,6 +209,60 @@ TEST_CASE("AudioEngine seam: the RIGHT-earcup sweep after a gap is still scored 
     runL (clip);
     CHECK_FALSE (e.cleanCapture());
     CHECK (e.health().session == eb::SessionPhase::Invalid);
+}
+
+// SNR review fix (Finding 1/2/3): AutoPerEar runs TWO sweeps (left earcup, then a re-armed right earcup).
+// The per-ear in-sweep peaks must be scoped to ONE sweep, reset at each SweepActive->Complete edge, so the
+// SECOND sweep's verdict does NOT read max() across BOTH sweeps' peaks (the stale left peak leaking in),
+// and the published verdict dB must reflect the sweep that actually completed.
+TEST_CASE("AudioEngine seam: per-ear sweep peaks reset per Complete -- the LEFT sweep's peak does not leak into the RIGHT") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 8);
+
+    // Drive one block with explicit L/R channel values (no symmetry assumption).
+    auto run = [&] (float lVal, float rVal) {
+        std::vector<float> l (8, lVal), r (8, rVal), mono (8, 0.0f);
+        e.processCaptureBlockForTest (l.data(), r.data(), mono.data(), 8);
+    };
+    const int gap = (int) std::lround (eb::MeasurementSession::kSilenceCompleteSeconds * 48000.0 / 8.0) + 2;
+
+    // ---- Sweep 1 (LEFT earcup): a strong LEFT peak, the RIGHT mic quiet. ----
+    for (int i = 0; i < eb::MeasurementSession::kArmWarmupBlocks + 2; ++i) run (0.0f, 0.0f);  // quiet floor + warm-up
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i)      run (0.30f, 0.0f);  // LEFT sweep
+    CHECK (e.sessionPhase() == eb::SessionPhase::SweepActive);
+    CHECK (e.maxSweepPeakLForTest() == Catch::Approx (0.30f).margin (0.002f));   // left numerator latched
+    CHECK (e.maxSweepPeakRForTest() == Catch::Approx (0.0f).margin (0.002f));    // right ear was quiet
+    for (int i = 0; i < gap; ++i) run (0.0f, 0.0f);                               // long inter-sweep gap -> Complete 1
+    CHECK (e.sessionPhase() == eb::SessionPhase::Complete);
+
+    // The Complete edge must have ZEROED the per-ear peaks (resetSweepPeaks), so the stale 0.30 left peak
+    // is GONE before sweep 2 accumulates. This is the core no-leak guarantee.
+    CHECK (e.maxSweepPeakLForTest() == Catch::Approx (0.0f).margin (0.002f));
+    CHECK (e.maxSweepPeakRForTest() == Catch::Approx (0.0f).margin (0.002f));
+    // Snapshot the verdict dB of sweep 1: min-ear is the QUIET right mic (peak 0.0 over the floor), so a
+    // deeply NEGATIVE SNR. This is the published value the GUI would have shown for sweep 1.
+    const float shownSweep1 = e.completedSweepSnrDb();
+    CHECK (std::isfinite (shownSweep1));
+    CHECK (shownSweep1 < 0.0f);   // sweep 1's min ear (silent right) is below its own floor
+
+    // ---- Sweep 2 (RIGHT earcup): a strong RIGHT peak; the LEFT mic now only faintly crosstalks (0.05,
+    // well below sweep 1's stale 0.30). If the peaks did NOT reset, maxSweepPeakL would still read 0.30. ----
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i) run (0.05f, 0.40f);  // RIGHT sweep
+    CHECK (e.sessionPhase() == eb::SessionPhase::SweepActive);
+    // Sweep 2's per-ear peaks are the SECOND sweep's values -- the stale left 0.30 did NOT leak.
+    CHECK (e.maxSweepPeakLForTest() == Catch::Approx (0.05f).margin (0.002f));   // NOT 0.30 (no leak)
+    CHECK (e.maxSweepPeakRForTest() == Catch::Approx (0.40f).margin (0.002f));   // this sweep's right peak
+
+    for (int i = 0; i < gap; ++i) run (0.0f, 0.0f);                               // gap -> Complete 2
+    CHECK (e.sessionPhase() == eb::SessionPhase::Complete);
+
+    // Sweep 2's published snapshot dB reflects SWEEP 2 (min-ear = the faint LEFT 0.05, a finite POSITIVE
+    // SNR over sweep 2's quiet floor), NOT sweep 1's deeply-negative value. The snapshot being a different,
+    // higher number than sweep 1's proves the GUI reads the per-Complete snapshot, not a stale recompute.
+    const float shownSweep2 = e.completedSweepSnrDb();
+    CHECK (std::isfinite (shownSweep2));
+    CHECK (shownSweep2 > 0.0f);              // L=0.05 sits well above sweep 2's sub-0.01 noise floor
+    CHECK (shownSweep2 > shownSweep1);       // sweep 2's verdict is distinct from (and not stuck on) sweep 1's
 }
 
 TEST_CASE("AudioEngine: a sustained loud sweep freezes the ClockBridge ratio, the gap releases it") {
