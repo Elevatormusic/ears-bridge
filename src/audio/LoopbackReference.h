@@ -32,16 +32,20 @@ struct ReferenceValidation {
 // Decide whether `samples` (n mono samples at `rate`) is a clean, full,
 // single-source Dirac sweep suitable to use as the measurement reference.
 // First failure wins; `reason` names the failing rule. Checks, in order:
-//   1. LENGTH  — at least minSeconds of audio (the L-then-R sequence is ~25 s),
-//                else "capture too short …".
+//   1. LENGTH  — at least minSeconds of audio. With end-of-sweep AUTO-STOP the
+//                captured length is now VARIABLE (the real sequence + ~3 s trailing
+//                silence), so this is a SANITY FLOOR that rejects a too-short blip,
+//                NOT the old fixed ~25 s "full sequence" bound — completeness is the
+//                single-sweep self-test's job below. Else "capture too short …".
 //   2. LEVEL   — peak within [minPeakDb, maxPeakDb] dBFS, and NO clipping run
 //                (kClipRunSamples consecutive samples at/near full scale).
 //   3. SINGLE-SOURCE — the clean-single-sweep self-test: referenceMatches
 //                (samples, samples) must recover a compact, dominant
 //                autocorrelation lobe. A second source (a tone mixed onto the
-//                sweep) or noise-only delocalizes it and FAILS.
+//                sweep) or noise-only delocalizes it and FAILS. This — not a fixed
+//                length — is the real completeness/quality gate.
 ReferenceValidation validateReferenceCapture (const float* samples, int n, double rate,
-                                              double minSeconds = 25.0,
+                                              double minSeconds = 8.0,
                                               double minPeakDb  = -20.0,
                                               double maxPeakDb  = -3.0);
 
@@ -90,6 +94,71 @@ juce::String readDiracOutputDeviceName();
 // Windows Audio, so the GUI gives the cautionary hint rather than a false all-clear).
 [[nodiscard]] bool diracDeviceTypeIsWindowsAudio (const juce::String& deviceType);
 
+// ---- End-of-sweep auto-stop (the testable core) --------------------------
+// The learn capture used to run a FIXED duration (26 s). It now stops early the
+// moment Dirac's sweep SEQUENCE ends, so the user doesn't wait out the slack and
+// a longer-than-26 s config isn't truncated. The decision is factored out here so
+// it's unit-testable without the live WASAPI loop.
+//
+// Two stages, in order:
+//   1. ARM on real activity — require sustained signal above an absolute linear
+//      floor for a short while, so we don't "end" during the QUIET BEFORE Dirac
+//      starts playing.
+//   2. STOP on a trailing silence — once armed, if the loopback goes quiet for a
+//      TRAILING SILENCE window longer than Dirac's inter-sweep gap, the sequence is
+//      done. We use ~3 s (vs the ~2 s inter-sweep gap the grading path assumes) so
+//      the L-then-R sequence is captured WHOLE and we don't stop in the L/R gap.
+
+// On-device-tunable constants (synthetic-tuned defaults; ratify on hardware).
+// kArmFloorLinear: absolute linear level a frame must exceed to count as activity
+//   (~-46 dBFS — well above the loopback noise floor, below a real sweep).
+// kArmSeconds: cumulative time above the floor before we consider the sequence
+//   "started" (so a single transient can't arm + immediately trailing-stop).
+// kTrailingSilenceSeconds: quiet duration after activity that concludes the run.
+//   CONSERVATIVELY longer than the ~2 s Dirac inter-sweep gap so L-then-R stays whole.
+constexpr float  kArmFloorLinear         = 0.005f;  // ~-46 dBFS  (on-device-tunable)
+constexpr double kArmSeconds             = 0.25;    // sustained activity to arm    (on-device-tunable)
+constexpr double kTrailingSilenceSeconds = 3.0;     // > the ~2 s inter-sweep gap   (on-device-tunable)
+
+// PURE decision: given whether sustained activity has been seen, and how long the
+// signal has been quiet since the last activity, has the sweep sequence ended?
+// Only ends AFTER arming (no activity yet -> never ends early; runs to the cap).
+[[nodiscard]] inline bool sweepSequenceEnded (bool activitySeenSoFar,
+                                              double trailingSilenceSeconds,
+                                              double thresholdSeconds = kTrailingSilenceSeconds) {
+    return activitySeenSoFar && trailingSilenceSeconds >= thresholdSeconds;
+}
+
+// A small state machine the capture loop drives once per decoded chunk: feed it
+// the chunk's peak level and its duration in seconds. It arms after kArmSeconds of
+// cumulative above-floor signal, then accumulates trailing silence; ended() is the
+// pure decision above. Kept header-only so the unit suite can drive it directly.
+struct SweepEndDetector {
+    float  armFloor        = kArmFloorLinear;
+    double armSeconds      = kArmSeconds;
+    double silenceThreshold = kTrailingSilenceSeconds;
+
+    double activeAccum   = 0.0;   // cumulative above-floor time (to arm)
+    double trailingQuiet = 0.0;   // quiet time since the last above-floor chunk
+    bool   armed         = false; // sustained activity has been seen
+
+    // Drive with one chunk's peak and duration. Returns true once the sequence has
+    // ended (armed AND trailing silence past the threshold) — STOP capturing.
+    bool update (float chunkPeak, double chunkSeconds) {
+        if (chunkPeak >= armFloor) {
+            activeAccum += chunkSeconds;
+            trailingQuiet = 0.0;
+            if (activeAccum >= armSeconds) armed = true;
+        } else {
+            trailingQuiet += chunkSeconds;
+        }
+        return ended();
+    }
+    [[nodiscard]] bool ended() const {
+        return sweepSequenceEnded (armed, trailingQuiet, silenceThreshold);
+    }
+};
+
 // ---- The WASAPI loopback capture (Windows-only; stub elsewhere) ----------
 struct LoopbackCaptureResult {
     bool               ok = false;
@@ -102,13 +171,19 @@ struct LoopbackCaptureResult {
 };
 
 // Loopback-capture the first eRender endpoint whose FriendlyName contains
-// `renderDeviceNameSubstring` (case-insensitive) for `seconds`, in WASAPI shared
-// mode with AUDCLNT_STREAMFLAGS_LOOPBACK — exactly what eb_diag's `loopcap` does,
-// promoted into the app. The result's samples are a mono downmix of the endpoint
-// mix format. MIXER TRANSPARENCY: if the endpoint mix rate != expectedRate the
-// capture is rejected (we would otherwise store a resampled reference). Must run
-// on a worker/message thread (off the audio callback). Windows-only; a no-op
-// stub on every other platform.
+// `renderDeviceNameSubstring` (case-insensitive), in WASAPI shared mode with
+// AUDCLNT_STREAMFLAGS_LOOPBACK — exactly what eb_diag's `loopcap` does, promoted
+// into the app. The result's samples are a mono downmix of the endpoint mix
+// format. MIXER TRANSPARENCY: if the endpoint mix rate != expectedRate the capture
+// is rejected (we would otherwise store a resampled reference). Must run on a
+// worker/message thread (off the audio callback). Windows-only; a no-op stub on
+// every other platform.
+//
+// END-OF-SWEEP AUTO-STOP: `seconds` is the MAXIMUM. The capture arms on sustained
+// activity, then STOPS as soon as the loopback goes quiet for kTrailingSilenceSeconds
+// (a SweepEndDetector drives this) — so a sequence shorter than the cap returns
+// early and a longer one isn't truncated as long as it finishes within the cap.
+// If no clear end is detected it stops at `seconds` as before.
 //
 // COOPERATIVE CANCEL: pass a non-null `cancel` and set it (from any thread — it's
 // an atomic) to abort the in-flight capture promptly. The capture loop polls it

@@ -143,13 +143,16 @@ ReferenceValidation validateReferenceCapture (const float* samples, int n, doubl
     if (samples == nullptr || n <= 0 || rate <= 0.0)
         return { false, "no capture data" };
 
-    // 1. LENGTH — the L-then-R Dirac sweep sequence is ~25 s; a short capture
-    //    cannot contain the whole thing.
+    // 1. LENGTH — a SANITY FLOOR, not the old fixed ~25 s bound. With end-of-sweep
+    //    auto-stop the captured length is variable (the real sequence + ~3 s trailing
+    //    silence), so a legitimately-shorter-but-complete sequence must pass here; the
+    //    single-sweep self-test below is the real completeness gate. This only rejects a
+    //    too-short blip (a stray transient that armed + trailing-stopped).
     const double seconds = (double) n / rate;
     if (seconds < minSeconds)
-        return { false, "capture too short - the full Dirac sweep sequence is ~"
-                        + juce::String ((int) std::lround (minSeconds))
-                        + " s (got " + juce::String (seconds, 1) + " s); re-run the sweep" };
+        return { false, "capture too short - got only " + juce::String (seconds, 1)
+                        + " s (need at least " + juce::String (minSeconds, 0)
+                        + " s); re-run the Dirac sweep" };
 
     // 2. LEVEL — peak in a sane window, and no sustained clipping run.
     const int clipRun = longestClipRun (samples, n);
@@ -515,6 +518,14 @@ LoopbackCaptureResult captureLoopback (const juce::String& filter, double second
     res.samples.reserve ((size_t) ((double) rate * juce::jmax (0.0, seconds)));
     long long nonSilent = 0, totalFrames = 0;
 
+    // END-OF-SWEEP AUTO-STOP: `seconds` is the MAXIMUM. The detector arms on sustained
+    // activity, then ends the capture once the loopback is quiet past the trailing-
+    // silence threshold (~3 s) — so a sequence shorter than the cap returns early and a
+    // longer one isn't truncated as long as it finishes within the cap. Driven per
+    // decoded chunk with that chunk's peak and its duration in seconds.
+    SweepEndDetector endDet;
+    bool endedEarly = false;
+
     bool wasCancelled = false;
     const juce::int64 endMs = juce::Time::currentTimeMillis()
                             + (juce::int64) (juce::jmax (0.0, seconds) * 1000.0);
@@ -529,17 +540,27 @@ LoopbackCaptureResult captureLoopback (const juce::String& filter, double second
         BYTE* data = nullptr; UINT32 got = 0; DWORD flags = 0;
         if (FAILED (cap->GetBuffer (&data, &got, &flags, nullptr, nullptr))) break;
         totalFrames += got;
+        const double chunkSeconds = rate > 0 ? (double) got / (double) rate : 0.0;
+        float chunkPeak = 0.0f;
         if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
             res.samples.insert (res.samples.end(), (size_t) got, 0.0f);   // loopback silence -> zeros
         } else {
             const size_t before = res.samples.size();
             decodePacketToMono (data, got, channels, bits, isFloat, res.samples);
-            for (size_t i = before; i < res.samples.size(); ++i)
-                if (std::abs (res.samples[i]) > 0.0001f) { ++nonSilent; break; }
+            for (size_t i = before; i < res.samples.size(); ++i) {
+                const float a = std::abs (res.samples[i]);
+                if (a > chunkPeak) chunkPeak = a;
+                if (a > 0.0001f) ++nonSilent;   // note: counts samples, only used as a >0 nonSilent flag below
+            }
         }
         cap->ReleaseBuffer (got);
+
+        // Feed the chunk to the end detector. Once it reports the sweep sequence has
+        // ended, stop — we've captured the whole run plus the trailing silence.
+        if (endDet.update (chunkPeak, chunkSeconds)) { endedEarly = true; break; }
     }
     ac->Stop();
+    juce::ignoreUnused (endedEarly);
 
     cap->Release(); CoTaskMemFree (mix); ac->Release(); match->Release(); en->Release();
     if (weInited) CoUninitialize();

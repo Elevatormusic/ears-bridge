@@ -1081,8 +1081,8 @@ void MainComponent::onLearnReference() {
 
     learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
     learnRefResultLabel.setText (diracDevice.isNotEmpty()
-            ? ("Learning from \"" + diracDevice + "\" - run a Dirac measurement now (~25 s)...")
-            : juce::String ("Learning from the default playback device - run a Dirac measurement now (~25 s)..."),
+            ? ("Learning from \"" + diracDevice + "\" - run a Dirac measurement now (stops automatically when the sweep ends)...")
+            : juce::String ("Learning from the default playback device - run a Dirac measurement now (stops automatically when the sweep ends)..."),
         juce::dontSendNotification);
 
     juce::Component::SafePointer<MainComponent> safe (this);
@@ -1092,10 +1092,11 @@ void MainComponent::onLearnReference() {
     // has cleared learning_ — so the pointer stays valid for the duration of the capture.
     const std::atomic<bool>* cancel = &learnCancelRequested_;
     firPool->addJob ([safe, rate, renderTarget, cancel]() mutable {
-        // Capture the loopback for the full L-then-R sweep sequence (~26 s), then validate the PURE core.
-        // renderTarget is the device Dirac plays the sweep to (from Dirac's settings). The cancel token
-        // lets a Cancel click abort this capture promptly.
-        auto cap = eb::captureLoopback (renderTarget, 26.0, rate, cancel);   // Dirac's output render endpoint
+        // Capture the loopback, then validate the PURE core. The capture AUTO-STOPS the moment Dirac's
+        // sweep sequence ends (end-of-sweep detector inside captureLoopback); 35 s is only the MAXIMUM cap
+        // (bumped from 26 s so a longer-than-26 s config isn't truncated). renderTarget is the device Dirac
+        // plays the sweep to (from Dirac's settings). The cancel token lets a Cancel click abort promptly.
+        auto cap = eb::captureLoopback (renderTarget, 35.0, rate, cancel);   // Dirac's output render endpoint; 35 s = max cap
         juce::String resultMsg; bool ok = false; bool cancelled = cap.cancelled;
         std::vector<float> samples; double capRate = rate;
         if (cap.cancelled) {
