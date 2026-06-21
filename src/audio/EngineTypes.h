@@ -30,7 +30,8 @@ enum class HealthFlag : unsigned {
     NonFinite     = 1u << 8, // INVALIDATING: a NaN/Inf sample reached the path
     OsResampled   = 1u << 9, // guidance: OS SRC resampled the INPUT (D2) -> clip detection approximate; NOT invalidating
     SweepRetimed  = 1u << 10, // INVALIDATING: a forced mid-sweep SRC correction retimed the sweep
-    FormatChanged = 1u << 11 // INVALIDATING: sample rate / bit depth / channels changed mid-run
+    FormatChanged = 1u << 11, // INVALIDATING: sample rate / bit depth / channels changed mid-run
+    LowSnr        = 1u << 12  // guidance: the sweep was not cleanly above the room-noise floor (SNR); NOT invalidating (warn now, ratify later)
 };
 constexpr HealthFlag operator| (HealthFlag a, HealthFlag b) noexcept {
     return static_cast<HealthFlag> (static_cast<unsigned> (a) | static_cast<unsigned> (b));

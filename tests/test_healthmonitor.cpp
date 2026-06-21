@@ -211,6 +211,56 @@ TEST_CASE("HealthMonitor latches reachedGoodLevel once a healthy capture peak is
     CHECK_FALSE(h.reachedGoodLevel());
 }
 
+// ---- SNR Task 2: per-ear in-sweep peak latch + LowSnr guidance flag ----
+TEST_CASE("HealthMonitor: per-ear in-sweep peak latches the max per ear") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    CHECK (h.maxSweepPeakL() == Catch::Approx (0.0f));   // 0 until a sweep runs
+    CHECK (h.maxSweepPeakR() == Catch::Approx (0.0f));
+    // The engine calls observeSweepPeak only while session_.sweepActive() is true. Feed several
+    // blocks with varying per-ear peaks; each ear latches its own max independently.
+    h.observeSweepPeak (0.10f, 0.04f);
+    h.observeSweepPeak (0.20f, 0.05f);
+    h.observeSweepPeak (0.15f, 0.03f);
+    CHECK (h.maxSweepPeakL() == Catch::Approx (0.20f).margin (2e-3));   // max L peak seen
+    CHECK (h.maxSweepPeakR() == Catch::Approx (0.05f).margin (2e-3));   // max R peak seen (asymmetric)
+}
+
+TEST_CASE("HealthMonitor: in-sweep peak latches reset on resetMeasurementLatches() and reset()") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    h.observeSweepPeak (0.30f, 0.22f);
+    REQUIRE (h.maxSweepPeakL() == Catch::Approx (0.30f).margin (2e-3));
+    REQUIRE (h.maxSweepPeakR() == Catch::Approx (0.22f).margin (2e-3));
+
+    h.resetMeasurementLatches();   // the sweep-onset re-scope clears the numerator latches
+    CHECK (h.maxSweepPeakL() == Catch::Approx (0.0f));
+    CHECK (h.maxSweepPeakR() == Catch::Approx (0.0f));
+
+    h.observeSweepPeak (0.18f, 0.07f);
+    REQUIRE (h.maxSweepPeakL() == Catch::Approx (0.18f).margin (2e-3));
+    h.reset();                     // a fresh run also clears them
+    CHECK (h.maxSweepPeakL() == Catch::Approx (0.0f));
+    CHECK (h.maxSweepPeakR() == Catch::Approx (0.0f));
+}
+
+TEST_CASE("HealthMonitor: in-sweep peaks do NOT accumulate when the sweep is not active") {
+    // The engine gates observeSweepPeak on session_.sweepActive(); when the sweep is NOT active it is
+    // simply never called, so the latches stay 0 even though analyzeInputBlock sees loud blocks.
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    std::vector<float> l (16, 0.5f), r (16, 0.3f);
+    h.analyzeInputBlock (l.data(), r.data(), 16);   // loud block, but sweep not active -> no observeSweepPeak
+    CHECK (h.maxSweepPeakL() == Catch::Approx (0.0f));
+    CHECK (h.maxSweepPeakR() == Catch::Approx (0.0f));
+}
+
+TEST_CASE("HealthMonitor: LowSnr is guidance, not invalidating") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    REQUIRE (h.cleanCapture());
+    REQUIRE_FALSE (eb::any (h.snapshot().flags & eb::HealthFlag::LowSnr));
+    h.raiseLowSnr();   // the engine (Task 3) calls this on a noisy-sweep verdict
+    CHECK (eb::any (h.snapshot().flags & eb::HealthFlag::LowSnr));   // the flag bit is set
+    CHECK (h.cleanCapture());                                       // ...but it does NOT invalidate (guidance)
+}
+
 TEST_CASE("HealthMonitor: scanAndFlagNonFinite invalidates on NaN/Inf, ignores finite") {
     eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
     const float clean[4] = { 0.0f, 0.5f, -0.5f, 0.25f };

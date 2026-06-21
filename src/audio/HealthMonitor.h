@@ -105,10 +105,39 @@ public:
         return pk;
     }
 
+    // No-latch per-ear max |sample| for the CURRENT block (skips non-finite). Lets the engine feed
+    // observeSweepPeak the per-ear numerator only while the sweep is active, without re-running
+    // analyzeInputBlock's per-ear scan. RT-safe: a plain loop, no allocation.
+    static void blockPeakPerEar (const float* l, const float* r, int n,
+                                 float& outL, float& outR) noexcept {
+        float pkL = 0.0f, pkR = 0.0f;
+        for (int i = 0; i < n; ++i) {
+            if (std::isfinite (l[i])) pkL = juce::jmax (pkL, std::abs (l[i]));
+            if (std::isfinite (r[i])) pkR = juce::jmax (pkR, std::abs (r[i]));
+        }
+        outL = pkL; outR = pkR;
+    }
+
     // True once either ear has peaked at a healthy capture level (>= kGoodLevelLinear) since the last
     // reset. Lets the GUI separate a present-but-too-quiet capture (the low-SNR "tin-can" failure,
     // which sits ABOVE the -50 dBFS no-signal floor and so reads as "clean" today) from a good one.
     bool reachedGoodLevel() const noexcept { return reachedGood_.load(); }
+
+    // ---- SNR addition: per-ear in-sweep peak latch (the SNR numerator) ----
+    // The engine calls this ONCE per capture block ONLY while the Dirac sweep is active
+    // (session_.sweepActive()), with this block's per-ear max |sample|. Each ear keeps its own
+    // running max over the whole SweepActive window so an asymmetric noisy earcup is caught (GAP 6).
+    // RT-safe: capture-thread single writer, std::max + an atomic store, no alloc/lock.
+    void observeSweepPeak (float pkL, float pkR) noexcept;
+
+    // Max |sample| per ear accumulated while the sweep was active; 0.0 until a sweep runs. Read /1000
+    // (the project's int-milli atomic-publish idiom). Reset on resetMeasurementLatches() + reset().
+    float maxSweepPeakL() const noexcept { return maxSweepPeakLMilli_.load() / 1000.0f; }
+    float maxSweepPeakR() const noexcept { return maxSweepPeakRMilli_.load() / 1000.0f; }
+
+    // Raise the LowSnr GUIDANCE flag (NOT invalidating). Called by the engine (Task 3) on a low-SNR
+    // verdict at the SweepActive->Complete edge. Public entry to the private raise() for that one flag.
+    void raiseLowSnr() noexcept { raise (HealthFlag::LowSnr); }
 
     // ---- D8 addition: runtime format revalidation ----
     // Call once from RenderCallback::audioDeviceAboutToStart with the device's granted format.
@@ -142,6 +171,11 @@ private:
     std::atomic<bool>      clean { true };
     std::atomic<bool>      recentClip_ { false };   // edge-triggered input clip, drained by recentInputClip()
     std::atomic<bool>      reachedGood_ { false };  // latched true once a healthy input peak is seen this run
+
+    // SNR numerator: per-ear running max |sample| over the SweepActive window (peak*1000 fixed-point,
+    // matching the level atomics). Capture-thread single writer (observeSweepPeak); reset on
+    // resetMeasurementLatches() + reset(). 0 until a sweep runs.
+    std::atomic<int>       maxSweepPeakLMilli_ { 0 }, maxSweepPeakRMilli_ { 0 };
 
     // Confirmed-clip detection. railRun*_ / longestRun_ are CAPTURE-THREAD-ONLY scratch (written only
     // in analyzeInputBlock); the *_A_ atomics publish to the GUI thread.
