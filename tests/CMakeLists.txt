@@ -27,6 +27,7 @@ add_executable(eb_tests
     test_irquality.cpp
     test_refmonitor.cpp
     test_refmon_live.cpp
+    test_referencegradepoller.cpp
     test_loopbackreference.cpp
     test_measurementsession.cpp
     test_combinegate.cpp
