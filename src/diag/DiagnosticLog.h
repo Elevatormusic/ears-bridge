@@ -25,7 +25,11 @@ namespace eb {
 
 class DiagnosticLog {
 public:
-    enum class Level { Info, Warn, Error };
+    // Debug is the most-detailed level. It is CAPTURED by default (written exactly like Info, just with a
+    // [DBG] tag) — the point is to record MORE (every button/control state + the Start-gate reason), not to
+    // gate it off. There is deliberately no runtime on/off toggle yet (YAGNI; a "Verbose" gate is reserved
+    // for later). Info/Warn/Error are unchanged.
+    enum class Level { Debug, Info, Warn, Error };
 
     // dir = the logs folder (caller passes %TEMP%/EarsBridge/logs). Creates the
     // folder if needed and opens/creates eb.log there for append.

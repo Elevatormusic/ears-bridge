@@ -12,6 +12,7 @@ juce::File logFile (const juce::File& dir, int backupIndex) {
 
 const char* levelTag (DiagnosticLog::Level level) {
     switch (level) {
+        case DiagnosticLog::Level::Debug: return "DBG";
         case DiagnosticLog::Level::Info:  return "INFO";
         case DiagnosticLog::Level::Warn:  return "WARN";
         case DiagnosticLog::Level::Error: return "ERROR";

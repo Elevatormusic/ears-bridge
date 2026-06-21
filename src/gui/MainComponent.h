@@ -221,6 +221,10 @@ private:
     void logDiracSnapshot  (const juce::String& reason);
     // Transition tracking for timerCallback: the last-logged reference-monitor snapshot, so we log the
     // state/peak/coherence/verdict ON CHANGE (not every 30 Hz tick), plus a ~30 s heartbeat tick counter.
+    // Start-gate enabled-state, last value written to the log (-1 = never logged). updateStartGate runs every
+    // 30 Hz tick; we log a Debug "Start gate: enabled/disabled (...reason...)" line ONLY when this flips, so
+    // the single most useful line — WHY Start is greyed out — appears once per change, not on every tick.
+    int    lastStartGateLogged_ = -1;            // 0 = disabled, 1 = enabled; -1 = never logged
     int    lastRefMonStateLogged_ = -1;          // RefMonState int; -1 = never logged
     bool   lastRefLoadedLogged_   = false;
     juce::String lastListenTextLogged_;          // last Listening<->Sweep-in-progress status text logged (Task 4)
