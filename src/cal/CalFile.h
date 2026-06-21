@@ -22,4 +22,11 @@ struct CalFile {
 
     static CalFile parse (const juce::String& text);   // throws CalParseError on no data rows
 };
+
+// Second ear-side signal (the file CONTENT is the first, read by parse()): derive Left/Right from
+// the file NAME. Matches the words "LEFT"/"RIGHT" first, else a DELIMITED single-letter L/R token
+// (leading "L"/"R" before _ - . or space; trailing; or "_L_"-style). Ambiguous (both sides, or a
+// bare letter buried in a word) or no marker -> Unknown. Pure + dependency-free. Used by the cal
+// slot to fill an Unknown content side and to cross-check a content-marked file (content wins).
+CalSide sideFromFilename (const juce::String& fileName);
 }

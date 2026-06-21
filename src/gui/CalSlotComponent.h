@@ -24,6 +24,9 @@ public:
     void setPlotRange (float topDb);   // lock the FR plot to a shared dB scale
     void applyTheme();                 // re-apply theme-dependent colours (live light/dark switch)
     void clearCal();                   // empty the slot (back to the drop zone) + notify
+    // Loud, un-truncated red problem banner under the card title (e.g. a detected L/R swap). Empty
+    // string clears it. Independent of the parse warning/error label so a swap can't be buried.
+    void setProblem (const juce::String& message);
 
     std::function<void (const juce::File&)> onCalLoaded;
     std::function<void ()> onCalCleared;   // fired when the slot is emptied via Remove
@@ -44,6 +47,7 @@ private:
     juce::String earName;
     juce::Label  fileLabel;     // "L_HPN.txt - serial 000-0000"
     juce::Label  errorLabel;    // parse error (red), hidden unless set
+    juce::Label  problemLabel;  // loud red swap banner under the title (setProblem); hidden unless set
     juce::TextButton replaceBtn { "Replace" };
     juce::TextButton removeBtn  { "Remove" };
     CurveThumbnail thumbnail;

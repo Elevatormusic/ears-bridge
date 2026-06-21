@@ -45,6 +45,7 @@ private:
     void updateStatusLine();
     void updateActiveEarIndicator (bool silent);   // AutoPerEar "capturing Left/Right" caption + meter accent
     void updateStartGate();          // enable Start only when a valid calibration generation is applied
+    void updateCalProblems();        // surface a rejected swap/serial/type loudly ON the offending cal card
     void updateControlsEnabled();    // freeze config (cals/rate/mode/FIR) while capturing; re-enable when stopped
     // Returns true when the selected input is a detected EARS / EARS Pro (the Dirac path).
     // Shared by isRealEarsWithCable and the physical-output gate (P1-09).

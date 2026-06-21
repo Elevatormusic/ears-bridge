@@ -631,8 +631,42 @@ void MainComponent::updateStartGate() {
     const bool ready    = haveDevs && haveCals && ! wrongMode && ! physicalOutput;
     startStop.setEnabled (running || ready);
     verifyButton.setEnabled (! running && inputPicker.selectedDevice().has_value());   // needs the EARS, while stopped
+    updateCalProblems();
     updateControlsEnabled();
     updateStatusLine();
+}
+
+void MainComponent::updateCalProblems() {
+    // A rejected pair (swap / serial mismatch / bad type) only shows in the status line today, which
+    // gets buried under device/level warnings. Surface it LOUDLY on the offending cal card so a
+    // left/right swap is impossible to miss. Only meaningful once both files are loaded AND the
+    // current build has caught up (a stale diagnostic from the PREVIOUS generation must not flash).
+    const bool building = engine.requestedGeneration() != engine.builtGeneration();
+    const auto diag     = building ? juce::String() : engine.calibrationDiagnostic();
+    const bool reject   = leftCal.hasCal() && rightCal.hasCal()
+                       && ! engine.calibrationApplied() && diag.isNotEmpty();
+    if (! reject) { leftCal.setProblem ({}); rightCal.setProblem ({}); return; }
+
+    // Which ear does the diagnostic implicate? A swap names exactly one slot; map it to a plain
+    // "this looks like the X cal, but it's in the Y slot" worded for that card. Serial/type problems
+    // implicate both files, so the message goes on both. (Diagnostic strings come from
+    // validateCalibrationPair: "Left calibration slot holds a file declaring the RIGHT side", etc.)
+    const bool leftSlotSwapped  = diag.containsIgnoreCase ("Left calibration slot holds");
+    const bool rightSlotSwapped = diag.containsIgnoreCase ("Right calibration slot holds");
+    if (leftSlotSwapped || rightSlotSwapped) {
+        if (leftSlotSwapped)
+            leftCal.setProblem ("This looks like the RIGHT cal, but it's in the LEFT slot - swap the files.");
+        else
+            leftCal.setProblem ({});
+        if (rightSlotSwapped)
+            rightCal.setProblem ("This looks like the LEFT cal, but it's in the RIGHT slot - swap the files.");
+        else
+            rightCal.setProblem ({});
+    } else {
+        // Serial mismatch / HEQ / unknown-type: not ear-specific. Show the full reason on both cards.
+        leftCal.setProblem (diag);
+        rightCal.setProblem (diag);
+    }
 }
 
 void MainComponent::updateControlsEnabled() {
@@ -762,8 +796,19 @@ void MainComponent::updateStatusLine() {
         statusLine.setText ("Set Combine Mode to Auto per-ear (Dirac) to start", juce::dontSendNotification);
         statusLine.setColour (juce::Label::textColourId, Theme::warn());
     } else if (engine.calibrationApplied()) {
-        // Ready: a valid generation is applied. No redundant label — the enabled Start button is the affordance.
-        statusLine.setText ({}, juce::dontSendNotification);
+        // Ready: a valid generation is applied. Normally no redundant label (the enabled Start button is
+        // the affordance) -- BUT if NEITHER file carried a side marker (no content line, no filename L/R),
+        // the validator could not have caught a swap. Say so honestly; this is advisory, NOT a Start block.
+        const bool bothSideUnknown =
+            leftCal.calFile().has_value()  && leftCal.calFile()->side  == eb::CalSide::Unknown
+         && rightCal.calFile().has_value() && rightCal.calFile()->side == eb::CalSide::Unknown;
+        if (bothSideUnknown) {
+            statusLine.setText ("Couldn't confirm left/right from these files - double-check the slots.",
+                                juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+        } else {
+            statusLine.setText ({}, juce::dontSendNotification);
+        }
     } else if (leftCal.hasCal() && rightCal.hasCal()) {
         // Both files are loaded but no valid generation is applied yet: either the validator rejected the
         // pair (surface the reason in warn colour) or the build is still in flight (dim "Preparing...").

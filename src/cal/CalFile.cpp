@@ -12,6 +12,43 @@ static CalType detectType (const juce::String& upper) {
     return CalType::Unknown;
 }
 
+// A side-delimiter is the start/end of the name or one of these separators. A single-letter L/R
+// token only counts as a side marker when delimited on BOTH ends (so "realtek" / "L1234" don't).
+static bool isSideDelim (juce::juce_wchar c) {
+    return c == '_' || c == '-' || c == '.' || c == ' ';
+}
+
+// True iff an isolated (delimited-both-sides) single letter `letter` appears in the uppercased name.
+static bool hasDelimitedLetter (const juce::String& upper, juce::juce_wchar letter) {
+    const int n = upper.length();
+    for (int i = 0; i < n; ++i) {
+        if (upper[i] != letter) continue;
+        const bool leftDelim  = (i == 0)     || isSideDelim (upper[i - 1]);
+        const bool rightDelim = (i == n - 1) || isSideDelim (upper[i + 1]);
+        if (leftDelim && rightDelim) return true;
+    }
+    return false;
+}
+
+CalSide sideFromFilename (const juce::String& fileName) {
+    const auto upper = fileName.upToLastOccurrenceOf (".", false, false)   // drop the extension
+                               .toUpperCase();
+    if (upper.isEmpty()) return CalSide::Unknown;
+
+    // 1) Whole words win. If both appear (a renamed/ambiguous name) it's Unknown, never a guess.
+    const bool wordLeft  = upper.containsWholeWord ("LEFT");
+    const bool wordRight = upper.containsWholeWord ("RIGHT");
+    if (wordLeft != wordRight) return wordLeft ? CalSide::Left : CalSide::Right;
+    if (wordLeft && wordRight) return CalSide::Unknown;
+
+    // 2) Else a delimited single-letter L/R token (e.g. "L_HPN_...", "..._R", "8604350-R").
+    const bool letterL = hasDelimitedLetter (upper, 'L');
+    const bool letterR = hasDelimitedLetter (upper, 'R');
+    if (letterL != letterR) return letterL ? CalSide::Left : CalSide::Right;
+
+    return CalSide::Unknown;   // none, or both -> can't tell
+}
+
 CalFile CalFile::parse (const juce::String& text) {
     CalFile out;
     out.contentHash = juce::SHA256 (text.toRawUTF8(), text.getNumBytesAsUTF8()).toHexString();

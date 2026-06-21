@@ -47,6 +47,15 @@ CalSlotComponent::CalSlotComponent (juce::String name) : earName (std::move (nam
     errorLabel.setComponentID ("calWarn");
     addChildComponent (errorLabel);
 
+    // Swap banner: bold red, wraps, sits directly under the title. Distinct from errorLabel so a
+    // gate-detected L/R swap is always visible and never buried under a type/parse warning.
+    problemLabel.setColour (juce::Label::textColourId, Theme::danger());
+    problemLabel.setFont (juce::Font (juce::FontOptions (12.0f).withStyle ("Bold")));
+    problemLabel.setJustificationType (juce::Justification::topLeft);
+    problemLabel.setMinimumHorizontalScale (1.0f);                    // wrap rather than squish
+    problemLabel.setComponentID ("calProblem");                       // findable in tests
+    addChildComponent (problemLabel);
+
     replaceBtn.onClick = [this] { browseForCal(); };
     addChildComponent (replaceBtn);
 
@@ -98,6 +107,19 @@ bool CalSlotComponent::loadFromFile (const juce::File& file) {
     }
     try {
         auto parsed = eb::CalFile::parse (file.loadFileAsString());
+        // Second ear-side signal: the FILENAME. The content side (parse()) is authoritative; the
+        // filename only FILLS an Unknown content side, and a definite disagreement is recorded but
+        // does NOT override the content (a file whose body says RIGHT stays RIGHT even if misnamed).
+        const auto fnSide = eb::sideFromFilename (file.getFileName());
+        if (parsed.side == eb::CalSide::Unknown && fnSide != eb::CalSide::Unknown) {
+            parsed.side = fnSide;
+        } else if (parsed.side != eb::CalSide::Unknown && fnSide != eb::CalSide::Unknown
+                   && parsed.side != fnSide) {
+            auto sideWord = [] (eb::CalSide s) { return s == eb::CalSide::Left ? "LEFT" : "RIGHT"; };
+            parsed.parseWarnings.add (juce::String ("Filename says ") + sideWord (fnSide)
+                                      + " but the file content says " + sideWord (parsed.side)
+                                      + " - keeping the content side.");
+        }
         applyParsed (parsed, file);
         if (onCalLoaded) onCalLoaded (file);
         return true;
@@ -146,10 +168,12 @@ void CalSlotComponent::clearCal() {
     heqWarning = false;
     fileLabel.setText ({}, juce::dontSendNotification);
     errorLabel.setText ({}, juce::dontSendNotification);
+    problemLabel.setText ({}, juce::dontSendNotification);
     thumbnail.clear();
     thumbnail.setVisible (false);
     fileLabel.setVisible (false);
     errorLabel.setVisible (false);
+    problemLabel.setVisible (false);   // an emptied slot has no swap to warn about
     replaceBtn.setVisible (false);
     removeBtn.setVisible (false);
     resized();
@@ -157,11 +181,23 @@ void CalSlotComponent::clearCal() {
     if (onCalCleared) onCalCleared();
 }
 
+void CalSlotComponent::setProblem (const juce::String& message) {
+    const bool show = message.isNotEmpty();
+    if (show == problemLabel.isVisible() && problemLabel.getText() == message)
+        return;   // no-op: avoids a relayout/repaint storm from the per-tick gate refresh
+    problemLabel.setColour (juce::Label::textColourId, Theme::danger());
+    problemLabel.setText (message, juce::dontSendNotification);
+    problemLabel.setVisible (show);
+    resized();
+    repaint();
+}
+
 void CalSlotComponent::setPlotRange (float topDb) { thumbnail.setRange (topDb); }
 
 void CalSlotComponent::applyTheme() {
     fileLabel.setColour (juce::Label::textColourId, Theme::textDim());
     errorLabel.setColour (juce::Label::textColourId, Theme::danger());
+    problemLabel.setColour (juce::Label::textColourId, Theme::danger());
     thumbnail.repaint();
     repaint();
 }
@@ -170,6 +206,13 @@ void CalSlotComponent::resized() {
     auto r = getLocalBounds().reduced (14, 12);
     r.removeFromTop (26);   // header strip (painted)
     r.removeFromTop (10);
+
+    // The swap banner (setProblem) sits directly under the title, ABOVE the thumbnail/empty-state,
+    // so it's the first thing read on the card and never overlaps the filename or type warning.
+    if (problemLabel.isVisible()) {
+        problemLabel.setBounds (r.removeFromTop (32));
+        r.removeFromTop (8);
+    }
 
     if (cal) {
         auto meta = r.removeFromBottom (28);
