@@ -11,6 +11,34 @@ static CalFile mk (CalSide side, juce::String serial, CalType type) {
     return c;
 }
 
+TEST_CASE("CalFile: real EARS header marks side in content, swap rejected") {
+    // Mirrors the real factory file (sanitized serial): two quoted header lines, then *-comments, then data.
+    auto rightTxt = juce::String (
+        "\"Sens Factor =0.9dB, EARS Serial 000-0000, compensation HPN V1\"\n"
+        "\"Use this file on the RIGHT channel. Your sensitive side is RIGHT.\"\n"
+        "*\n* HPN: Default headphone compensation curve for miniDSP EARS\n*\n"
+        "* For use with headphones. Do not use with IEMs.\n*\n"
+        "* Freq(Hz) SPL(dB) Phase(degrees)\n*\n"
+        "    10.0   -6.6    3.8\n    20.0  -3.0   2.0\n    50.0  -2.0   1.5\n"
+        "    100.0  -2.0   1.0\n    500.0  -0.5  0.4\n    1000.0  0.0  0.0\n"
+        "    5000.0 -0.5  0.3\n    10000.0 -1.0 0.5\n    20000.0 -3.0 0.2\n");
+    auto leftTxt = rightTxt.replace ("RIGHT", "LEFT");
+
+    auto R = eb::CalFile::parse (rightTxt);
+    auto L = eb::CalFile::parse (leftTxt);
+    INFO ("parsed R.side=" << (int) R.side << "  L.side=" << (int) L.side
+          << "  R.type=" << (int) R.type << "  R.points=" << (int) R.points.size());
+    CHECK (R.side == eb::CalSide::Right);   // does the parser read the side from the quoted content?
+    CHECK (L.side == eb::CalSide::Left);
+    CHECK (R.type == eb::CalType::Hpn);
+
+    // The swap the user hit: the LEFT file dropped into the RIGHT slot. Must be rejected.
+    auto verdict = eb::validateCalibrationPair (L /*left slot*/, L /*right slot = left file*/,
+                                                eb::FirMode::MinPhaseMagnitude);
+    INFO ("swap verdict valid=" << verdict.valid << "  reason=" << verdict.reason);
+    CHECK_FALSE (verdict.valid);
+}
+
 TEST_CASE("CalPairValidator: a well-formed HPN left+right pair with matching serial is valid") {
     auto L = mk (CalSide::Left,  "000-0000", CalType::Hpn);
     auto R = mk (CalSide::Right, "000-0000", CalType::Hpn);

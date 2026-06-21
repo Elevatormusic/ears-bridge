@@ -85,3 +85,29 @@ TEST_CASE("CalFile: a non-finite data row is skipped and recorded as a parse war
     CHECK (c.points.size() == 2);                 // the nan row dropped
     CHECK (c.parseWarnings.size() >= 1);
 }
+
+// sideFromFilename is the SECOND ear-side signal (the first is the file content). It must read
+// the side from a real EARS export name (L_HPN_..., R_HPN_..., 0000000-R), the words left/right,
+// and stay Unknown when the name carries no unambiguous side marker.
+TEST_CASE("CalFile::sideFromFilename derives the ear from common names") {
+    CHECK (eb::sideFromFilename ("L_HPN_000-0000.txt") == eb::CalSide::Left);
+    CHECK (eb::sideFromFilename ("R_HPN_000-0000.txt") == eb::CalSide::Right);
+    CHECK (eb::sideFromFilename ("0000000-R.txt")      == eb::CalSide::Right);
+    CHECK (eb::sideFromFilename ("headphone.txt")      == eb::CalSide::Unknown);
+    CHECK (eb::sideFromFilename ("left_ear.frd")       == eb::CalSide::Left);
+}
+
+TEST_CASE("CalFile::sideFromFilename: words win, bare letters need a delimiter, ambiguity is Unknown") {
+    // The whole word "left"/"right" anywhere in the name is decisive.
+    CHECK (eb::sideFromFilename ("RIGHT_ear_cal.txt") == eb::CalSide::Right);
+    CHECK (eb::sideFromFilename ("ears-LEFT.frd")     == eb::CalSide::Left);
+    // A delimited single-letter token: leading, trailing, or _L_-style.
+    CHECK (eb::sideFromFilename ("cal_R_000-0000.txt") == eb::CalSide::Right);
+    CHECK (eb::sideFromFilename ("000-0000_L.txt")     == eb::CalSide::Left);
+    // No marker, or a letter buried inside a word (not a side) -> Unknown.
+    CHECK (eb::sideFromFilename ("calibration.txt")  == eb::CalSide::Unknown);
+    CHECK (eb::sideFromFilename ("realtek.txt")      == eb::CalSide::Unknown);  // the 'l'/'r' inside a word
+    // Both sides present (a renamed/ambiguous name) -> Unknown, never a guess.
+    CHECK (eb::sideFromFilename ("L_and_R.txt")      == eb::CalSide::Unknown);
+    CHECK (eb::sideFromFilename ("left_right.txt")   == eb::CalSide::Unknown);
+}
