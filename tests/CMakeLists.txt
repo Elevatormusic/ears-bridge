@@ -7,6 +7,7 @@ add_executable(eb_tests
     test_processinggraph.cpp
     test_deviceid.cpp
     test_endpointformat.cpp
+    test_deviceconfigcheck.cpp
     test_modeldetect.cpp
     test_clockbridge.cpp
     test_clockbridge_transport.cpp
