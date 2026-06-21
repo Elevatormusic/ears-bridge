@@ -399,6 +399,21 @@ void selfAddNoise (std::vector<float>& x, float amp, unsigned seed) {
     for (auto& v : x) { seed = seed * 1664525u + 1013904223u; v += amp * ((float) (seed >> 9) / (float) (1u << 23) - 0.5f); }
 }
 
+// Place an already-built sweep response at a realistic OFFSET inside a longer window, with leading room noise
+// in the silence — the rolling-ring shape the poller receives on hardware (oldest noise -> newest sweep near
+// the END). The old selftest put the sweep at index 0 (the window PREFIX), masking the prefix-only match bug
+// (Fix 1). winLen defaults to ~2x the response so the sweep sits well past refLen.
+std::vector<float> selfOffsetWindow (const std::vector<float>& resp, int offset, int winLen, float leadNoise,
+                                     unsigned seed = 31u) {
+    std::vector<float> w ((size_t) winLen, 0.0f);
+    if (leadNoise > 0.0f) selfAddNoise (w, leadNoise, seed);
+    for (int i = 0; i < (int) resp.size(); ++i) {
+        const int j = offset + i;
+        if (j >= 0 && j < winLen) w[(size_t) j] += resp[(size_t) i];
+    }
+    return w;
+}
+
 const char* stateName (eb::RefMonState s) {
     switch (s) {
         case eb::RefMonState::NotLearned:     return "NotLearned";
@@ -502,47 +517,62 @@ int runSelfTest() {
         trace (std::string ("   ") + (ok ? "PASS" : "FAIL") + ": " + name);
     };
 
-    // 1) CLEAN MATCH — reference (x) a small IR, ~-25 dBFS, + a touch of noise. Expect a grade, state Graded*.
+    // The realistic ring shape (Fix 1): the just-finished sweep sits near the END of a window ~2x its length,
+    // PAST the reference-length prefix the old gate read. Every match/grade scenario below now uses this layout
+    // (NOT a sweep at index 0), so the self-test exercises the aligned match-gate end-to-end. winLen ~= 2x resp;
+    // the response is dropped in near the end with low-level leading room noise.
+    const int respLen = (int) cleanResp.size();              // == sweepLen + 255 (the reference length too)
+    const int winLen  = respLen * 2;                         // window twice the sweep -> sweep lands in 2nd half
+    const int lateOff = winLen - (respLen + 1024);           // place the response near the END (well past refLen)
+    trace (std::string ("layout: window ") + std::to_string (winLen) + " samples, sweep at offset "
+           + std::to_string (lateOff) + " (refLen " + std::to_string (respLen) + " -> sweep past the prefix)");
+
+    // 1) CLEAN MATCH — reference (x) a small IR, ~-25 dBFS, + a touch of noise, placed LATE. Expect a Graded* grade.
     {
-        auto w = cleanResp; selfScaleToPeak (w, 0.0562f); selfAddNoise (w, 0.001f, 7u);
-        auto s = runScenario (trace, "clean match (~-25 dBFS + touch of noise)", reference, w, fs, 3);
-        report ("clean match grades (state Graded*)", gradedClean (s));
+        auto resp = cleanResp; selfScaleToPeak (resp, 0.0562f); selfAddNoise (resp, 0.001f, 7u);
+        auto w = selfOffsetWindow (resp, lateOff, winLen, 0.002f);
+        auto s = runScenario (trace, "clean match (~-25 dBFS, sweep placed LATE)", reference, w, fs, 3);
+        report ("clean LATE-sweep match grades (state Graded*)", gradedClean (s));
     }
-    // 2) LOW LEVEL — ~-40 dBFS matching. Expect it STILL grades (no level gate).
+    // 2) LOW LEVEL — ~-40 dBFS matching, placed LATE. Expect it STILL grades (no level gate, aligned anywhere).
     {
-        auto w = cleanResp; selfScaleToPeak (w, 0.01f);
-        auto s = runScenario (trace, "low level (~-40 dBFS matching)", reference, w, fs, 3);
-        report ("low-level still grades (no level gate)", gradedClean (s));
+        auto resp = cleanResp; selfScaleToPeak (resp, 0.01f);
+        auto w = selfOffsetWindow (resp, lateOff, winLen, 0.0f);     // pure-silence lead under the quiet sweep
+        auto s = runScenario (trace, "low level (~-40 dBFS, sweep placed LATE)", reference, w, fs, 3);
+        report ("low-level LATE-sweep still grades (no level gate)", gradedClean (s));
     }
-    // 3) NOISY — matching + heavy noise. Expect a grade (match is noise-robust); report coherence/IR-SNR.
+    // 3) NOISY — matching + heavy noise, placed LATE. Expect a grade (match is noise-robust); report coherence/IR-SNR.
     {
-        auto w = cleanResp; selfScaleToPeak (w, 0.3f); selfAddNoise (w, 0.15f, 4242u);
-        auto s = runScenario (trace, "noisy (matching + heavy noise)", reference, w, fs, 3);
+        auto resp = cleanResp; selfScaleToPeak (resp, 0.3f); selfAddNoise (resp, 0.15f, 4242u);
+        auto w = selfOffsetWindow (resp, lateOff, winLen, 0.01f);
+        auto s = runScenario (trace, "noisy (matching + heavy noise, sweep placed LATE)", reference, w, fs, 3);
         trace ("   info: noisy coherence=" + std::to_string (s.lastCoh).substr (0, 5)
                + " grade IR-SNR=" + std::to_string (s.gradeIrSnr).substr (0, 6) + " dB");
-        report ("noisy match still grades (not stale)", s.anyGraded && s.gradeState != eb::RefMonState::ReferenceStale);
+        report ("noisy LATE-sweep match still grades (not stale)", s.anyGraded && s.gradeState != eb::RefMonState::ReferenceStale);
     }
-    // 4) NON-SWEEP — a white-noise response. Expect NO clean grade (no compact lobe -> no stable match).
+    // 4) NON-SWEEP — a white-noise window (no sweep anywhere). Expect NO clean grade (no compact lobe -> no match).
     {
-        std::vector<float> w (reference.size(), 0.0f); selfAddNoise (w, 0.4f, 1234567u);
-        auto s = runScenario (trace, "non-sweep (white noise)", reference, w, fs, 4);
+        std::vector<float> w ((size_t) winLen, 0.0f); selfAddNoise (w, 0.4f, 1234567u);
+        auto s = runScenario (trace, "non-sweep (white noise, no sweep)", reference, w, fs, 4);
         report ("non-sweep is NOT graded clean", ! gradedClean (s));
     }
-    // 5) WRONG REFERENCE — the room response to a DIFFERENT sweep. Expect ReferenceStale (never clean).
+    // 5) WRONG REFERENCE — a DIFFERENT sweep's room response placed LATE. Expect ReferenceStale (never clean).
     {
         auto refB = selfEss (sweepLen, fs, 100.0, 8000.0);
-        std::vector<float> w = selfConvolve (refB, roomIr);
-        auto s = runScenario (trace, "wrong reference (different sweep)", reference, w, fs, 4);
+        auto respB = selfConvolve (refB, roomIr);
+        auto w = selfOffsetWindow (respB, lateOff, winLen, 0.002f);
+        auto s = runScenario (trace, "wrong reference (different sweep, placed LATE)", reference, w, fs, 4);
         // PASS if not graded clean; if it DID grade, it must be ReferenceStale.
         const bool ok = ! gradedClean (s)
                      && (! s.anyGraded || s.gradeState == eb::RefMonState::ReferenceStale);
         report ("wrong reference is ReferenceStale / not clean", ok);
     }
-    // 6) DEBOUNCE — a sustained match across many polls. Expect EXACTLY ONE grade.
+    // 6) DEBOUNCE — a sustained LATE-sweep match across many polls. Expect EXACTLY ONE grade.
     {
-        auto w = cleanResp; selfScaleToPeak (w, 0.3f);
-        auto s = runScenario (trace, "debounce (sustained match, 6 polls)", reference, w, fs, 6);
-        report ("sustained match grades exactly once", s.gradeCount == 1);
+        auto resp = cleanResp; selfScaleToPeak (resp, 0.3f);
+        auto w = selfOffsetWindow (resp, lateOff, winLen, 0.001f);
+        auto s = runScenario (trace, "debounce (sustained LATE-sweep match, 6 polls)", reference, w, fs, 6);
+        report ("sustained LATE-sweep match grades exactly once", s.gradeCount == 1);
     }
 
     const std::string summary = "SELFTEST: " + std::to_string (passed) + "/" + std::to_string (total) + " passed";

@@ -1143,12 +1143,16 @@ void MainComponent::updateStatusLine() {
             // Fix 2: a matched measurement reads "verified". While the cutoffs are unratified we append the
             // IR-SNR/THD as INFO (neutral, in the ok-coloured line) rather than warning — a clean
             // measurement (~13 dB) must never read as a warning, but the numbers stay visible for tuning.
+            // Fix 4 (honesty): in Auto per-ear the grade ring buffers only graph.activeEar()'s channel, so ONE
+            // measurement grades a SINGLE earcup. Say "captured earcup" so the green line does not imply the whole
+            // both-ear measurement is verified. (Per-ear grading is a separate design decision flagged for the
+            // user; here we only stop over-claiming.)
             if (refState == eb::RefMonState::GradedClean)
-                msg = "Sweep captured + verified against the reference";
+                msg = "Sweep captured + verified against the reference (captured earcup)";
             else if (graded && ! eb::kIrThresholdsRatified) {
                 const int snr = juce::roundToInt (engine.refIrSnrDb());
                 const int thd = juce::roundToInt (engine.refThdPercent());
-                msg = "Sweep captured + verified - IR-SNR " + juce::String (snr) + " dB, THD "
+                msg = "Sweep captured + verified (captured earcup) - IR-SNR " + juce::String (snr) + " dB, THD "
                     + juce::String (thd) + "% (calibration pending)";
             }
             if (any (h.flags & HealthFlag::OsResampled)) msg += " (OS-resampled - approximate)";
@@ -1433,6 +1437,20 @@ void MainComponent::pollReferenceGrade() {
     if (got <= 0) return;
     window.resize ((size_t) got);
 
+    // Fix 2 (honesty): guard the capture rate against the reference rate. A measurement at 44.1k matched against a
+    // 48k reference is the SAME chirp stretched ~8.8% — it can still clear the provisional match cutoffs and read
+    // green "verified", which is a lie (a rate-mismatched measurement is invalid). Both rates are known here, so
+    // if they differ by more than a tiny tolerance, publish ReferenceStale and do NOT grade. The match-gate runs
+    // FIRST conceptually, but a wrong sample rate invalidates the comparison itself, so it is gated here up front.
+    const double respRate = engine.gradingResponseRate();
+    if (loadedReferenceRate_ > 0.0 && respRate > 0.0
+        && std::abs (respRate - loadedReferenceRate_) > 1.0) {
+        gradePoller_.reset();   // a rate change is not a sweep -> re-arm so a later same-rate sweep can grade
+        engine.setLastMatchCoherence (0.0f);
+        engine.publishReferenceGrade ((int) eb::RefMonState::ReferenceStale, 0.0f, 0.0f, /*mismatch*/ true, false);
+        return;
+    }
+
     // The DECISION (match-gate FIRST + the two-consecutive-matched-polls STABLE debounce) lives in the
     // headless eb::ReferenceGradePoller so it can be self-tested without the GUI/hardware. decide() runs the
     // cross-correlation match on the message thread (cheap) and returns whether THIS poll should grade; it does
@@ -1448,12 +1466,14 @@ void MainComponent::pollReferenceGrade() {
     auto reference = loadedReference_;                 // copy for the worker (message-thread snapshot)
     const double rate = loadedReferenceRate_;
     const int refLen = (int) reference.size();
-    firPool->addJob ([safe, reference = std::move (reference), window = std::move (window), rate, refLen]() mutable {
-        // OFFLINE on the worker: the pure grade for the window decide() said to grade. gradeWindow() locates the
-        // sweep inside the window (align), runs the match-gate FIRST, then quality — a non-sweep window fails the
-        // gate -> stale. Identical to the old inline eb::gradeMeasurementWindow, just routed through the poller.
+    const int alignOffset = d.alignOffset;             // where decide() located the sweep (Fix 1: reuse it)
+    firPool->addJob ([safe, reference = std::move (reference), window = std::move (window), rate, refLen, alignOffset]() mutable {
+        // OFFLINE on the worker: the pure grade for the window decide() said to grade. gradeWindow() grades at
+        // the SAME offset decide() located via cross-correlation (Fix 1 — the gate and the grade agree on where
+        // the sweep is; no second xcorr), re-runs the match-gate FIRST there, then quality — a non-sweep segment
+        // fails the gate -> stale.
         const auto g = eb::ReferenceGradePoller::gradeWindow (window.data(), (int) window.size(),
-                                                              reference.data(), refLen, rate);
+                                                              reference.data(), refLen, rate, alignOffset);
         const int   state   = (int) g.state;
         const bool  mismatch = g.mismatch;
         const float irSnr   = g.irSnrDb;
