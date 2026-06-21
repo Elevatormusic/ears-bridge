@@ -130,6 +130,7 @@ private:
     // Reference-Based Measurement Monitor (Plan 5): drives the GUI worker that grades a completed sweep
     // OFFLINE against the learned reference, then surfaces the verdict in the status ladder.
     void onLearnReference();         // Advanced affordance: capture + validate + store a loopback reference (on-device)
+    void loadStoredReference();      // startup: reload a previously-learned reference.f32 so it survives a restart
     void pollReferenceGrade();       // timer: drain engine.consumePendingGrade(), run gradeMeasurement off-thread, publish
     juce::String referenceStatePath_;                 // stored reference file (empty until learned this session)
     // Reference-Based Measurement Monitor (Plan 5): the learned reference held IN MEMORY for grading. The

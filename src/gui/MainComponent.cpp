@@ -335,6 +335,8 @@ MainComponent::MainComponent() {
     if (settings.rightCalPath().isNotEmpty())
         rightCal.loadFromFile (juce::File (settings.rightCalPath()));
 
+    loadStoredReference();   // reload a previously-learned reference so it survives a restart
+
     updateStartGate();
     syncPlotScales();
     setSize (900, 700);
@@ -982,6 +984,26 @@ void MainComponent::updateStatusLine() {
 }
 
 // ---- Reference-Based Measurement Monitor (Plan 5): learn + grade ----------------------
+void MainComponent::loadStoredReference() {
+    // Reload a previously-learned reference so it survives an app restart -- re-learning needs the
+    // fiddly Windows-Audio + exclusive-off dance, so don't make the user repeat it every launch. v1 is
+    // 48k-only (the capture asserted 48k), so the raw f32 samples read back at 48 kHz. A STALE reference
+    // (Dirac's sweep changed since it was learned) is caught at grade time by the match-gate -> the
+    // status reads "re-learn", never a false grade, so reloading a possibly-old reference is safe.
+    auto refFile = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                       .getChildFile ("EarsBridge").getChildFile ("reference.f32");
+    if (! refFile.existsAsFile()) return;
+    juce::MemoryBlock mb;
+    if (! refFile.loadFileAsData (mb)) return;
+    const int n = (int) (mb.getSize() / sizeof (float));
+    if (n < 48000) return;   // sanity: a real reference is many seconds long, not a stray short file
+    const auto* f = static_cast<const float*> (mb.getData());
+    loadedReference_.assign (f, f + n);
+    loadedReferenceRate_ = 48000.0;                  // v1: 48k-only
+    referenceStatePath_  = refFile.getFullPathName();
+    engine.setReferenceLoaded (true);
+}
+
 void MainComponent::onLearnReference() {
     // The button doubles as Learn / Cancel. WHILE a capture is in flight, a click REQUESTS CANCEL: flip the
     // atomic the firPool job polls (inside captureLoopback) and show a brief "Cancelling..." note. The job's
