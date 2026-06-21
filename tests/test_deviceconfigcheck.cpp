@@ -133,3 +133,106 @@ TEST_CASE ("two endpoints wrong are both named on one line", "[deviceconfigcheck
     REQUIRE (v.summary.containsIgnoreCase ("cable"));
     REQUIRE_FALSE (v.summary.containsChar ('\n'));   // strictly one line
 }
+
+// ---- SECONDARY advisory: channels + bit-depth (INFO/warn, never a green-veto, never a gate) ----------
+
+TEST_CASE ("a mono input is the advisory WARN, but does NOT veto the 48k pass", "[deviceconfigcheck]") {
+    // Input is 1ch (can't capture both earcups) but every endpoint is 48k. The RATE gate still passes
+    // (all48k stays true, summary empty -> green not vetoed); the advisory carries the input-channels warn.
+    ChainConfig c { fmt (48000.0, /*ch*/ 1), fmt (48000.0), fmt (48000.0) };
+    const auto v = eb::checkChainConfig (c);
+    REQUIRE (v.all48k);                  // rate gate UNAFFECTED -> green not vetoed by a channel count
+    REQUIRE (v.summary.isEmpty());       // the rate summary (the only veto) stays empty
+    REQUIRE (v.inputChannelsLow);        // the one advisory WARN
+    REQUIRE (v.advisory.isNotEmpty());
+    REQUIRE (v.advisory.containsIgnoreCase ("input"));
+    REQUIRE_FALSE (v.advisory.containsChar ('\n'));   // strictly one line
+}
+
+TEST_CASE ("a 16-bit integer Dirac output is an INFO note, not a warn-veto", "[deviceconfigcheck]") {
+    // 16-bit INTEGER (non-float) Dirac output at 48k: lower resolution -> an INFO note, never a gate.
+    ChainConfig c { fmt (48000.0), fmt (48000.0), fmt (48000.0, /*ch*/ 2, /*bits*/ 16, /*isFloat*/ false) };
+    const auto v = eb::checkChainConfig (c);
+    REQUIRE (v.all48k);                  // rate fine -> green not vetoed
+    REQUIRE (v.summary.isEmpty());
+    REQUIRE_FALSE (v.inputChannelsLow);  // not the input warn
+    REQUIRE (v.advisory.contains ("16-bit"));
+    REQUIRE (v.advisory.containsIgnoreCase ("Dirac output"));
+}
+
+TEST_CASE ("a 32-bit float cable gets NO bit-depth note (float is transparent)", "[deviceconfigcheck]") {
+    // 32-bit float everywhere, 2ch, 48k: nothing to note at all.
+    ChainConfig c { fmt (48000.0), fmt (48000.0, /*ch*/ 2, /*bits*/ 32, /*isFloat*/ true), fmt (48000.0) };
+    const auto v = eb::checkChainConfig (c);
+    REQUIRE (v.all48k);
+    REQUIRE_FALSE (v.advisory.contains ("16-bit"));
+    REQUIRE (v.advisory.isEmpty());
+}
+
+TEST_CASE ("a 24-bit integer endpoint gets NO bit-depth note (>=24-bit is transparent)", "[deviceconfigcheck]") {
+    // 24-bit integer is high enough resolution -> no note (only 16-bit integer triggers the INFO).
+    ChainConfig c { fmt (48000.0), fmt (48000.0, /*ch*/ 2, /*bits*/ 24, /*isFloat*/ false), fmt (48000.0) };
+    const auto v = eb::checkChainConfig (c);
+    REQUIRE (v.all48k);
+    REQUIRE (v.advisory.isEmpty());
+}
+
+TEST_CASE ("a mono cable is an INFO note, NOT the input-channels warn", "[deviceconfigcheck]") {
+    // Cable at 1ch: an INFO note about the cable, but inputChannelsLow stays false (the input is fine).
+    ChainConfig c { fmt (48000.0), fmt (48000.0, /*ch*/ 1), fmt (48000.0) };
+    const auto v = eb::checkChainConfig (c);
+    REQUIRE (v.all48k);
+    REQUIRE_FALSE (v.inputChannelsLow);                 // NOT the input warn
+    REQUIRE (v.advisory.isNotEmpty());
+    REQUIRE (v.advisory.containsIgnoreCase ("cable"));
+    REQUIRE (v.advisory.containsIgnoreCase ("2-channel"));
+}
+
+TEST_CASE ("an all-clean chain (48k, 2ch, float) has an empty advisory and no input warn", "[deviceconfigcheck]") {
+    ChainConfig c { fmt (48000.0), fmt (48000.0), fmt (48000.0) };
+    const auto v = eb::checkChainConfig (c);
+    REQUIRE (v.all48k);
+    REQUIRE (v.summary.isEmpty());
+    REQUIRE_FALSE (v.inputChannelsLow);
+    REQUIRE (v.advisory.isEmpty());
+}
+
+TEST_CASE ("an all-clean chain with 24-bit integer endpoints also has an empty advisory", "[deviceconfigcheck]") {
+    // 48k, 2ch, 24-bit integer everywhere: transparent -> nothing to note.
+    ChainConfig c { fmt (48000.0, 2, 24, false), fmt (48000.0, 2, 24, false), fmt (48000.0, 2, 24, false) };
+    const auto v = eb::checkChainConfig (c);
+    REQUIRE (v.all48k);
+    REQUIRE (v.advisory.isEmpty());
+}
+
+TEST_CASE ("the advisory never asserts about an unreadable endpoint", "[deviceconfigcheck]") {
+    // An unreadable input must NOT be claimed as mono, and an unreadable cable must NOT be claimed 16-bit.
+    ChainConfig c { unreadable(), unreadable(), fmt (48000.0) };
+    const auto v = eb::checkChainConfig (c);
+    REQUIRE_FALSE (v.inputChannelsLow);   // unreadable input -> we say nothing about its channels
+    REQUIRE (v.advisory.isEmpty());       // only the readable Dirac output is clean -> nothing to note
+}
+
+TEST_CASE ("input-channels warn leads when multiple notes apply (most-important-first)", "[deviceconfigcheck]") {
+    // Mono input AND a 16-bit Dirac output: ONE line, the input warn first, the 16-bit note after.
+    ChainConfig c { fmt (48000.0, /*ch*/ 1), fmt (48000.0), fmt (48000.0, 2, 16, false) };
+    const auto v = eb::checkChainConfig (c);
+    REQUIRE (v.all48k);                  // still a rate pass
+    REQUIRE (v.inputChannelsLow);
+    REQUIRE (v.advisory.containsIgnoreCase ("input"));
+    REQUIRE (v.advisory.contains ("16-bit"));
+    // The input warn is assembled first, so it appears before the 16-bit clause on the one line.
+    REQUIRE (v.advisory.indexOfIgnoreCase ("input") < v.advisory.indexOf ("16-bit"));
+    REQUIRE_FALSE (v.advisory.containsChar ('\n'));
+}
+
+TEST_CASE ("the advisory is independent of a RATE veto (a wrong-rate chain still computes it)", "[deviceconfigcheck]") {
+    // Dirac output 44.1k (rate veto) AND a mono input. The rate summary still vetoes; the advisory is still
+    // computed (the UI shows the rate veto first and only appends the advisory when the rate is clean).
+    ChainConfig c { fmt (44100.0, /*ch*/ 1), fmt (48000.0), fmt (44100.0) };
+    const auto v = eb::checkChainConfig (c);
+    REQUIRE_FALSE (v.all48k);             // the RATE veto is unchanged
+    REQUIRE (v.summary.isNotEmpty());     // rate summary present (the only green-veto)
+    REQUIRE (v.inputChannelsLow);         // advisory fields still populated
+    REQUIRE (v.advisory.containsIgnoreCase ("input"));
+}
