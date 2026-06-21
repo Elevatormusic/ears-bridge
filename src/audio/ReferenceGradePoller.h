@@ -24,6 +24,10 @@ namespace eb {
 // they hold the gradeMeasurementWindow() verdict the GUI would publish via publishReferenceGrade().
 struct GradePollResult {
     float coherence = 0.0f;                        // cross-correlation peak prominence published this poll
+    float mainLobe  = 0.0f;                         // main-lobe energy concentration — the SECOND match gate
+                                                    // (matched needs coherence>=min AND mainLobe>=kMainLobeMin);
+                                                    // surfaced so the diagnostic log can see WHY a high-coherence
+                                                    // real sweep may still not match (a spread IR lowers mainLobe)
     bool  matched   = false;                       // the match-gate verdict for THIS poll's window
     bool  didGrade  = false;                        // a grade was produced THIS poll (the stable-match edge)
     int   alignOffset = 0;                          // where decide() located the sweep inside the window (>=0,
