@@ -138,6 +138,11 @@ private:
     std::vector<float> loadedReference_;              // the learned ESS reference samples (empty until learned)
     double             loadedReferenceRate_ = 48000.0;
     std::atomic<bool>  gradeInFlight_ { false };      // guards against re-posting while a grade job runs
+    // Cancellable + restartable learn: the button doubles as Learn / Cancel. learnCancelRequested_ is the
+    // message-thread -> firPool hand-off (set on a cancel click, polled inside captureLoopback). learning_ is
+    // message-thread-only state guarding against a double-start during the brief cancel window.
+    std::atomic<bool>  learnCancelRequested_ { false };
+    bool               learning_ = false;
     // Transport.
     juce::TextButton startStop { "Start" };
     juce::Label statusLine;

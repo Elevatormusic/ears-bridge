@@ -13,6 +13,8 @@
 //   - metadata: rate/length + a stable content hash + version field
 
 #include <catch2/catch_test_macros.hpp>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <vector>
 #include <random>
@@ -195,4 +197,26 @@ TEST_CASE("diracDeviceTypeIsWindowsAudio recognises WASAPI shared, rejects ASIO/
     CHECK_FALSE (eb::diracDeviceTypeIsWindowsAudio ("ASIO"));            // loopback is silent in ASIO
     CHECK_FALSE (eb::diracDeviceTypeIsWindowsAudio ("ASIO4ALL v2"));
     CHECK_FALSE (eb::diracDeviceTypeIsWindowsAudio (""));               // unknown -> NOT confirmed (cautious)
+}
+
+// ---------------------------------------------------------------------------
+// CANCEL TOKEN — a pre-set cancel returns PROMPTLY with a cancelled (not failed)
+// result, never running the full ~26 s capture. The live WASAPI loop is on-device
+// (Windows-only); this exercises the cooperative-cancel contract, which is honoured
+// up front on EVERY platform (the cancel is checked before any device work and in
+// the stub), so it's headless-safe — no real endpoint required.
+// ---------------------------------------------------------------------------
+TEST_CASE("captureLoopback returns promptly with a cancelled result when the cancel token is pre-set") {
+    std::atomic<bool> cancel { true };                  // already requested before we even call
+    const auto t0 = std::chrono::steady_clock::now();
+    // A 26 s nominal capture: if cancel were ignored this would block far past the budget below.
+    auto cap = eb::captureLoopback ("CABLE", 26.0, 48000.0, &cancel);
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds> (
+                               std::chrono::steady_clock::now() - t0).count();
+
+    CHECK_FALSE (cap.ok);                               // a cancel is not a success
+    CHECK (cap.cancelled);                              // ...and it's flagged as a user-cancel, not a failure
+    CHECK (cap.reason == juce::String ("cancelled"));   // neutral reason the GUI can recognise
+    CHECK (elapsedMs < 2000);                           // promptly — nowhere near the 26 s capture window
+    INFO ("elapsedMs=" << elapsedMs);
 }
