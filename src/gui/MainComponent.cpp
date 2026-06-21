@@ -1483,7 +1483,8 @@ void MainComponent::pollReferenceGrade() {
     const double rate = loadedReferenceRate_;
     const int refLen = (int) reference.size();
     const int alignOffset = d.alignOffset;             // where decide() located the sweep (Fix 1: reuse it)
-    firPool->addJob ([safe, reference = std::move (reference), window = std::move (window), rate, refLen, alignOffset]() mutable {
+    const float coherence = d.coherence;               // match-gate coherence — captured for the ratification log line
+    firPool->addJob ([safe, reference = std::move (reference), window = std::move (window), rate, refLen, alignOffset, coherence]() mutable {
         // OFFLINE on the worker: the pure grade for the window decide() said to grade. gradeWindow() grades at
         // the SAME offset decide() located via cross-correlation (Fix 1 — the gate and the grade agree on where
         // the sweep is; no second xcorr), re-runs the match-gate FIRST there, then quality — a non-sweep segment
@@ -1502,7 +1503,8 @@ void MainComponent::pollReferenceGrade() {
         // usable -> we must NOT flag (no false positive / no div-by-0).
         const float sweepSnr  = g.sweepSnrDb;
         const bool  snrValid  = g.sweepSnrValid;
-        juce::MessageManager::callAsync ([safe, state, irSnr, thd, mismatch, lowQ, sweepSnr, snrValid]() {
+        juce::MessageManager::callAsync ([safe, state, irSnr, thd, mismatch, lowQ, sweepSnr, snrValid,
+                                          coherence, alignOffset, refLen, rate]() {
             auto* mc = safe.getComponent();
             if (! mc) return;
             // Publish the verdict snapshot (the SNR lesson: trio published together); raise the guidance
@@ -1518,6 +1520,24 @@ void MainComponent::pollReferenceGrade() {
                 if (sweepSnr < eb::kMinSweepSnrDb)
                     mc->engine.raiseLowSnr();
             }
+            // Ratification-grade summary: ONE comprehensive line per graded sweep so a single real measurement
+            // carries everything needed to set the IR-SNR / THD / sweep-SNR / match-coherence cutoffs and flip
+            // kIrThresholdsRatified. Info level (always-on in release), message-thread-only, serial-scrubbed by
+            // logLine. config48k correlates the grade with the live 48k-everywhere chain verdict; activeEar names
+            // which earcup Auto-per-ear was capturing at grade time (today's single-ring grade covers one ear).
+            const int ear = mc->engine.autoActiveEar();
+            mc->logLine (eb::DiagnosticLog::Level::Info,
+                juce::String ("GRADE COMPLETE: state=") + refMonStateName (state)
+                + " IR-SNR=" + juce::String (irSnr, 1) + "dB"
+                + " THD=" + juce::String (thd, 2) + "%"
+                + " sweepSNR=" + (snrValid ? juce::String (sweepSnr, 1) + "dB" : juce::String ("n/a"))
+                + " coherence=" + juce::String (coherence, 3)
+                + " alignOffset=" + juce::String (alignOffset)
+                + " refLen=" + juce::String (refLen)
+                + " rate=" + juce::String (rate, 0)
+                + " config48k=" + juce::String (mc->chainVerdict_.checked
+                                                ? (mc->chainVerdict_.all48k ? "yes" : "NO") : "unknown")
+                + " activeEar=" + juce::String (ear == 0 ? "L" : ear == 1 ? "R" : "-"));
             mc->gradeInFlight_.store (false);
         });
     });
