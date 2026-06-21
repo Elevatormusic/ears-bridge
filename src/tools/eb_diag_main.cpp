@@ -4,11 +4,18 @@
 //         eb_diag run "<outName>" -> list + 5 s passthrough into the named output
 //         eb_diag loopcap "<renderName>" [seconds] -> WASAPI loopback-capture a render endpoint
 //                 (intercept Dirac's PLAYED sweep; saves loopcap.wav; OK-vs-SILENT verdict)
+//         eb_diag selftest        -> HEADLESS reference-monitor grade-flow self-test (no hardware/GUI);
+//                 prints a per-scenario trace + "SELFTEST: N/N passed", writes selftest.log, exit!=0 on FAIL
 #include <juce_audio_devices/juce_audio_devices.h>
 #include "audio/AudioEngine.h"
 #include "audio/ModelDetect.h"
+#include "audio/ReferenceGradePoller.h"   // selftest: the headless grade-poll decision
+#include "audio/RefMonitor.h"             // selftest: RefMonState
+#include "diag/DiagnosticLog.h"           // selftest: write the trace through the real log path
 #include <iostream>
 #include <vector>
+#include <string>
+#include <algorithm>
 #include <cstdio>
 #include <cmath>
 
@@ -326,6 +333,220 @@ static int loopCapture (const juce::String& filter, int seconds) {
 }
 #endif
 
+// =====================================================================================================
+// selftest: a HEADLESS self-test of the reference-monitor grade flow. No hardware, no GUI. It synthesises
+// a reference ESS + several response windows and drives them through eb::ReferenceGradePoller (the same
+// match + stable-match-debounce + grade decision the GUI poll uses), printing a human-readable trace + a
+// PASS/FAIL per scenario, a "SELFTEST: N/N passed" summary, and the same trace through eb::DiagnosticLog
+// to a temp selftest.log (so the log-reading path is exercised). Returns non-zero on any FAIL.
+// =====================================================================================================
+namespace {
+
+constexpr double kSelfPi = 3.14159265358979323846;
+
+// Farina exponential sine sweep (matches tests/test_deconvolver.cpp / test_referencegradepoller.cpp).
+std::vector<float> selfEss (int n, double fs, double f1 = 20.0, double f2 = 20000.0) {
+    std::vector<float> x ((size_t) n, 0.0f);
+    const double T  = (double) n / fs;
+    const double w1 = 2.0 * kSelfPi * f1;
+    const double w2 = 2.0 * kSelfPi * f2;
+    const double K  = std::log (w2 / w1);
+    const double A  = w1 * T / K;
+    for (int i = 0; i < n; ++i) {
+        const double t   = (double) i / fs;
+        const double phi = A * (std::exp ((t / T) * K) - 1.0);
+        x[(size_t) i] = (float) std::sin (phi);
+    }
+    const int fade = (std::min) (n / 4, (int) std::lround (0.002 * fs));
+    for (int i = 0; i < fade; ++i) {
+        const float w = 0.5f * (1.0f - std::cos ((float) kSelfPi * (float) i / (float) fade));
+        x[(size_t) i]           *= w;
+        x[(size_t) (n - 1 - i)] *= w;
+    }
+    return x;
+}
+
+std::vector<float> selfConvolve (const std::vector<float>& sig, const std::vector<float>& ir) {
+    const int ns = (int) sig.size(), ni = (int) ir.size();
+    std::vector<float> y ((size_t) (ns + ni - 1), 0.0f);
+    for (int i = 0; i < ns; ++i) {
+        const float s = sig[(size_t) i];
+        if (s == 0.0f) continue;
+        for (int k = 0; k < ni; ++k) y[(size_t) (i + k)] += s * ir[(size_t) k];
+    }
+    return y;
+}
+
+void selfScaleToPeak (std::vector<float>& x, float targetPeak) {
+    float pk = 0.0f;
+    for (float v : x) pk = (std::max) (pk, std::abs (v));
+    if (pk <= 0.0f) return;
+    const float g = targetPeak / pk;
+    for (float& v : x) v *= g;
+}
+
+void selfAddNoise (std::vector<float>& x, float amp, unsigned seed) {
+    for (auto& v : x) { seed = seed * 1664525u + 1013904223u; v += amp * ((float) (seed >> 9) / (float) (1u << 23) - 0.5f); }
+}
+
+const char* stateName (eb::RefMonState s) {
+    switch (s) {
+        case eb::RefMonState::NotLearned:     return "NotLearned";
+        case eb::RefMonState::Learned:        return "Learned";
+        case eb::RefMonState::ReferenceStale: return "ReferenceStale";
+        case eb::RefMonState::GradedClean:    return "GradedClean";
+        case eb::RefMonState::GradedSuspect:  return "GradedSuspect";
+        case eb::RefMonState::NotGraded:      return "NotGraded";
+    }
+    return "?";
+}
+
+float dbfs (float peak) { return peak > 0.0f ? 20.0f * std::log10 (peak) : -144.0f; }
+
+// A tiny trace sink: writes one line to BOTH std::cout and the DiagnosticLog (Info), so the log-reading
+// path is exercised with the exact same trace the console shows.
+struct Trace {
+    eb::DiagnosticLog& log;
+    void operator() (const std::string& line) {
+        std::cout << line << "\n";
+        log.write (eb::DiagnosticLog::Level::Info, juce::String (line));
+    }
+};
+
+// A scenario = a name + a response window + the reference, and a predicate over the poller polls. We run
+// the poller across `polls` consecutive polls (the throttle is a GUI concern; here each call IS a poll) and
+// record: did ANY poll grade, the grade state, the count of grades, and the last coherence. The predicate
+// decides PASS/FAIL from those. Traces every poll.
+struct PollSummary {
+    bool             anyGraded   = false;
+    int              gradeCount  = 0;
+    eb::RefMonState  gradeState  = eb::RefMonState::NotGraded;
+    float            lastCoh     = 0.0f;
+    float            gradeIrSnr  = 0.0f;
+};
+
+PollSummary runScenario (Trace& trace, const std::string& name,
+                         const std::vector<float>& reference,
+                         const std::vector<float>& window, double rate, int polls) {
+    float pk = 0.0f; for (float v : window) pk = (std::max) (pk, std::abs (v));
+    trace ("-- scenario: " + name + "  (window peak " + std::to_string (dbfs (pk)).substr (0, 6) + " dBFS, "
+           + std::to_string (polls) + " polls)");
+    eb::ReferenceGradePoller poller;
+    PollSummary sum;
+    for (int i = 0; i < polls; ++i) {
+        const auto r = poller.poll (window.data(), (int) window.size(),
+                                    reference.data(), (int) reference.size(), rate);
+        sum.lastCoh = r.coherence;
+        std::string line = "   poll " + std::to_string (i + 1)
+                         + ": matched=" + (r.matched ? "yes" : "no ")
+                         + " coherence=" + std::to_string (r.coherence).substr (0, 5)
+                         + " didGrade=" + (r.didGrade ? "YES" : "no ");
+        if (r.didGrade) {
+            ++sum.gradeCount;
+            sum.anyGraded  = true;
+            sum.gradeState = r.state;
+            sum.gradeIrSnr = r.irSnrDb;
+            line += std::string (" state=") + stateName (r.state)
+                  + " irSnr=" + std::to_string (r.irSnrDb).substr (0, 6) + " dB";
+        }
+        trace (line);
+    }
+    return sum;
+}
+
+bool gradedClean (const PollSummary& s) {
+    return s.anyGraded && (s.gradeState == eb::RefMonState::GradedClean
+                        || s.gradeState == eb::RefMonState::GradedSuspect);
+}
+
+int runSelfTest() {
+    const double fs = 48000.0;
+    const int    sweepLen = 1 << 18;   // 262144 samples ~= 5.46 s at 48k (fast but a full sweep)
+
+    // The synthetic REFERENCE: a clean 20 Hz..20 kHz ESS, zero-padded to a window length (leading-silence +
+    // sweep inside, the rolling-ring shape the poller expects). The clean response is the room response to it.
+    auto refSweep = selfEss (sweepLen, fs);
+    std::vector<float> roomIr ((size_t) 256, 0.0f); roomIr[50] = 1.0f;
+    std::vector<float> cleanResp = selfConvolve (refSweep, roomIr);     // length sweepLen + 255
+    std::vector<float> reference (cleanResp.size(), 0.0f);
+    std::copy (refSweep.begin(), refSweep.end(), reference.begin());
+
+    // The log: a temp selftest.log so the log-reading path is exercised. Same trace as the console.
+    auto logDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                      .getChildFile ("EarsBridge").getChildFile ("selftest");
+    logDir.createDirectory();
+    // A fresh file each run so the path holds only this run's trace.
+    logDir.getChildFile ("eb.log").deleteFile();
+    eb::DiagnosticLog log (logDir);
+    const juce::File logFile = logDir.getChildFile ("selftest.log");
+    Trace trace { log };
+
+    trace ("==== EARS Bridge reference-monitor SELFTEST ====");
+    trace (std::string ("reference: ") + std::to_string (sweepLen) + " sample ESS @ "
+           + std::to_string ((int) fs) + " Hz (" + std::to_string (sweepLen / fs).substr (0, 4) + " s)");
+
+    int passed = 0, total = 0;
+    auto report = [&] (const std::string& name, bool ok) {
+        ++total; if (ok) ++passed;
+        trace (std::string ("   ") + (ok ? "PASS" : "FAIL") + ": " + name);
+    };
+
+    // 1) CLEAN MATCH — reference (x) a small IR, ~-25 dBFS, + a touch of noise. Expect a grade, state Graded*.
+    {
+        auto w = cleanResp; selfScaleToPeak (w, 0.0562f); selfAddNoise (w, 0.001f, 7u);
+        auto s = runScenario (trace, "clean match (~-25 dBFS + touch of noise)", reference, w, fs, 3);
+        report ("clean match grades (state Graded*)", gradedClean (s));
+    }
+    // 2) LOW LEVEL — ~-40 dBFS matching. Expect it STILL grades (no level gate).
+    {
+        auto w = cleanResp; selfScaleToPeak (w, 0.01f);
+        auto s = runScenario (trace, "low level (~-40 dBFS matching)", reference, w, fs, 3);
+        report ("low-level still grades (no level gate)", gradedClean (s));
+    }
+    // 3) NOISY — matching + heavy noise. Expect a grade (match is noise-robust); report coherence/IR-SNR.
+    {
+        auto w = cleanResp; selfScaleToPeak (w, 0.3f); selfAddNoise (w, 0.15f, 4242u);
+        auto s = runScenario (trace, "noisy (matching + heavy noise)", reference, w, fs, 3);
+        trace ("   info: noisy coherence=" + std::to_string (s.lastCoh).substr (0, 5)
+               + " grade IR-SNR=" + std::to_string (s.gradeIrSnr).substr (0, 6) + " dB");
+        report ("noisy match still grades (not stale)", s.anyGraded && s.gradeState != eb::RefMonState::ReferenceStale);
+    }
+    // 4) NON-SWEEP — a white-noise response. Expect NO clean grade (no compact lobe -> no stable match).
+    {
+        std::vector<float> w (reference.size(), 0.0f); selfAddNoise (w, 0.4f, 1234567u);
+        auto s = runScenario (trace, "non-sweep (white noise)", reference, w, fs, 4);
+        report ("non-sweep is NOT graded clean", ! gradedClean (s));
+    }
+    // 5) WRONG REFERENCE — the room response to a DIFFERENT sweep. Expect ReferenceStale (never clean).
+    {
+        auto refB = selfEss (sweepLen, fs, 100.0, 8000.0);
+        std::vector<float> w = selfConvolve (refB, roomIr);
+        auto s = runScenario (trace, "wrong reference (different sweep)", reference, w, fs, 4);
+        // PASS if not graded clean; if it DID grade, it must be ReferenceStale.
+        const bool ok = ! gradedClean (s)
+                     && (! s.anyGraded || s.gradeState == eb::RefMonState::ReferenceStale);
+        report ("wrong reference is ReferenceStale / not clean", ok);
+    }
+    // 6) DEBOUNCE — a sustained match across many polls. Expect EXACTLY ONE grade.
+    {
+        auto w = cleanResp; selfScaleToPeak (w, 0.3f);
+        auto s = runScenario (trace, "debounce (sustained match, 6 polls)", reference, w, fs, 6);
+        report ("sustained match grades exactly once", s.gradeCount == 1);
+    }
+
+    const std::string summary = "SELFTEST: " + std::to_string (passed) + "/" + std::to_string (total) + " passed";
+    trace (summary);
+
+    // Mirror the rotating eb.log to the named selftest.log path the spec asks for (so the path is stable and
+    // self-describing), then print it. The DiagnosticLog wrote to eb.log; copy it to selftest.log.
+    logDir.getChildFile ("eb.log").copyFileTo (logFile);
+    std::cout << "selftest.log: " << logFile.getFullPathName() << "\n";
+
+    return (passed == total) ? 0 : 1;
+}
+
+} // namespace
+
 static const char* modelName (eb::EarsModel m) {
     switch (m) { case eb::EarsModel::Ears: return "EARS";
                  case eb::EarsModel::EarsPro: return "EARS Pro";
@@ -349,6 +570,12 @@ int main (int argc, char** argv) {
    #endif
 
     juce::ScopedJuceInitialiser_GUI juceInit;   // needed for device subsystem on some OSes
+
+    // selftest: HEADLESS reference-monitor grade-flow self-test (no hardware, no GUI). Runs BEFORE any device
+    // enumeration so it can be invoked on a machine with no EARS/cable attached. Returns non-zero on any FAIL.
+    if (argc >= 2 && juce::String (argv[1]) == "selftest")
+        return runSelfTest();
+
     eb::AudioEngine eng;
 
     std::cout << "== INPUT DEVICES ==\n";

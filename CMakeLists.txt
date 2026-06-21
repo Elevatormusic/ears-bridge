@@ -65,6 +65,9 @@ add_library(eb_engine STATIC
 target_sources(eb_engine PRIVATE src/audio/AsioFallback.cpp)
 target_sources(eb_engine PRIVATE src/audio/LrVerify.cpp)
 target_sources(eb_engine PRIVATE src/audio/MeasurementSession.cpp)
+# The headless grade-poll DECISION (match-gate + stable-match debounce + grade), extracted from the GUI so
+# it can be self-tested without the GUI/hardware. Pure logic over eb_core's Deconvolver/RefMonitor.
+target_sources(eb_engine PRIVATE src/audio/ReferenceGradePoller.cpp)
 # Task 3 (reference monitor): the loopback reference — pure validation + metadata
 # everywhere, plus the WASAPI loopback capture (Windows-only, guarded inside the .cpp
 # like EndpointFormat). Uses eb::referenceMatches (eb_core) for the single-sweep self-test

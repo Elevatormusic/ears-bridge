@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "audio/AudioEngine.h"      // eb::AudioEngine (Plan 2 SPINE)
+#include "audio/ReferenceGradePoller.h"  // eb::ReferenceGradePoller (the headless grade-poll DECISION)
 #include "cal/FirDesigner.h"        // eb::FirDesigner (Plan 1)
 #include "state/Settings.h"
 #include "gui/Theme.h"
@@ -150,8 +151,11 @@ private:
     // the full sweep landed before grading. There is NO absolute level gate, and no silence/settled gate, here.
     int                gradePollTick_       = 0;      // 30 Hz tick counter for the ~2 s match-poll throttle
     static constexpr int kGradePollTicks    = 60;     // ~2 s at the 30 Hz GUI timer
-    bool               lastPollMatched_     = false;  // previous throttled poll's match result (stable-match edge)
-    bool               gradedThisSession_   = false;  // debounce latch: this match session already graded
+    // The match + stable-match-debounce DECISION lives in a headless unit (eb::ReferenceGradePoller) so the
+    // grade logic can be self-tested without the GUI/hardware (the "grade never fires" regression lived here).
+    // The GUI keeps the throttle (above), the off-thread firPool dispatch, and the publish; the poller owns
+    // only the two-consecutive-matched-polls debounce + the grade — see decide()/gradeWindow().
+    eb::ReferenceGradePoller gradePoller_;
     // Cancellable + restartable learn: the button doubles as Learn / Cancel. learnCancelRequested_ is the
     // message-thread -> firPool hand-off (set on a cancel click, polled inside captureLoopback). learning_ is
     // message-thread-only state guarding against a double-start during the brief cancel window.

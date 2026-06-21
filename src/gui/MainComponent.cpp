@@ -842,7 +842,7 @@ void MainComponent::onStartStop() {
             inputClipHold_ = 0; silentTicks_ = 0; lowLevelTicks_ = 0; lowSnrTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
             // Task 4 match-poll debounce: a fresh run starts un-matched and un-graded, so the first sustained
             // match (two consecutive matched polls) grades exactly once.
-            gradePollTick_ = 0; lastPollMatched_ = false; gradedThisSession_ = false; lastListenTextLogged_.clear();
+            gradePollTick_ = 0; gradePoller_.reset(); lastListenTextLogged_.clear();
             // Surface a silent format downgrade: WASAPI shared mode can grant a different rate/depth
             // than the user selected, which would otherwise resample with no indication. The split:
             // genuine cautions (a real resample, an unverifiable rail) go on preflightLabel (yellow);
@@ -1433,20 +1433,15 @@ void MainComponent::pollReferenceGrade() {
     if (got <= 0) return;
     window.resize ((size_t) got);
 
-    // The DETECTOR: cross-correlate the window against the learned reference. Publish the coherence so the
+    // The DECISION (match-gate FIRST + the two-consecutive-matched-polls STABLE debounce) lives in the
+    // headless eb::ReferenceGradePoller so it can be self-tested without the GUI/hardware. decide() runs the
+    // cross-correlation match on the message thread (cheap) and returns whether THIS poll should grade; it does
+    // NOT run the heavy deconvolve+grade (that stays off-thread below). Publish the coherence either way so the
     // diagnostic log + the RefMon-change line see it (the match-gate ran here, FIRST, before any quality).
-    const int matchLen = juce::jmin ((int) loadedReference_.size(), (int) window.size());
-    const auto m = eb::referenceMatches (loadedReference_.data(), window.data(), matchLen);
-    engine.setLastMatchCoherence (m.coherence);
-
-    // STABLE-MATCH debounce. The match-gate runs FIRST: a non-match never grades, and a dropped match
-    // re-arms the session so the next sweep can grade. Grade once when the match holds across TWO consecutive
-    // throttled polls (~4 s of sustained match ⇒ the sweep is fully captured, not still rising).
-    if (! m.matched) gradedThisSession_ = false;                         // match dropped -> a fresh sweep may grade
-    const bool stableMatch = m.matched && lastPollMatched_;              // two matched polls in a row
-    lastPollMatched_ = m.matched;
-    if (! stableMatch || gradedThisSession_) return;                     // need a stable, not-yet-graded match
-    gradedThisSession_ = true;                                          // latch: don't re-grade this match session
+    const auto d = gradePoller_.decide (window.data(), (int) window.size(),
+                                        loadedReference_.data(), (int) loadedReference_.size());
+    engine.setLastMatchCoherence (d.coherence);
+    if (! d.didGrade) return;                                             // need a stable, not-yet-graded match
 
     gradeInFlight_.store (true);
     juce::Component::SafePointer<MainComponent> safe (this);
@@ -1454,14 +1449,16 @@ void MainComponent::pollReferenceGrade() {
     const double rate = loadedReferenceRate_;
     const int refLen = (int) reference.size();
     firPool->addJob ([safe, reference = std::move (reference), window = std::move (window), rate, refLen]() mutable {
-        // OFFLINE on the worker: locate the sweep inside the window (align), then match-gate FIRST, then
-        // quality (gradeMeasurementWindow enforces the order). A non-sweep window fails the gate -> stale.
-        auto g = eb::gradeMeasurementWindow (reference.data(), refLen, window.data(), (int) window.size(), rate);
+        // OFFLINE on the worker: the pure grade for the window decide() said to grade. gradeWindow() locates the
+        // sweep inside the window (align), runs the match-gate FIRST, then quality — a non-sweep window fails the
+        // gate -> stale. Identical to the old inline eb::gradeMeasurementWindow, just routed through the poller.
+        const auto g = eb::ReferenceGradePoller::gradeWindow (window.data(), (int) window.size(),
+                                                              reference.data(), refLen, rate);
         const int   state   = (int) g.state;
-        const bool  mismatch = (g.state == eb::RefMonState::ReferenceStale);
-        const float irSnr   = g.quality.irSnrDb;
-        const float thd     = g.quality.thdPercent;
-        const bool  lowQ    = g.quality.lowQuality;
+        const bool  mismatch = g.mismatch;
+        const float irSnr   = g.irSnrDb;
+        const float thd     = g.thdPercent;
+        const bool  lowQ    = g.lowQuality;
         juce::MessageManager::callAsync ([safe, state, irSnr, thd, mismatch, lowQ]() {
             auto* mc = safe.getComponent();
             if (! mc) return;
