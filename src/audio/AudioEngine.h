@@ -148,6 +148,10 @@ public:
     void processCaptureBlockForTest (const float* inL, const float* inR,
                                      float* outMono, int numSamples);
     bool bridgeSweepFrozen() const noexcept { return bridge.sweepActive(); }   // D6 test accessor
+    // SNR review-fix test accessors: the per-ear sweep-peak numerators (so a test can assert the stale
+    // left peak does NOT leak into the second earcup's sweep after resetSweepPeaks() runs per Complete).
+    float maxSweepPeakLForTest() const noexcept { return hm.maxSweepPeakL(); }
+    float maxSweepPeakRForTest() const noexcept { return hm.maxSweepPeakR(); }
 
     // D8: directly call hm.checkFormatChange with the given values, simulating a mid-run OS
     // format renegotiation, so tests can verify that AudioEngine::health() surfaces FormatChanged.

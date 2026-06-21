@@ -63,6 +63,15 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
                                             e.hm.maxSweepPeakL(), e.hm.maxSweepPeakR(),
                                             e.session_.completedFloorStable());
             if (v.lowSnr) e.hm.raiseLowSnr();
+            // SNR review fix: SNAPSHOT this sweep's verdict dB so the GUI names the exact dB that raised
+            // the flag (it must NOT recompute from the live atomics, which the next sweep mutates), THEN
+            // scope the per-ear peaks to ONE sweep -- zero them so the NEXT earcup sweep accumulates a
+            // fresh numerator instead of reading max() across both sweeps. Order matters: publish BEFORE
+            // resetSweepPeaks() (the snapshot reads this sweep's peaks via evaluateSnr above). Both are
+            // RT-safe atomic stores on the capture thread; only the two SNR peak atomics are zeroed, so
+            // the clip-run / validity / drift latches are untouched.
+            e.hm.publishCompletedSnrDb (v.snrDbMin);
+            e.hm.resetSweepPeaks();
         }
         // In-measurement only: an invalidating flag (clip/NaN/dropout/drift) latches the session Invalid
         // so the GUI's phase-gated wording matches cleanCapture(). Single-writer: the capture thread is
@@ -272,11 +281,13 @@ DipGainProfile AudioEngine::gainProfile() const noexcept { return hm.gainProfile
 bool AudioEngine::consumeRecentInputClip() noexcept      { return hm.recentInputClip(); }
 bool AudioEngine::reachedGoodLevel()       const noexcept { return hm.reachedGoodLevel(); }
 float AudioEngine::completedSweepSnrDb()   const noexcept {
-    // Recompute the just-completed sweep's verdict from the published atomics (the same inputs the
-    // capture-thread edge used to raise LowSnr) so the GUI can name the dB. Pure read; no new state.
-    return eb::evaluateSnr (session_.armNoiseFloor(),
-                            hm.maxSweepPeakL(), hm.maxSweepPeakR(),
-                            session_.completedFloorStable()).snrDbMin;
+    // SNR review fix (Finding 3): read the dB SNAPSHOTTED at the SweepActive->Complete edge (the exact
+    // min-ear dB the verdict used to raise LowSnr), NOT a live recompute from maxSweepPeak*/armFloor.
+    // Recomputing here let the displayed number drift once a SUBSEQUENT sweep mutated those atomics (e.g.
+    // the right-earcup sweep changing the peaks after the left sweep raised the sticky flag), so the GUI
+    // could show a dB that contradicted the flag. The snapshot is frozen, so the displayed dB always
+    // matches the dB that raised the flag. Pure lock-free read.
+    return hm.completedSnrDb();
 }
 int  AudioEngine::autoActiveEar()          const noexcept { return graph.activeEar(); }
 bool AudioEngine::consumeDeviceDied()      noexcept      { return deviceDied_.exchange (false); }
@@ -488,6 +499,16 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
         float spkL = 0.0f, spkR = 0.0f;
         eb::HealthMonitor::blockPeakPerEar (inL, inR, numSamples, spkL, spkR);
         hm.observeSweepPeak (spkL, spkR);
+    }
+    // SNR: per-sweep verdict at the SweepActive->Complete edge (mirror the capture callback) -- raise
+    // LowSnr on a noisy sweep, SNAPSHOT the verdict dB, then scope the per-ear peaks to ONE sweep.
+    if (session_.consumeSweepComplete()) {
+        const auto v = eb::evaluateSnr (session_.armNoiseFloor(),
+                                        hm.maxSweepPeakL(), hm.maxSweepPeakR(),
+                                        session_.completedFloorStable());
+        if (v.lowSnr) hm.raiseLowSnr();
+        hm.publishCompletedSnrDb (v.snrDbMin);
+        hm.resetSweepPeaks();
     }
     if (session_.inMeasurement() && ! hm.cleanCapture()) session_.markInvalid();
     if (graph.process (inL, inR, outMono, numSamples)) hm.reportNonFinite();
