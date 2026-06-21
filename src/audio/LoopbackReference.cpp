@@ -576,6 +576,214 @@ LoopbackCaptureResult captureLoopback (const juce::String& filter, double second
     return res;
 }
 
+// ---------------------------------------------------------------------------
+// Per-channel pan-check capture (eb_diag pancheck diagnostic).
+// ---------------------------------------------------------------------------
+namespace {
+
+// Accumulate one packet's sum-of-squares into separate ch0 / ch1 accumulators WITHOUT
+// averaging the channels. Mirrors decodePacketToMono's per-format sample addressing
+// (32f / 16 / 24 / 32-int) but indexes channel c explicitly: sample index = f*ch + c. The
+// caller folds these running sums into ~100 ms blocks to produce the per-channel RMS series.
+struct ChannelSumSq { double l = 0.0, r = 0.0; };
+
+void accumulatePacketPerChannel (const unsigned char* data, UINT32 frames, WORD channels,
+                                 WORD bits, bool isFloat, ChannelSumSq& acc) {
+    const int ch = juce::jmax (1, (int) channels);
+    const int cR = (ch >= 2) ? 1 : 0;   // mono device -> R reads ch0 too (we flag mono separately)
+    auto addSq = [&] (auto sampleAt) {
+        for (UINT32 f = 0; f < frames; ++f) {
+            const float l = sampleAt ((size_t) f * ch + 0);
+            const float r = sampleAt ((size_t) f * ch + cR);
+            acc.l += (double) l * (double) l;
+            acc.r += (double) r * (double) r;
+        }
+    };
+    if (isFloat && bits == 32) {
+        auto* s = reinterpret_cast<const float*> (data);
+        addSq ([&] (size_t i) { return s[i]; });
+    } else if (bits == 16) {
+        auto* s = reinterpret_cast<const short*> (data);
+        addSq ([&] (size_t i) { return (float) s[i] / 32768.0f; });
+    } else if (bits == 24) {
+        addSq ([&] (size_t i) {
+            const unsigned char* p = data + i * 3;
+            int v = (p[0]) | (p[1] << 8) | (p[2] << 16);
+            if (v & 0x800000) v |= ~0xFFFFFF;            // sign-extend 24->32
+            return (float) v / 8388608.0f;
+        });
+    } else if (bits == 32) {                              // 32-bit signed PCM
+        auto* s = reinterpret_cast<const int*> (data);
+        addSq ([&] (size_t i) { return (float) s[i] / 2147483648.0f; });
+    }
+}
+
+// Convert an accumulated mean-square into a dBFS RMS, floored at -120 dB (matches the
+// "all blocks near -120 on silence" smoke-test expectation).
+inline float meanSqToDb (double sumSq, long long n) {
+    if (n <= 0) return -120.0f;
+    const double meanSq = sumSq / (double) n;
+    if (meanSq <= 0.0) return -120.0f;
+    const float db = (float) (20.0 * std::log10 (std::sqrt (meanSq)));
+    return juce::jmax (-120.0f, db);
+}
+
+} // namespace
+
+PanCheckResult captureLoopbackPanCheck (const juce::String& filter, double seconds, double expectedRate) {
+    PanCheckResult res;
+    juce::ignoreUnused (expectedRate);   // diagnostic: capture whatever Dirac plays, don't reject on rate
+
+    const HRESULT co = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
+    const bool weInited = SUCCEEDED (co);
+
+    auto fail = [&] (juce::String why) -> PanCheckResult {
+        if (weInited) CoUninitialize();
+        res.ok = false; res.reason = std::move (why); return res;
+    };
+
+    IMMDeviceEnumerator* en = nullptr;
+    if (FAILED (CoCreateInstance (__uuidof (MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                  __uuidof (IMMDeviceEnumerator), (void**) &en)) || en == nullptr)
+        return fail ("no audio endpoint enumerator");
+
+    // Pick the render endpoint to loop back -- identical name-driven selection to captureLoopback:
+    // empty -> system DEFAULT render endpoint; else prefer an EXACT FriendlyName match then a substring.
+    IMMDevice* match = nullptr; juce::String matchName;
+    if (filter.isEmpty()) {
+        if (SUCCEEDED (en->GetDefaultAudioEndpoint (eRender, eConsole, &match)) && match != nullptr) {
+            IPropertyStore* ps = nullptr; match->OpenPropertyStore (STGM_READ, &ps);
+            PROPVARIANT nm; PropVariantInit (&nm);
+            if (ps) ps->GetValue (PKEY_Device_FriendlyName, &nm);
+            matchName = (nm.vt == VT_LPWSTR && nm.pwszVal) ? juce::String (nm.pwszVal) : juce::String();
+            PropVariantClear (&nm); if (ps) ps->Release();
+        }
+    } else {
+        IMMDeviceCollection* coll = nullptr;
+        en->EnumAudioEndpoints (eRender, DEVICE_STATE_ACTIVE, &coll);
+        UINT count = 0; if (coll) coll->GetCount (&count);
+        IMMDevice* sub = nullptr; juce::String subName;
+        for (UINT i = 0; i < count; ++i) {
+            IMMDevice* dev = nullptr; coll->Item (i, &dev);
+            IPropertyStore* ps = nullptr; dev->OpenPropertyStore (STGM_READ, &ps);
+            PROPVARIANT nm; PropVariantInit (&nm);
+            if (ps) ps->GetValue (PKEY_Device_FriendlyName, &nm);
+            juce::String name = (nm.vt == VT_LPWSTR && nm.pwszVal) ? juce::String (nm.pwszVal) : juce::String();
+            PropVariantClear (&nm); if (ps) ps->Release();
+            if      (match == nullptr && name.equalsIgnoreCase   (filter)) match = dev, matchName = name;
+            else if (sub   == nullptr && name.containsIgnoreCase (filter)) sub   = dev, subName   = name;
+            else                                                          dev->Release();
+        }
+        if (coll) coll->Release();
+        if (match == nullptr && sub != nullptr) { match = sub; matchName = subName; }
+        else if (sub != nullptr)                  sub->Release();
+    }
+    if (match == nullptr) { en->Release(); return fail (filter.isEmpty()
+        ? juce::String ("no default render endpoint found")
+        : ("no render endpoint matched \"" + filter + "\"")); }
+
+    auto releaseAndFail = [&] (juce::String why) -> PanCheckResult {
+        match->Release(); en->Release(); return fail (std::move (why));
+    };
+
+    IAudioClient* ac = nullptr;
+    if (FAILED (match->Activate (__uuidof (IAudioClient), CLSCTX_ALL, nullptr, (void**) &ac)) || ac == nullptr)
+        return releaseAndFail ("could not activate the render endpoint");
+
+    WAVEFORMATEX* mix = nullptr;
+    if (FAILED (ac->GetMixFormat (&mix)) || mix == nullptr) {
+        ac->Release(); return releaseAndFail ("could not read the endpoint mix format");
+    }
+
+    const DWORD rate     = mix->nSamplesPerSec;
+    const WORD  channels = mix->nChannels;
+    const WORD  bits     = mix->wBitsPerSample;
+    bool isFloat = (mix->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
+    if (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix->cbSize >= 22) {
+        auto* wx = reinterpret_cast<WAVEFORMATEXTENSIBLE*> (mix);
+        isFloat = (wx->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+    }
+
+    res.rate         = (double) rate;
+    res.channels     = (int) channels;
+    res.monoDevice   = (channels < 2);
+    res.blockSeconds = 0.10;   // ~100 ms buckets
+
+    const REFERENCE_TIME hnsBuffer = 10000000;   // 1 s
+    HRESULT hr = ac->Initialize (AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+                                 hnsBuffer, 0, mix, nullptr);
+    if (FAILED (hr)) {
+        CoTaskMemFree (mix); ac->Release();
+        return releaseAndFail ("loopback init failed (hr=0x"
+                               + juce::String::toHexString ((int) hr)
+                               + ") - the endpoint may be held in exclusive mode");
+    }
+
+    IAudioCaptureClient* cap = nullptr;
+    if (FAILED (ac->GetService (__uuidof (IAudioCaptureClient), (void**) &cap)) || cap == nullptr) {
+        CoTaskMemFree (mix); ac->Release();
+        return releaseAndFail ("could not obtain the capture client");
+    }
+
+    if (FAILED (ac->Start())) {
+        cap->Release(); CoTaskMemFree (mix); ac->Release();
+        return releaseAndFail ("could not start the loopback capture");
+    }
+
+    // Per-block accumulation: fold each packet's per-channel sum-of-squares into the CURRENT block,
+    // and at every block boundary (blockFrames worth) push the L and R RMS in dBFS. No auto-stop:
+    // run the whole fixed `seconds` so the entire L-then-R sweep timeline (and the gaps) is captured.
+    const long long blockFrames = juce::jmax<long long> (1, (long long) std::llround ((double) rate * res.blockSeconds));
+    ChannelSumSq blockAcc;          // running sum-of-squares for the in-progress block
+    long long    blockSampleCount = 0;   // frames accumulated into the in-progress block
+
+    const juce::int64 endMs = juce::Time::currentTimeMillis()
+                            + (juce::int64) (juce::jmax (0.0, seconds) * 1000.0);
+    while (juce::Time::currentTimeMillis() < endMs) {
+        UINT32 packetFrames = 0;
+        if (FAILED (cap->GetNextPacketSize (&packetFrames))) break;
+        if (packetFrames == 0) { juce::Thread::sleep (5); continue; }
+        BYTE* data = nullptr; UINT32 got = 0; DWORD flags = 0;
+        if (FAILED (cap->GetBuffer (&data, &got, &flags, nullptr, nullptr))) break;
+
+        if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
+            // Loopback silence -> zeros contribute 0 to the sum-of-squares; just advance the frame count.
+            blockSampleCount += (long long) got;
+        } else {
+            ChannelSumSq pkt;
+            accumulatePacketPerChannel (data, got, channels, bits, isFloat, pkt);
+            blockAcc.l += pkt.l; blockAcc.r += pkt.r;
+            blockSampleCount += (long long) got;
+        }
+        cap->ReleaseBuffer (got);
+
+        // Emit completed blocks. A single packet can span more than one block, so loop until the
+        // in-progress block is under blockFrames again. We attribute the whole packet's energy to
+        // the block it completes in (good enough at 100 ms granularity for a pan/mono verdict).
+        while (blockSampleCount >= blockFrames) {
+            res.lRmsDb.push_back (meanSqToDb (blockAcc.l, blockSampleCount));
+            res.rRmsDb.push_back (meanSqToDb (blockAcc.r, blockSampleCount));
+            blockAcc = {}; blockSampleCount = 0;
+        }
+    }
+    ac->Stop();
+
+    // Flush a trailing partial block so the timeline isn't truncated at the end.
+    if (blockSampleCount > 0) {
+        res.lRmsDb.push_back (meanSqToDb (blockAcc.l, blockSampleCount));
+        res.rRmsDb.push_back (meanSqToDb (blockAcc.r, blockSampleCount));
+    }
+
+    cap->Release(); CoTaskMemFree (mix); ac->Release(); match->Release(); en->Release();
+    if (weInited) CoUninitialize();
+
+    if (res.lRmsDb.empty())
+        { res.ok = false; res.reason = "captured no audio frames from the render endpoint"; return res; }
+
+    res.ok = true;
+    return res;
+}
+
 } // namespace eb
 
 #else   // ---- non-Windows: no WASAPI loopback; pure stubs ----
@@ -596,6 +804,13 @@ LoopbackCaptureResult captureLoopback (const juce::String&, double, double,
         res.cancelled = true; res.reason = "cancelled"; return res;
     }
     res.reason = "loopback capture is only available on Windows";
+    return res;
+}
+
+PanCheckResult captureLoopbackPanCheck (const juce::String&, double, double) {
+    PanCheckResult res;
+    res.ok = false;
+    res.reason = "loopback pan-check is only available on Windows";
     return res;
 }
 

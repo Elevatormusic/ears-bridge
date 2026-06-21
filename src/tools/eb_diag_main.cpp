@@ -4,6 +4,9 @@
 //         eb_diag run "<outName>" -> list + 5 s passthrough into the named output
 //         eb_diag loopcap "<renderName>" [seconds] -> WASAPI loopback-capture a render endpoint
 //                 (intercept Dirac's PLAYED sweep; saves loopcap.wav; OK-vs-SILENT verdict)
+//         eb_diag pancheck [deviceSubstring] [seconds] -> PER-CHANNEL loopback of Dirac's render output;
+//                 reports L vs R block-RMS over time + a HARD-PANNED / MONO-SUMMED / INCONCLUSIVE verdict
+//                 (default device = Dirac's render output, default 35 s)
 //         eb_diag selftest        -> HEADLESS reference-monitor grade-flow self-test (no hardware/GUI);
 //                 prints a per-scenario trace + "SELFTEST: N/N passed", writes selftest.log, exit!=0 on FAIL
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -12,6 +15,7 @@
 #include "platform/EndpointFormat.h"     // dogfood the promoted full endpoint-format read API
 #include "audio/ReferenceGradePoller.h"   // selftest: the headless grade-poll decision
 #include "audio/RefMonitor.h"             // selftest: RefMonState
+#include "audio/LoopbackReference.h"      // pancheck: per-channel loopback + readDiracOutputDeviceName()
 #include "diag/DiagnosticLog.h"           // selftest: write the trace through the real log path
 #include <iostream>
 #include <vector>
@@ -341,6 +345,119 @@ static int loopCapture (const juce::String& filter, int seconds) {
     cap->Release(); CoTaskMemFree (mix); ac->Release(); match->Release(); en->Release(); CoUninitialize();
     return (nonSilentPackets > 0 && overallPeak > 0.0005f) ? 0 : 48;
 }
+
+// pancheck [deviceSubstring] [seconds]: PER-CHANNEL WASAPI loopback of Dirac's render output. Unlike
+// loopcap (which downmixes to mono), this keeps L (ch0) and R (ch1) SEPARATE and reports their block-RMS
+// over time, then classifies whether Dirac HARD-PANS the L/R measurement sweeps to separate channels
+// (sequential L-then-R, |L-R| large at each peak) or SUMS them to MONO (|L-R| stays small). That verdict
+// decides whether the reference monitor should carry a per-channel ref_L/ref_R or stay mono. Delegates to
+// eb::captureLoopbackPanCheck (mirrors the loopback setup in LoopbackReference.cpp). Runs the FULL duration
+// (no auto-stop) so the whole L-then-R timeline + gaps are seen.
+static int runPanCheck (const juce::String& deviceSubstring, double seconds) {
+    // Default device: the device Dirac PLAYS the sweep to (from its settings), else a sane fallback.
+    juce::String device = deviceSubstring;
+    if (device.isEmpty()) {
+        device = eb::readDiracOutputDeviceName();
+        if (device.isEmpty()) device = "Realtek Digital Output";   // fallback substring when Dirac's setting is unreadable
+        std::cout << "device (auto): \"" << device << "\"  (no arg given; from Dirac settings / fallback)\n";
+    }
+
+    std::cout << "Capturing PER-CHANNEL loopback for " << juce::String (seconds, 1)
+              << " s ... (RUN A DIRAC SWEEP NOW). No auto-stop; runs the full duration.\n";
+
+    const eb::PanCheckResult r = eb::captureLoopbackPanCheck (device, seconds);
+    if (! r.ok) {
+        std::cout << "pancheck FAILED: " << r.reason << "\n";
+        return 50;
+    }
+
+    const int nBlocks = (int) r.lRmsDb.size();
+    std::cout << "\n==== PANCHECK RESULT ====\n";
+    std::cout << "device      : " << device << "\n";
+    std::cout << "rate        : " << (int) r.rate << " Hz\n";
+    std::cout << "channels    : " << r.channels << (r.monoDevice ? "  (MONO endpoint -- R is a copy of L; verdict can't distinguish pan!)" : "") << "\n";
+    std::cout << "blockSeconds: " << juce::String (r.blockSeconds, 3) << " s   (" << nBlocks << " blocks, "
+              << juce::String (nBlocks * r.blockSeconds, 1) << " s total)\n";
+
+    // ---- The per-block time series (only the ACTIVE region, to stay readable) ----
+    // Print only blocks whose louder channel is above an activity floor; count the quiet ones skipped.
+    constexpr float kActiveFloorDb = -60.0f;   // a block is "active" if max(L,R) > this
+    std::cout << "\n-- per-block L/R energy (active region only; d = L-R) --\n";
+    int quietSkipped = 0, printed = 0;
+    for (int i = 0; i < nBlocks; ++i) {
+        const float L = r.lRmsDb[(size_t) i], R = r.rRmsDb[(size_t) i];
+        if (juce::jmax (L, R) <= kActiveFloorDb) { ++quietSkipped; continue; }
+        const double t = i * r.blockSeconds;
+        const float  d = L - R;
+        char line[160];
+        std::snprintf (line, sizeof (line),
+                       "t=%5.2fs  L=%6.1f dB  R=%6.1f dB  d=%+5.1f",
+                       t, (double) L, (double) R, (double) d);
+        std::cout << line << "\n";
+        ++printed;
+    }
+    if (printed == 0)
+        std::cout << "  (no block exceeded " << (int) kActiveFloorDb << " dB -- silence / nothing played)\n";
+    std::cout << "  (" << quietSkipped << " quiet blocks below " << (int) kActiveFloorDb << " dB skipped)\n";
+
+    // ---- VERDICT ----
+    // Find L's-loudest block and R's-loudest block; compare the cross-channel level there and whether the
+    // two peaks fall at DIFFERENT times. HARD-PANNED <=> at L's peak R is >=6 dB lower AND at R's peak L is
+    // >=6 dB lower AND the two peaks are at different block indices. MONO-SUMMED <=> |L-R| stays < ~3 dB
+    // across the whole ACTIVE region. Otherwise INCONCLUSIVE (with the numbers for a human to judge).
+    constexpr float kPanSeparationDb = 6.0f;   // cross-channel drop at a peak to call it panned
+    constexpr float kMonoTolDb       = 3.0f;   // |L-R| stays under this across the active region -> mono
+
+    int   lPeakIdx = -1, rPeakIdx = -1;
+    float lPeak = -200.0f, rPeak = -200.0f;
+    float maxAbsDiffActive = 0.0f; bool anyActive = false;
+    for (int i = 0; i < nBlocks; ++i) {
+        const float L = r.lRmsDb[(size_t) i], R = r.rRmsDb[(size_t) i];
+        if (L > lPeak) { lPeak = L; lPeakIdx = i; }
+        if (R > rPeak) { rPeak = R; rPeakIdx = i; }
+        if (juce::jmax (L, R) > kActiveFloorDb) { anyActive = true; maxAbsDiffActive = juce::jmax (maxAbsDiffActive, std::abs (L - R)); }
+    }
+
+    std::cout << "\n-- verdict inputs --\n";
+    if (lPeakIdx >= 0) {
+        std::cout << "L loudest   : t=" << juce::String (lPeakIdx * r.blockSeconds, 2) << "s  L="
+                  << juce::String (lPeak, 1) << " dB  R=" << juce::String (r.rRmsDb[(size_t) lPeakIdx], 1)
+                  << " dB  (L-R=" << juce::String (lPeak - r.rRmsDb[(size_t) lPeakIdx], 1) << ")\n";
+        std::cout << "R loudest   : t=" << juce::String (rPeakIdx * r.blockSeconds, 2) << "s  R="
+                  << juce::String (rPeak, 1) << " dB  L=" << juce::String (r.lRmsDb[(size_t) rPeakIdx], 1)
+                  << " dB  (R-L=" << juce::String (rPeak - r.lRmsDb[(size_t) rPeakIdx], 1) << ")\n";
+        std::cout << "max |L-R| over active region: " << juce::String (maxAbsDiffActive, 1) << " dB\n";
+    }
+
+    const float dropAtLpeak = (lPeakIdx >= 0) ? (lPeak - r.rRmsDb[(size_t) lPeakIdx]) : 0.0f;  // how much lower R is when L peaks
+    const float dropAtRpeak = (rPeakIdx >= 0) ? (rPeak - r.lRmsDb[(size_t) rPeakIdx]) : 0.0f;  // how much lower L is when R peaks
+    const bool  differentTimes = (lPeakIdx != rPeakIdx);
+    const bool  hardPanned = anyActive && ! r.monoDevice
+                          && dropAtLpeak >= kPanSeparationDb
+                          && dropAtRpeak >= kPanSeparationDb
+                          && differentTimes;
+    const bool  monoSummed = anyActive && (r.monoDevice || maxAbsDiffActive < kMonoTolDb);
+
+    std::cout << "\nVERDICT: ";
+    if (! anyActive)
+        std::cout << "NO SIGNAL (all blocks below " << (int) kActiveFloorDb << " dB -- nothing played; re-run during a sweep)\n";
+    else if (hardPanned)
+        std::cout << "HARD-PANNED L/R (sequential) -- L peaks at t="
+                  << juce::String (lPeakIdx * r.blockSeconds, 2) << "s (R " << juce::String (dropAtLpeak, 1)
+                  << " dB lower), R peaks at t=" << juce::String (rPeakIdx * r.blockSeconds, 2)
+                  << "s (L " << juce::String (dropAtRpeak, 1) << " dB lower). A per-channel ref_L/ref_R is justified.\n";
+    else if (monoSummed)
+        std::cout << "MONO-SUMMED (both channels carry the sweep) -- |L-R| stays "
+                  << juce::String (maxAbsDiffActive, 1) << " dB (< " << (int) kMonoTolDb
+                  << " dB) across the active region. A single mono reference suffices.\n";
+    else
+        std::cout << "INCONCLUSIVE -- drop@Lpeak=" << juce::String (dropAtLpeak, 1)
+                  << " dB, drop@Rpeak=" << juce::String (dropAtRpeak, 1)
+                  << " dB, peaks " << (differentTimes ? "at different times" : "at the SAME time")
+                  << ", max|L-R|=" << juce::String (maxAbsDiffActive, 1) << " dB. Judge from the series above.\n";
+
+    return 0;
+}
 #endif
 
 // =====================================================================================================
@@ -612,6 +729,13 @@ int main (int argc, char** argv) {
     if (argc >= 3 && juce::String (argv[1]) == "loopcap") {
         const int secs = (argc >= 4) ? juce::jlimit (1, 600, juce::String (argv[3]).getIntValue()) : 12;
         return loopCapture (juce::String (argv[2]), secs);
+    }
+    // pancheck [deviceSubstring] [seconds]: PER-CHANNEL loopback to detect Dirac L/R panning. Both args
+    // optional (default device = Dirac's render output, default 35 s). Raw WASAPI, so run BEFORE the GUI init.
+    if (argc >= 2 && juce::String (argv[1]) == "pancheck") {
+        const juce::String dev = (argc >= 3) ? juce::String (argv[2]) : juce::String();
+        const double secs = (argc >= 4) ? juce::jlimit (1.0, 600.0, juce::String (argv[3]).getDoubleValue()) : 35.0;
+        return runPanCheck (dev, secs);
     }
    #endif
 

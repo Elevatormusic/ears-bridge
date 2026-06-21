@@ -196,4 +196,37 @@ LoopbackCaptureResult captureLoopback (const juce::String& renderDeviceNameSubst
                                        double expectedRate = 48000.0,
                                        const std::atomic<bool>* cancel = nullptr);
 
+// ---- Per-channel pan-check capture (Windows-only; stub elsewhere) ---------
+// DIAGNOSTIC ONLY (eb_diag pancheck). captureLoopback downmixes Dirac's render to MONO,
+// which is correct for the single-source reference but blind to L-vs-R structure. To decide
+// the per-EARCUP reference-model design we need to know empirically whether Dirac plays the
+// L measurement sweep on the LEFT channel and the R sweep on the RIGHT (HARD-PANNED, so a
+// per-channel ref_L/ref_R is meaningful) or sums both sweeps to MONO across both channels.
+//
+// This captures a FIXED `seconds` with NO end-of-sweep auto-stop (we need the whole timeline
+// including the L-then-R sequence and the gaps) and returns, per ~100 ms block, the RMS in
+// dBFS of channel 0 (L) and channel 1 (R) SEPARATELY — never averaged. The caller reads the
+// L/R energy-over-time to classify the panning. Mirrors captureLoopback's WASAPI setup exactly
+// (same device-find, IMMDevice/IAudioClient init, mix-format read, AUDCLNT_STREAMFLAGS_LOOPBACK
+// loopback flag, packet loop). Must run off the audio callback. Windows-only; a no-op stub on
+// every other platform.
+struct PanCheckResult {
+    bool               ok = false;
+    juce::String       reason;            // empty iff ok
+    double             rate = 0.0;        // the endpoint mix-format rate actually captured
+    int                channels = 0;      // the endpoint mix-format channel count
+    double             blockSeconds = 0.0;// the per-block bucket size used (e.g. 0.10 s)
+    std::vector<float> lRmsDb, rRmsDb;    // per-block RMS in dBFS for ch0 (L) and ch1 (R)
+                                          // (if channels < 2, R is filled with L's values)
+    bool               monoDevice = false;// true iff channels < 2 (R duplicated from L)
+};
+
+// Capture `seconds` of per-channel block-RMS from the render endpoint matching
+// `renderDeviceNameSubstring` (empty -> system default render endpoint, like captureLoopback).
+// NO auto-stop; runs the whole fixed duration. expectedRate is informational here (we do NOT
+// reject on a rate mismatch — the diagnostic wants whatever Dirac is actually playing).
+PanCheckResult captureLoopbackPanCheck (const juce::String& renderDeviceNameSubstring,
+                                        double seconds,
+                                        double expectedRate = 48000.0);
+
 } // namespace eb
