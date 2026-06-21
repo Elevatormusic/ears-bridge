@@ -1,6 +1,7 @@
 #include "audio/ReferenceGradePoller.h"
 
 #include <algorithm>   // std::min
+#include <cmath>       // std::isfinite
 
 namespace eb {
 
@@ -8,6 +9,18 @@ void ReferenceGradePoller::reset() {
     lastPollMatched_   = false;
     gradedThisSession_ = false;
 }
+
+namespace {
+// A window that carries any non-finite (NaN/Inf) sample must NOT match: those propagate into the FFT and the
+// match-gate returns coherence=1.0 when the off-lobe RMS collapses to zero (Deconvolver.cpp restRms==0 branch),
+// so a degenerate window could FALSE-match. The grade ring is fed the RAW active-ear capture (pre-sanitization),
+// so this is the poller's own guard. Cheap linear scan, off the audio thread.
+bool windowIsFinite (const float* window, int n) noexcept {
+    for (int i = 0; i < n; ++i)
+        if (! std::isfinite (window[i])) return false;
+    return true;
+}
+} // namespace
 
 GradePollResult ReferenceGradePoller::decide (const float* window, int winLen,
                                               const float* reference, int refLen) {
@@ -18,11 +31,32 @@ GradePollResult ReferenceGradePoller::decide (const float* window, int winLen,
     if (window == nullptr || reference == nullptr || winLen <= 0 || refLen <= 0)
         return r;
 
-    // 1) The DETECTOR: cross-correlate the window against the learned reference. The coherence is published
-    //    every poll (the GUI's engine.setLastMatchCoherence) so the diagnostic log + RefMon-change line see
-    //    it — the match-gate ran here, FIRST, before any quality. There is NO absolute level gate.
-    const int matchLen = std::min (refLen, winLen);
-    const MatchVerdict m = referenceMatches (reference, window, matchLen);
+    // Fix 3 (safety): a NaN/Inf-bearing window must NOT match. referenceMatches can read coherence=1.0 from a
+    // degenerate window (restRms==0), so reject non-finite content up front -> not matched, no grade, no crash.
+    if (! windowIsFinite (window, winLen)) {
+        r.matched = false;
+        r.coherence = 0.0f;
+        gradedThisSession_ = false;   // a non-match re-arms the session (same as a dropped match below)
+        lastPollMatched_   = false;
+        return r;
+    }
+
+    // 1) The DETECTOR. Fix 1 (align): the ring snapshot is OLDEST->NEWEST, so a just-finished sweep sits at the
+    //    END of the long window — OUTSIDE the reference-length PREFIX the old gate read (it matched window[0..],
+    //    coherence ~= 0 for a late sweep -> never graded, intermittently). Instead, FIRST cross-correlate the
+    //    reference against the WHOLE window to LOCATE the sweep (exactly as gradeMeasurementWindow does), then run
+    //    referenceMatches over the ALIGNED reference-length segment. The gate and the grader now agree on where
+    //    the sweep is. The located offset is carried in r.alignOffset so the grade reuses it (no second xcorr).
+    //    The coherence is published every poll (engine.setLastMatchCoherence) so the diagnostic log sees it.
+    //    There is NO absolute level gate.
+    int matchStart = 0, matchLen = std::min (refLen, winLen);
+    if (winLen >= refLen) {
+        const AlignResult a = crossCorrelateAlign (reference, refLen, window, winLen);
+        matchStart = clampSweepStart (a.delaySamples, refLen, winLen);
+        matchLen   = std::min (refLen, winLen - matchStart);
+    }
+    r.alignOffset = matchStart;
+    const MatchVerdict m = referenceMatches (reference, window + matchStart, matchLen);
     r.coherence = m.coherence;
     r.matched   = m.matched;
 
@@ -40,6 +74,20 @@ GradePollResult ReferenceGradePoller::decide (const float* window, int winLen,
     return r;
 }
 
+namespace {
+// Pack a MeasurementGrade into the poll-result grade fields (shared by both gradeWindow overloads).
+GradePollResult packGrade (const MeasurementGrade& g) {
+    GradePollResult r;
+    r.didGrade   = true;
+    r.state      = g.state;
+    r.irSnrDb    = g.quality.irSnrDb;
+    r.thdPercent = g.quality.thdPercent;
+    r.mismatch   = (g.state == RefMonState::ReferenceStale);
+    r.lowQuality = g.quality.lowQuality;
+    return r;
+}
+} // namespace
+
 GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winLen,
                                                    const float* reference, int refLen, double rate) {
     GradePollResult r;
@@ -49,15 +97,21 @@ GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winL
     // The pure grade: gradeMeasurementWindow locates the sweep inside the long window (align), re-runs the
     // match-gate FIRST on the aligned segment, then quality — so a non-sweep window returns ReferenceStale
     // (never a clean grade). Safe to call off-thread; touches no debounce state. This is the verdict the GUI
-    // publishes via publishReferenceGrade.
-    const MeasurementGrade g = gradeMeasurementWindow (reference, refLen, window, winLen, rate);
-    r.didGrade   = true;
-    r.state      = g.state;
-    r.irSnrDb    = g.quality.irSnrDb;
-    r.thdPercent = g.quality.thdPercent;
-    r.mismatch   = (g.state == RefMonState::ReferenceStale);
-    r.lowQuality = g.quality.lowQuality;
-    return r;
+    // publishes via publishReferenceGrade. (Used by the synchronous poll() and callers that did not run decide().)
+    return packGrade (gradeMeasurementWindow (reference, refLen, window, winLen, rate));
+}
+
+GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winLen,
+                                                   const float* reference, int refLen, double rate,
+                                                   int alignOffset) {
+    GradePollResult r;
+    if (window == nullptr || reference == nullptr || winLen <= 0 || refLen <= 0)
+        return r;
+    // Grade at the offset decide() already located via cross-correlation: the gate matched the sweep THERE, so
+    // the grade must quality-check the SAME segment. gradeMeasurementWindowAt re-runs the match-gate FIRST on
+    // that segment (a non-sweep -> ReferenceStale), so this is just as honest as the self-aligning overload but
+    // avoids a second (expensive) cross-correlation. The GUI worker path uses this.
+    return packGrade (gradeMeasurementWindowAt (reference, refLen, window, winLen, alignOffset, rate));
 }
 
 GradePollResult ReferenceGradePoller::poll (const float* window, int winLen,
@@ -67,10 +121,13 @@ GradePollResult ReferenceGradePoller::poll (const float* window, int winLen,
     if (! r.didGrade)
         return r;   // not the grading poll: coherence/matched are set, grade fields stay default
 
-    // Carry the coherence/matched forward onto the graded result so a single poll() return is self-describing.
-    GradePollResult g = gradeWindow (window, winLen, reference, refLen, rate);
-    g.coherence = r.coherence;
-    g.matched   = r.matched;
+    // Grade at the SAME offset decide() located (Fix 1): reuse r.alignOffset so the gate and the grade agree on
+    // where the sweep is, and the expensive cross-correlation runs once, not twice. Carry coherence/matched
+    // forward onto the graded result so a single poll() return is self-describing.
+    GradePollResult g = gradeWindow (window, winLen, reference, refLen, rate, r.alignOffset);
+    g.coherence   = r.coherence;
+    g.matched     = r.matched;
+    g.alignOffset = r.alignOffset;
     return g;
 }
 

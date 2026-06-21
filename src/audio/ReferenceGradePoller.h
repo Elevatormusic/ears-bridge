@@ -26,6 +26,9 @@ struct GradePollResult {
     float coherence = 0.0f;                        // cross-correlation peak prominence published this poll
     bool  matched   = false;                       // the match-gate verdict for THIS poll's window
     bool  didGrade  = false;                        // a grade was produced THIS poll (the stable-match edge)
+    int   alignOffset = 0;                          // where decide() located the sweep inside the window (>=0,
+                                                    // clamped to keep a reference-length segment in range); the
+                                                    // SAME offset the grade must use so the gate and grader agree
 
     RefMonState state = RefMonState::NotLearned;    // the published state — valid when didGrade
     float irSnrDb     = 0.0f;
@@ -55,13 +58,25 @@ public:
     // match-gate publishes coherence/matched; didGrade tells the caller a grade SHOULD run now (the stable-match
     // edge). The grade fields are left default — call gradeWindow() to fill them, optionally off-thread. The GUI
     // uses this so the cross-correlation match runs on the message thread but the deconvolve+grade runs on a worker.
+    //
+    // ALIGNMENT (the honesty fix): the match-gate is NOT run over the window prefix. The ring snapshot is
+    // oldest->newest, so a just-finished sweep sits at the END of the long window, OUTSIDE the reference-length
+    // prefix. decide() FIRST cross-correlates the reference against the whole window to LOCATE the sweep
+    // (crossCorrelateAlign), then runs referenceMatches on the ALIGNED reference-length segment — exactly where
+    // gradeMeasurementWindow grades. The located offset is published in result.alignOffset so the subsequent
+    // grade reuses it (no second cross-correlation, and the gate + grader agree on where the sweep is).
     GradePollResult decide (const float* window, int winLen,
                             const float* reference, int refLen);
 
     // The pure grade for a window decide() said to grade (no debounce state touched). Safe to call off-thread.
     // Returns the same state/quality fields poll() would have produced. Static: it is just gradeMeasurementWindow.
+    // The two-arg `alignOffset` overload reuses the offset decide() already located (so the sweep is graded at
+    // the SAME place the gate matched it, and the expensive cross-correlation runs once, not twice); the other
+    // overload locates the sweep itself (for callers that did not run decide(), e.g. the synchronous poll()).
     static GradePollResult gradeWindow (const float* window, int winLen,
                                         const float* reference, int refLen, double rate);
+    static GradePollResult gradeWindow (const float* window, int winLen,
+                                        const float* reference, int refLen, double rate, int alignOffset);
 
     // Clear the debounce state (call on Start/Stop — a fresh run starts un-matched + un-graded, so two
     // consecutive matched polls are again required before the first grade).

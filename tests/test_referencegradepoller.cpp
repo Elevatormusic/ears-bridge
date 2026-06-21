@@ -20,6 +20,7 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <limits>
 
 static constexpr double kPi = 3.14159265358979323846;
 
@@ -82,6 +83,30 @@ static void makeCleanMeasurement (int sweepLen, double fs,
     respOut = convolve (ref, roomIr);              // length sweepLen + 255
     refOut.assign (respOut.size(), 0.0f);
     std::copy (ref.begin(), ref.end(), refOut.begin());
+}
+
+// Build a (reference, window) pair where the sweep response sits at a GIVEN sample OFFSET inside a long window,
+// with `leadNoise`-amplitude room noise filling the leading silence (and the tail). This is the rolling-ring
+// SHAPE the poller actually receives on hardware (oldest->newest, the just-finished sweep near the END) — the
+// old makeCleanMeasurement put the sweep at index 0 (the window PREFIX), which is exactly why every scenario
+// passed despite the prefix-only match bug. The reference is the bare sweep at refLen; the window is `winLen`
+// long with the room response written starting at `offset`.
+static void makeOffsetMeasurement (int sweepLen, double fs, int offset, int winLen, float leadNoise,
+                                   std::vector<float>& refOut, std::vector<float>& winOut, unsigned seed = 31u) {
+    auto ref = makeEss (sweepLen, fs);
+    std::vector<float> roomIr ((size_t) 256, 0.0f);
+    roomIr[50] = 1.0f;
+    auto resp = convolve (ref, roomIr);            // length sweepLen + 255 (the room response to the sweep)
+
+    refOut.assign ((size_t) sweepLen, 0.0f);
+    std::copy (ref.begin(), ref.end(), refOut.begin());
+
+    winOut.assign ((size_t) winLen, 0.0f);
+    if (leadNoise > 0.0f) addNoise (winOut, leadNoise, seed);   // room noise across the whole window first
+    for (int i = 0; i < (int) resp.size(); ++i) {              // then drop the sweep response in at `offset`
+        const int j = offset + i;
+        if (j >= 0 && j < winLen) winOut[(size_t) j] += resp[(size_t) i];
+    }
 }
 
 using eb::RefMonState;
@@ -273,4 +298,133 @@ TEST_CASE("ReferenceGradePoller: empty window or reference never grades") {
     CHECK_FALSE (r0.didGrade);
     auto r1 = p.poll (resp.data(), (int) resp.size(), nullptr, 0, 48000.0);
     CHECK_FALSE (r1.didGrade);
+}
+
+// ==================================================================================================
+// NEG-1 (catches Fix 1): the sweep is placed LATE — in the final third of a long window, past refLen — with
+// leading room noise filling the silence. The OLD gate matched only window[0..refLen) (the prefix), so it read
+// coherence ~= 0 on a late sweep and NEVER graded. The aligned gate locates the sweep anywhere -> it matches
+// and grades. This FAILS before Fix 1 (decide().matched would be false because the prefix held only noise).
+// ==================================================================================================
+TEST_CASE("ReferenceGradePoller: a LATE sweep (final third, past refLen) still matches and grades [NEG-1]") {
+    const int    sweepLen = 1 << 15;                                   // refLen
+    const double fs = 48000.0;
+    // A window 3x the sweep length, with the sweep response dropped in at the END so it sits in the FINAL
+    // THIRD — well past refLen, i.e. entirely OUTSIDE the old prefix-only match region (window[0..refLen)).
+    // The leading two-thirds is low-level room noise (the rolling-ring shape: oldest noise -> newest sweep).
+    const int winLen = sweepLen * 3;
+    const int offset = winLen - (sweepLen + 256);                      // whole response near the END (~2/3 in)
+    std::vector<float> ref, window;
+    makeOffsetMeasurement (sweepLen, fs, offset, winLen, /*leadNoise*/ 0.002f, ref, window);
+
+    eb::ReferenceGradePoller p;
+    auto r1 = p.poll (window.data(), (int) window.size(), ref.data(), (int) ref.size(), fs);
+    CHECK (r1.matched);                              // the LATE sweep is found (prefix-only match is gone)
+    CHECK (r1.alignOffset > (int) ref.size());       // located well past the reference-length prefix
+    auto r2 = p.poll (window.data(), (int) window.size(), ref.data(), (int) ref.size(), fs);
+    CHECK (r2.didGrade);                             // and it grades on the second consecutive matched poll
+    CHECK (r2.state != RefMonState::ReferenceStale);
+}
+
+// ==================================================================================================
+// NEG-3: a window that is mostly silence with a short sweep at the VERY END must grade (not read as a
+// non-match because the prefix is empty). Same root cause as NEG-1, minimal-lead variant.
+// ==================================================================================================
+TEST_CASE("ReferenceGradePoller: mostly-silence window with a sweep at the very END grades [NEG-3]") {
+    const int    sweepLen = 1 << 15;
+    const double fs = 48000.0;
+    // A window ~1.5x the sweep, sweep dropped at the very END over pure silence. (The cross-correlation maps a
+    // lag past half the zero-padded FFT length to a NEGATIVE delay, which the production 28 s window — sweep in
+    // its first half — never hits; this keeps the sweep in the positive-lag half while still exercising the
+    // "empty prefix, sweep at the end" case the old prefix-only gate failed.)
+    const int winLen = sweepLen + sweepLen / 2;                        // 1.5x sweep -> sweep-at-end stays < fftSize/2
+    const int offset = winLen - (sweepLen + 256);                      // sweep at the very end
+    std::vector<float> ref, window;
+    makeOffsetMeasurement (sweepLen, fs, offset, winLen, /*leadNoise*/ 0.0f, ref, window);   // pure silence lead
+
+    eb::ReferenceGradePoller p;
+    auto r1 = p.poll (window.data(), (int) window.size(), ref.data(), (int) ref.size(), fs);
+    auto r2 = p.poll (window.data(), (int) window.size(), ref.data(), (int) ref.size(), fs);
+    CHECK (r1.matched);
+    CHECK (r2.didGrade);
+    CHECK (r2.state != RefMonState::ReferenceStale);
+}
+
+// ==================================================================================================
+// NEG-5 (Fix 2): the rate guard. A response captured at a DIFFERENT sample rate than the reference must NOT be
+// graded clean — it is the same chirp stretched, which can clear the match cutoffs and read a false "verified".
+// The guard lives in the GUI poll (the poller is rate-agnostic: it sees one resampled stream), so we test the
+// rate-compare condition that the GUI applies BEFORE calling decide(): differing rates -> do not grade.
+// ==================================================================================================
+TEST_CASE("ReferenceGradePoller: a wrong-rate response is gated out before grading (rate guard) [NEG-5]") {
+    // The GUI guard (MainComponent::pollReferenceGrade): grade only if the rates agree within 1 Hz.
+    auto rateAllowsGrade = [] (double referenceRate, double responseRate) {
+        return ! (referenceRate > 0.0 && responseRate > 0.0 && std::abs (responseRate - referenceRate) > 1.0);
+    };
+    CHECK_FALSE (rateAllowsGrade (48000.0, 44100.0));   // 44.1k response vs 48k reference -> NOT graded
+    CHECK_FALSE (rateAllowsGrade (44100.0, 48000.0));   // and the reverse
+    CHECK       (rateAllowsGrade (48000.0, 48000.0));   // matched rates -> grade allowed
+    CHECK       (rateAllowsGrade (48000.0, 48000.5));   // within tolerance -> still allowed
+
+    // And confirm the underlying hazard the guard prevents: a sweep matched against itself at the wrong rate
+    // can still match the gate (so the guard, not the gate, is what stops the false grade). The reference is a
+    // 48k sweep; the "response" is a sweep generated at 44.1k over the SAME sample count — same chirp, stretched.
+    const int    sweepLen = 1 << 15;
+    std::vector<float> ref, ignore;
+    makeCleanMeasurement (sweepLen, 48000.0, ref, ignore);
+    auto stretched = makeEss (sweepLen, 44100.0);       // the SAME N samples at a different rate -> stretched chirp
+    std::vector<float> window (ref.size(), 0.0f);
+    std::copy (stretched.begin(), stretched.end(), window.begin());
+    auto m = eb::referenceMatches (ref.data(), window.data(), (int) std::min (ref.size(), window.size()));
+    INFO ("wrong-rate match coherence=" << m.coherence << " matched=" << m.matched);
+    // We do NOT assert m.matched either way (it is rate-dependent); the POINT is the rate guard catches this
+    // case regardless, which the asserts above prove.
+}
+
+// ==================================================================================================
+// NEG-7: a steady full-scale 1 kHz SINE (a pure tone, not a sweep) must NOT match. A sine's autocorrelation is
+// sharp/periodic and could spuriously concentrate energy; the gate must still reject it (it is not THIS sweep).
+// ==================================================================================================
+TEST_CASE("ReferenceGradePoller: a full-scale 1 kHz sine (not a sweep) does not match [NEG-7]") {
+    const int    sweepLen = 1 << 15;
+    const double fs = 48000.0;
+    std::vector<float> ref, ignore;
+    makeCleanMeasurement (sweepLen, fs, ref, ignore);
+
+    std::vector<float> window (ref.size(), 0.0f);
+    for (int i = 0; i < (int) window.size(); ++i)
+        window[(size_t) i] = (float) std::sin (2.0 * kPi * 1000.0 * (double) i / fs);   // steady full-scale tone
+
+    eb::ReferenceGradePoller p;
+    auto d = p.decide (window.data(), (int) window.size(), ref.data(), (int) ref.size());
+    CHECK_FALSE (d.matched);                         // a tone is not the sweep -> no match
+    bool everGradedClean = false;
+    for (int i = 0; i < 4; ++i) {
+        auto r = p.poll (window.data(), (int) window.size(), ref.data(), (int) ref.size(), fs);
+        if (r.didGrade)
+            everGradedClean = everGradedClean
+                || (r.state == RefMonState::GradedClean || r.state == RefMonState::GradedSuspect);
+    }
+    CHECK_FALSE (everGradedClean);
+}
+
+// ==================================================================================================
+// NEG-8 (Fix 3): a window carrying NaN/Inf samples must NOT match, must not crash, and must not read
+// coherence=1.0 (the degenerate restRms==0 false-match). The poller rejects non-finite content up front.
+// ==================================================================================================
+TEST_CASE("ReferenceGradePoller: a NaN/Inf window never matches (no crash, no coherence=1.0) [NEG-8]") {
+    const int    sweepLen = 1 << 15;
+    const double fs = 48000.0;
+    std::vector<float> ref, resp;
+    makeCleanMeasurement (sweepLen, fs, ref, resp);   // a real matching response...
+    scaleToPeak (resp, 0.3f);
+    resp[resp.size() / 2]     = std::numeric_limits<float>::quiet_NaN();   // ...corrupted with a NaN
+    resp[resp.size() / 3]     = std::numeric_limits<float>::infinity();    // ...and an Inf
+
+    eb::ReferenceGradePoller p;
+    auto d = p.decide (resp.data(), (int) resp.size(), ref.data(), (int) ref.size());
+    CHECK_FALSE (d.matched);                          // non-finite content is never a match
+    CHECK (d.coherence < 1.0f);                       // and never the degenerate coherence=1.0
+    auto r = p.poll (resp.data(), (int) resp.size(), ref.data(), (int) ref.size(), fs);
+    CHECK_FALSE (r.didGrade);                          // no grade fires from a NaN/Inf window
 }

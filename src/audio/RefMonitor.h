@@ -168,6 +168,41 @@ struct MeasurementGrade {
 //   window / windowLen      : the rolling-ring snapshot (>= refLen; leading silence + the sweep inside).
 // On windowLen < refLen we fall back to grading the window as-is (short capture); otherwise we align.
 // PURE + OFFLINE (a cross-correlation FFT pass + gradeMeasurement's two passes). Run OFF the audio thread.
+// Clamp a raw cross-correlation lag to the start index of the reference-length segment inside the window.
+// A POSITIVE lag means the sweep starts `lag` samples into the window (the leading silence); negatives and
+// over-runs are clamped so the extracted segment stays in range. SHARED by gradeMeasurementWindow and the
+// poller's decide() so the match-gate and the grade key off the SAME offset (the honesty contract).
+[[nodiscard]] inline int clampSweepStart (int rawLag, int refLen, int windowLen) noexcept {
+    int start = rawLag;
+    if (start < 0)                  start = 0;
+    if (start > windowLen - refLen) start = windowLen - refLen;   // keep refLen samples in range
+    if (start < 0)                  start = 0;
+    return start;
+}
+
+// Grade a window at a PRECOMPUTED sweep offset (the start returned by clampSweepStart). Lets a caller that
+// already located the sweep (the poller's decide()) reuse that offset instead of cross-correlating a second
+// time — so the gate and the grade agree on where the sweep is. `start` must already be clamped in range.
+[[nodiscard]] inline MeasurementGrade gradeMeasurementWindowAt (const float* reference, int refLen,
+                                                               const float* window, int windowLen, int start,
+                                                               double sampleRate,
+                                                               double f1 = 20.0, double f2 = 20000.0,
+                                                               float minIrSnrDb = kMinIrSnrDb,
+                                                               float maxThdPct  = kMaxThdPct) {
+    MeasurementGrade g;
+    if (reference == nullptr || window == nullptr || refLen <= 0 || windowLen <= 0) {
+        g.state = RefMonState::ReferenceStale;   // no data to trust -> never green
+        return g;
+    }
+    if (windowLen < refLen)
+        return gradeMeasurement (reference, window, windowLen, sampleRate, f1, f2, minIrSnrDb, maxThdPct);
+    if (start < 0)                  start = 0;
+    if (start > windowLen - refLen) start = windowLen - refLen;
+    if (start < 0)                  start = 0;
+    const int n = (windowLen - start < refLen) ? (windowLen - start) : refLen;
+    return gradeMeasurement (reference, window + start, n, sampleRate, f1, f2, minIrSnrDb, maxThdPct);
+}
+
 [[nodiscard]] inline MeasurementGrade gradeMeasurementWindow (const float* reference, int refLen,
                                                              const float* window, int windowLen,
                                                              double sampleRate,
@@ -184,15 +219,11 @@ struct MeasurementGrade {
         return gradeMeasurement (reference, window, windowLen, sampleRate, f1, f2, minIrSnrDb, maxThdPct);
 
     // Locate the sweep inside the long window: crossCorrelateAlign(ref, window) returns the lag of the
-    // window relative to the reference. A POSITIVE delay means the sweep starts `delay` samples into the
-    // window (the leading silence). Clamp so the extracted segment stays inside the window.
+    // window relative to the reference, which clampSweepStart turns into the in-range segment start.
     const AlignResult a = crossCorrelateAlign (reference, refLen, window, windowLen);
-    int start = a.delaySamples;
-    if (start < 0)                       start = 0;
-    if (start > windowLen - refLen)      start = windowLen - refLen;   // keep refLen samples in range
-    if (start < 0)                       start = 0;
-    const int n = (windowLen - start < refLen) ? (windowLen - start) : refLen;
-    return gradeMeasurement (reference, window + start, n, sampleRate, f1, f2, minIrSnrDb, maxThdPct);
+    const int start = clampSweepStart (a.delaySamples, refLen, windowLen);
+    return gradeMeasurementWindowAt (reference, refLen, window, windowLen, start,
+                                     sampleRate, f1, f2, minIrSnrDb, maxThdPct);
 }
 
 } // namespace eb

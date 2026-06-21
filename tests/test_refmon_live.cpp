@@ -34,7 +34,8 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "audio/AudioEngine.h"
 #include "audio/RefMonitor.h"
-#include "audio/Deconvolver.h"      // eb::referenceMatches (the match-poll detector)
+#include "audio/Deconvolver.h"            // eb::referenceMatches (the match-poll detector)
+#include "audio/ReferenceGradePoller.h"   // eb::ReferenceGradePoller (the ALIGNED match + grade decision)
 #include "gui/IrQualityStatus.h"   // eb::kIrThresholdsRatified (the Fix-2 presentation gate)
 #include <vector>
 #include <cmath>
@@ -215,22 +216,33 @@ static eb::MeasurementGrade matchPollAndPublish (eb::AudioEngine& e, const std::
     if (got <= 0) return g;
     window.resize ((size_t) got);
 
-    // The DETECTOR: cross-correlate the window against the learned reference. Publish the coherence
-    // (so the diagnostic log sees it), exactly as the GUI poll does via setLastMatchCoherence.
-    const auto m = eb::referenceMatches (reference.data(), window.data(),
-                                         std::min ((int) reference.size(), (int) window.size()));
-    e.setLastMatchCoherence (m.coherence);
+    // The DETECTOR, routed through the ALIGNED poller (Fix 1): decide() cross-correlates to LOCATE the sweep
+    // anywhere in the snapshot (the ring is oldest->newest, so the just-finished sweep sits at the END, OUTSIDE
+    // the old prefix the inline referenceMatches read), then runs the match-gate on the aligned segment. Publish
+    // the coherence exactly as the GUI poll does. The PollDebounce struct here carries the same two-poll state the
+    // poller holds internally, so we drive decide() and replicate its debounce against this struct.
+    eb::ReferenceGradePoller poller;
+    const auto d = poller.decide (window.data(), (int) window.size(),
+                                  reference.data(), (int) reference.size());
+    e.setLastMatchCoherence (d.coherence);
 
     // STABLE-MATCH debounce (mirrors pollReferenceGrade): the match-gate runs FIRST. A dropped match re-arms
     // the session; a grade fires once when the match holds across TWO consecutive polls.
-    if (! m.matched) db.gradedThisSession = false;
-    const bool stableMatch = m.matched && db.lastPollMatched;
-    db.lastPollMatched = m.matched;
+    if (! d.matched) db.gradedThisSession = false;
+    const bool stableMatch = d.matched && db.lastPollMatched;
+    db.lastPollMatched = d.matched;
     if (! stableMatch || db.gradedThisSession) return g;   // gate FIRST; stable across two polls; not re-graded
     db.gradedThisSession = true;
 
-    g = eb::gradeMeasurementWindow (reference.data(), (int) reference.size(),
-                                    window.data(), (int) window.size(), rate);
+    // Grade at the SAME offset decide() located (the gate and the grade agree on where the sweep is; no 2nd xcorr).
+    const auto gp = eb::ReferenceGradePoller::gradeWindow (window.data(), (int) window.size(),
+                                                           reference.data(), (int) reference.size(), rate,
+                                                           d.alignOffset);
+    g.state = gp.state;
+    g.quality.irSnrDb   = gp.irSnrDb;
+    g.quality.thdPercent = gp.thdPercent;
+    g.quality.lowQuality = gp.lowQuality;
+    g.match.matched = (gp.state == eb::RefMonState::GradedClean || gp.state == eb::RefMonState::GradedSuspect);
     e.publishReferenceGrade ((int) g.state, g.quality.irSnrDb, g.quality.thdPercent,
                              g.state == eb::RefMonState::ReferenceStale, g.quality.lowQuality);
     gradedOut = true;
@@ -656,6 +668,77 @@ TEST_CASE("Fix 2: a mismatch STILL produces the re-learn gate verdict (the gate 
     auto g = eb::gradeMeasurement (refA.data(), resp.data(), n, fs);
     CHECK (g.state == eb::RefMonState::ReferenceStale);
     CHECK (eb::irQualityNote (g.quality).startsWith ("Reference doesn't match"));
+}
+
+// ==================================================================================================
+// NEG-2 (Fix 1, engine-level wrap): drive a matching sweep WRITTEN ACROSS THE RING WRITE-HEAD (wrapped),
+// then assert the published oldest->newest snapshot + the aligned poll still grade it. Before Fix 1 the gate
+// read only the snapshot PREFIX; a wrapped sweep ends up near the snapshot's END (oldest->newest order), so
+// the prefix-only gate would read coherence ~= 0 and never grade. The aligned poll locates it anywhere.
+// ==================================================================================================
+TEST_CASE("Live grade [NEG-2]: a sweep written ACROSS the ring wrap still snapshots + grades (aligned)") {
+    eb::AudioEngine e;
+    const int    N  = 512;
+    const int    sweepLen = 1 << 15;     // 32768
+    const double fs = 48000.0;
+    e.prepareForTest (fs, N);
+
+    std::vector<float> ref, resp;
+    makeCleanMeasurement (sweepLen, fs, ref, resp);
+    scaleToPeak (resp, 0.3f);
+
+    e.setReferenceLoaded (true);
+
+    std::vector<float> mono ((size_t) N, 0.0f), silence ((size_t) N, 0.0f);
+    std::vector<float> scratch ((size_t) std::lround (fs * 28.0) + N, 0.0f);
+
+    // 1) Advance the ring write-head to NEAR the end so the next (response) write WRAPS. The ring holds
+    //    kGradingSeconds (28 s) = 1,344,000 samples at 48k; feed silence to within ~half a sweep of the end.
+    const long long ringLen = (long long) std::lround (fs * 28.0);
+    const long long respLen  = (long long) resp.size();
+    const long long target   = ringLen - respLen / 2;      // head here -> the response straddles the wrap
+    long long fed = 0;
+    while (fed < target) {
+        const int cnt = (int) std::min ((long long) N, target - fed);
+        e.processCaptureBlockForTest (silence.data(), silence.data(), mono.data(), cnt);
+        if (e.gradingResponseReady()) e.copyGradingResponse (scratch.data(), (int) scratch.size());  // drain
+        fed += cnt;
+    }
+
+    // 2) Feed the response: it crosses the ring end and wraps to the front.
+    const int total = (int) resp.size();
+    for (int off = 0; off < total; off += N) {
+        const int cnt = std::min (N, total - off);
+        std::vector<float> blk ((size_t) N, 0.0f);
+        std::copy (resp.begin() + off, resp.begin() + off + cnt, blk.begin());
+        e.processCaptureBlockForTest (blk.data(), silence.data(), mono.data(), cnt);
+        if (e.gradingResponseReady()) e.copyGradingResponse (scratch.data(), (int) scratch.size());  // drain mid-sweep
+    }
+
+    // 3) Trailing silence so a COMPLETE-sweep snapshot is published (oldest->newest, sweep reassembled in order).
+    //    Drain EVERY snapshot through ~700 blocks (@512/48k ~= 7.5 s) so the ring head advances and the (short,
+    //    synthetic) sweep's reassembled START lands in the FIRST HALF of the next snapshot — mirroring production,
+    //    where a 25 s sweep in a 28 s ring starts ~3 s in (well under the zero-padded FFT half-length).
+    //    crossCorrelateAlign maps a lag past that half to a negative delay, which a real long sweep never reaches;
+    //    we replicate that geometry so the synthetic short sweep behaves like the real one.
+    for (int i = 0; i < 700; ++i) {
+        e.processCaptureBlockForTest (silence.data(), silence.data(), mono.data(), N);
+        if (e.gradingResponseReady()) e.copyGradingResponse (scratch.data(), (int) scratch.size());  // always drain
+    }
+    // Now prime ONE fresh snapshot and leave it ready for the poll (do NOT drain this one).
+    for (int i = 0; i < 80 && ! e.gradingResponseReady(); ++i)
+        e.processCaptureBlockForTest (silence.data(), silence.data(), mono.data(), N);
+
+    // 4) The aligned poll grades the wrapped-then-reassembled sweep (two consecutive matched polls).
+    bool graded = false;
+    PollDebounce db;
+    auto g = matchPollTwiceAndPublish (e, ref, fs, graded, db);
+    INFO ("wrapped-ring grade state = " << (int) g.state << "; coherence = " << e.lastMatchCoherence());
+    CHECK (graded);
+    const auto state = (eb::RefMonState) e.refMonState();
+    CHECK ((state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedSuspect));
+    CHECK (state != eb::RefMonState::ReferenceStale);
+    CHECK (e.lastMatchCoherence() > 0.0f);
 }
 
 // NOTE: the RT-safety / allocation-free assertion for the in-callback ring write lives in
