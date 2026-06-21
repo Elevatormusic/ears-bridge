@@ -70,20 +70,27 @@ MainComponent::MainComponent() {
     updateLink.setFont (juce::Font (juce::FontOptions (12.0f)), false, juce::Justification::centredRight);
     addChildComponent (updateLink);
 
+    // --- Left rail viewport (scrolls the whole config stack so a tall Advanced section is reachable) ---
+    // Every rail child below is parented to railContent (not `this`); the Viewport scrolls it vertically.
+    railViewport.setViewedComponent (&railContent, false);   // false: we own railContent (a member)
+    railViewport.setScrollBarsShown (true, false);            // vertical only; the rail width is fixed
+    railViewport.setScrollBarThickness (10);
+    addAndMakeVisible (railViewport);
+
     // --- Input picker ---
     inputPicker.onDeviceChosen = [this] (const DeviceId& d) { onInputChosen (d); };
-    addAndMakeVisible (inputPicker);
+    railContent.addAndMakeVisible (inputPicker);
     inputGainHint.setText ("Keep the EARS gain switch at its factory 18 dB - only lower it if the input clips.",
                            juce::dontSendNotification);
     inputGainHint.setColour (juce::Label::textColourId, Theme::textDim());
     inputGainHint.setFont (juce::Font (juce::FontOptions (11.5f)));
     inputGainHint.setJustificationType (juce::Justification::topLeft);
     inputGainHint.setMinimumHorizontalScale (1.0f);
-    addAndMakeVisible (inputGainHint);
+    railContent.addAndMakeVisible (inputGainHint);
 
     // --- Combine selector ---
     styleEyebrow (combineLabel, "COMBINE MODE");
-    addAndMakeVisible (combineLabel);
+    railContent.addAndMakeVisible (combineLabel);
     combineModel = combineModeOrder();
     for (size_t i = 0; i < combineModel.size(); ++i) {
         auto& m = combineModel[i];
@@ -100,38 +107,38 @@ MainComponent::MainComponent() {
         combineBox.addItem (label, (int) i + 1);
     }
     combineBox.onChange = [this] { onCombineChosen(); };
-    addAndMakeVisible (combineBox);
+    railContent.addAndMakeVisible (combineBox);
     combineHint.setColour (juce::Label::textColourId, Theme::textDim());
     combineHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     combineHint.setJustificationType (juce::Justification::topLeft);
     combineHint.setMinimumHorizontalScale (1.0f);
-    addAndMakeVisible (combineHint);
+    railContent.addAndMakeVisible (combineHint);
 
     // --- Output picker + Dirac hint + preflight ---
     outputPicker.onDeviceChosen = [this] (const DeviceId& d) { onOutputChosen (d); };
-    addAndMakeVisible (outputPicker);
+    railContent.addAndMakeVisible (outputPicker);
     outputHint.setText ("In Dirac Live, choose this device's capture side as the recording input.",
                         juce::dontSendNotification);
     outputHint.setColour (juce::Label::textColourId, Theme::textDim());
     outputHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     outputHint.setJustificationType (juce::Justification::topLeft);
-    addAndMakeVisible (outputHint);
+    railContent.addAndMakeVisible (outputHint);
     preflightLabel.setColour (juce::Label::textColourId, Theme::warn());
     preflightLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
-    addAndMakeVisible (preflightLabel);
+    railContent.addAndMakeVisible (preflightLabel);
     // Calm, neutral fact line (NOT a warning): e.g. "Output: 32-bit float (shared mode) - normal."
     // The full honest explanation lives in its tooltip so the short line always fits one rail line.
     preflightInfo.setColour (juce::Label::textColourId, Theme::textDim());
     preflightInfo.setFont (juce::Font (juce::FontOptions (12.0f)));
     preflightInfo.setTooltip ("WASAPI shared mode always delivers 32-bit float; your bit-depth is a "
                               "stored preference and doesn't affect quality - this is expected.");
-    addAndMakeVisible (preflightInfo);
+    railContent.addAndMakeVisible (preflightInfo);
 
     // Standard-VB-CABLE-vs-Dirac compatibility hint + one-click fix (hidden unless that cable is chosen).
     diracCableHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     diracCableHint.setJustificationType (juce::Justification::topLeft);
     diracCableHint.setColour (juce::Label::textColourId, Theme::warn());
-    addChildComponent (diracCableHint);
+    railContent.addChildComponent (diracCableHint);
     diracFixButton.onClick = [this] {
         juce::String msg;
         if (eb::enableDiracSharedMode (msg)) {
@@ -144,31 +151,31 @@ MainComponent::MainComponent() {
         }
         resized();
     };
-    addChildComponent (diracFixButton);
+    railContent.addChildComponent (diracFixButton);
 
     // --- Rate + depth ---
     styleEyebrow (rateLabel, "RATE");
-    addAndMakeVisible (rateLabel);
+    railContent.addAndMakeVisible (rateLabel);
     rateBox.onChange = [this] { onRateChosen(); };
-    addAndMakeVisible (rateBox);
+    railContent.addAndMakeVisible (rateBox);
     rateWarn.setColour (juce::Label::textColourId, Theme::warn());
     rateWarn.setFont (juce::Font (juce::FontOptions (12.0f)));
-    addAndMakeVisible (rateWarn);
+    railContent.addAndMakeVisible (rateWarn);
     styleEyebrow (bitLabel, "PREFERRED DEPTH");
-    addAndMakeVisible (bitLabel);
+    railContent.addAndMakeVisible (bitLabel);
     bitBox.onChange = [this] { onBitDepthChosen(); };
-    addAndMakeVisible (bitBox);
+    railContent.addAndMakeVisible (bitBox);
 
     // --- Advanced disclosure ---
     advancedToggle.setButtonText ("Advanced");
     advancedToggle.onClick = [this] { resized(); };
-    addAndMakeVisible (advancedToggle);
+    railContent.addAndMakeVisible (advancedToggle);
     complexPhaseToggle.setButtonText ("Complex (with-phase) FIR");
     complexPhaseToggle.onClick = [this] {
         settings.setComplexPhase (complexPhaseToggle.getToggleState());
         rebuildFirsAsync();
     };
-    addChildComponent (complexPhaseToggle);
+    railContent.addChildComponent (complexPhaseToggle);
     autoUpdateToggle.setToggleState (settings.autoCheckUpdates(), juce::dontSendNotification);
     autoUpdateToggle.onClick = [this] {
         settings.setAutoCheckUpdates (autoUpdateToggle.getToggleState());
@@ -178,7 +185,7 @@ MainComponent::MainComponent() {
             resized();
         }
     };
-    addChildComponent (autoUpdateToggle);
+    railContent.addChildComponent (autoUpdateToggle);
     // #3: advanced override toggle. Restore its persisted state; on click, persist + re-run the gate.
     overrideToggle.setToggleState (settings.advancedOverride(), juce::dontSendNotification);
     overrideToggle.onClick = [this] {
@@ -186,9 +193,9 @@ MainComponent::MainComponent() {
         settings.flush();
         updateStartGate();   // recompute Start enabled-ness + the status line for the new policy
     };
-    addChildComponent (overrideToggle);
+    railContent.addChildComponent (overrideToggle);
     styleEyebrow (firLenLabel, "FIR LENGTH");
-    addChildComponent (firLenLabel);
+    railContent.addChildComponent (firLenLabel);
     firLenBox.addItem ("Auto (scales with rate)", kFirLenAutoId);
     for (int n : { 4096, 8192, 16384, 32768 }) firLenBox.addItem (juce::String (n), n);
     firLenBox.onChange = [this] {
@@ -196,9 +203,9 @@ MainComponent::MainComponent() {
         settings.setFirLength (id == kFirLenAutoId ? 0 : id);
         rebuildFirsAsync();
     };
-    addChildComponent (firLenBox);
+    railContent.addChildComponent (firLenBox);
     styleEyebrow (trimLabel, "OUTPUT TRIM (dB)");
-    addChildComponent (trimLabel);
+    railContent.addChildComponent (trimLabel);
     trimSlider.setRange (-24.0, 0.0, 0.1);
     trimSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     trimSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 22);
@@ -206,7 +213,7 @@ MainComponent::MainComponent() {
         settings.setOutputTrimDb (trimSlider.getValue());
         engine.setOutputTrimDb (trimSlider.getValue());   // apply live (the graph reads it lock-free)
     };
-    addChildComponent (trimSlider);
+    railContent.addChildComponent (trimSlider);
 
     // L/R wiring check: play a tone into the LEFT earcup, then the engine reports which mic responded.
     verifyButton.onClick = [this] {
@@ -228,20 +235,20 @@ MainComponent::MainComponent() {
             verifyResultLabel.setText (err, juce::dontSendNotification);
         }
     };
-    addChildComponent (verifyButton);
+    railContent.addChildComponent (verifyButton);
     verifyResultLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     verifyResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    addChildComponent (verifyResultLabel);
+    railContent.addChildComponent (verifyResultLabel);
 
     // Reference-Based Measurement Monitor (Plan 5): learn the loopback reference. The capture itself is a
     // Windows WASAPI loopback (on-device) and must run with Dirac's Processor in Windows Audio (shared)
     // mode; we detect that read-only and inform. Only meaningful while Stopped (the loopback can't run
     // alongside the live ASIO measurement).
     learnRefButton.onClick = [this] { onLearnReference(); };
-    addChildComponent (learnRefButton);
+    railContent.addChildComponent (learnRefButton);
     learnRefResultLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    addChildComponent (learnRefResultLabel);
+    railContent.addChildComponent (learnRefResultLabel);
 
     // --- Right pane: cal cards + Levels ---
     styleEyebrow (calEyebrow, "CALIBRATION");
@@ -1190,12 +1197,18 @@ void MainComponent::timerCallback() {
     }
 }
 
+// The rail content is transparent: the graphite rail backdrop + the right divider are painted by
+// MainComponent (full window height, behind the Viewport) so they stay put while the content scrolls.
+void MainComponent::RailContent::paint (juce::Graphics&) {}
+
 void MainComponent::paint (juce::Graphics& g) {
     g.fillAll (Theme::bg());
     const int barH = 56, railW = 262;
     auto bar = getLocalBounds().removeFromTop (barH);
 
-    // Title bar + left rail backdrops.
+    // Title bar + left rail backdrops. The rail fill spans the full window height below the bar; the
+    // (transparent) Viewport scrolls its content over this static backdrop, so the graphite rail +
+    // divider look identical to the old fixed rail at any scroll position.
     g.setColour (Theme::barBg());
     g.fillRect (bar);
     g.setColour (Theme::rail());
@@ -1236,6 +1249,93 @@ void MainComponent::paint (juce::Graphics& g) {
     }
 }
 
+int MainComponent::layoutRail (int width) {
+    // Lay every rail child out top-down inside railContent's local space (origin 0,0), in a column of
+    // the given width reduced by the 16px gutter. Returns the TOTAL content height (last bottom + the
+    // bottom gutter) so resized() can size railContent for the Viewport. Pure layout — no resized()
+    // call here, so it can't recurse through the Viewport. Spacings mirror the former fixed-rail block.
+    constexpr int gutter = 16;
+    auto rr = juce::Rectangle<int> (0, 0, width, 100000).reduced (gutter, 0);
+    rr.removeFromTop (gutter);   // top gutter (the old rail.reduced(16) inset, applied at y=0)
+
+    inputPicker.setBounds (rr.removeFromTop (62));
+    rr.removeFromTop (4);
+    inputGainHint.setBounds (rr.removeFromTop (30));
+    rr.removeFromTop (12);
+
+    combineLabel.setBounds (rr.removeFromTop (16));
+    rr.removeFromTop (6);
+    combineBox.setBounds (rr.removeFromTop (40));
+    rr.removeFromTop (6);
+    combineHint.setBounds (rr.removeFromTop (44));
+    rr.removeFromTop (16);
+
+    outputPicker.setBounds (rr.removeFromTop (62));
+    rr.removeFromTop (4);
+    outputHint.setBounds (rr.removeFromTop (30));
+    preflightLabel.setBounds (rr.removeFromTop (14));
+    // The neutral fact line sits just below the warnings; it only claims a row when it has text,
+    // so an empty info line never pushes the rest of the rail down.
+    if (preflightInfo.getText().isNotEmpty())
+        preflightInfo.setBounds (rr.removeFromTop (14));
+    else
+        preflightInfo.setBounds ({});
+    if (diracCableHint.isVisible()) {
+        rr.removeFromTop (6);
+        diracCableHint.setBounds (rr.removeFromTop (48));
+        if (diracFixButton.isVisible()) {
+            rr.removeFromTop (4);
+            diracFixButton.setBounds (rr.removeFromTop (30).removeFromLeft (200));
+        }
+    }
+    rr.removeFromTop (12);
+
+    auto rb = rr.removeFromTop (62);
+    auto rcol = rb.removeFromLeft (rb.getWidth() / 2 - 8);
+    rb.removeFromLeft (16);
+    rateLabel.setBounds (rcol.removeFromTop (16)); rcol.removeFromTop (6);
+    rateBox.setBounds (rcol.removeFromTop (40));
+    bitLabel.setBounds (rb.removeFromTop (16)); rb.removeFromTop (6);
+    bitBox.setBounds (rb.removeFromTop (40));
+    rateWarn.setBounds (rr.removeFromTop (14));
+    rr.removeFromTop (8);
+
+    advancedToggle.setBounds (rr.removeFromTop (26));
+    const bool adv = advancedToggle.getToggleState();
+    complexPhaseToggle.setVisible (adv);
+    firLenLabel.setVisible (adv); firLenBox.setVisible (adv);
+    trimLabel.setVisible (adv);   trimSlider.setVisible (adv);
+    verifyButton.setVisible (adv); verifyResultLabel.setVisible (adv);
+    learnRefButton.setVisible (adv); learnRefResultLabel.setVisible (adv);
+    autoUpdateToggle.setVisible (adv);
+    overrideToggle.setVisible (adv);   // #3: only reachable with Advanced expanded
+    if (adv) {
+        rr.removeFromTop (4);
+        complexPhaseToggle.setBounds (rr.removeFromTop (26));
+        rr.removeFromTop (6);
+        firLenLabel.setBounds (rr.removeFromTop (16)); rr.removeFromTop (6);
+        firLenBox.setBounds (rr.removeFromTop (40));
+        rr.removeFromTop (8);
+        trimLabel.setBounds (rr.removeFromTop (16)); rr.removeFromTop (4);
+        trimSlider.setBounds (rr.removeFromTop (28));
+        rr.removeFromTop (10);
+        verifyButton.setBounds (rr.removeFromTop (30));
+        rr.removeFromTop (4);
+        verifyResultLabel.setBounds (rr.removeFromTop (16));
+        rr.removeFromTop (10);
+        learnRefButton.setBounds (rr.removeFromTop (30));
+        rr.removeFromTop (4);
+        learnRefResultLabel.setBounds (rr.removeFromTop (16));
+        rr.removeFromTop (10);
+        autoUpdateToggle.setBounds (rr.removeFromTop (26));
+        rr.removeFromTop (6);
+        overrideToggle.setBounds (rr.removeFromTop (26));
+    }
+
+    // Total content height = the y just past the last placed control, plus the matching bottom gutter.
+    return rr.getY() + gutter;
+}
+
 void MainComponent::resized() {
     auto area = getLocalBounds();
 
@@ -1259,83 +1359,29 @@ void MainComponent::resized() {
     // --- Version footnote (pinned bottom-right, below both panes) ---
     versionLabel.setBounds (area.removeFromBottom (22).reduced (16, 2));
 
-    // --- Left configuration rail ---
+    // --- Left configuration rail (scrollable Viewport) ---
+    // The Viewport fills the fixed 262px rail column. railContent is laid out + sized by layoutRail()
+    // to its FULL content height, so the (tall, expandable) Advanced stack is always reachable by
+    // scrolling — never clipped off the bottom as it was when the rail was a fixed rect.
     auto rail = area.removeFromLeft (262);
     auto pane = area;
+    railViewport.setBounds (rail);
     {
-        auto rr = rail.reduced (16);
-        inputPicker.setBounds (rr.removeFromTop (62));
-        rr.removeFromTop (4);
-        inputGainHint.setBounds (rr.removeFromTop (30));
-        rr.removeFromTop (12);
-
-        combineLabel.setBounds (rr.removeFromTop (16));
-        rr.removeFromTop (6);
-        combineBox.setBounds (rr.removeFromTop (40));
-        rr.removeFromTop (6);
-        combineHint.setBounds (rr.removeFromTop (44));
-        rr.removeFromTop (16);
-
-        outputPicker.setBounds (rr.removeFromTop (62));
-        rr.removeFromTop (4);
-        outputHint.setBounds (rr.removeFromTop (30));
-        preflightLabel.setBounds (rr.removeFromTop (14));
-        // The neutral fact line sits just below the warnings; it only claims a row when it has text,
-        // so an empty info line never pushes the rest of the rail down.
-        if (preflightInfo.getText().isNotEmpty())
-            preflightInfo.setBounds (rr.removeFromTop (14));
-        else
-            preflightInfo.setBounds ({});
-        if (diracCableHint.isVisible()) {
-            rr.removeFromTop (6);
-            diracCableHint.setBounds (rr.removeFromTop (48));
-            if (diracFixButton.isVisible()) {
-                rr.removeFromTop (4);
-                diracFixButton.setBounds (rr.removeFromTop (30).removeFromLeft (200));
-            }
-        }
-        rr.removeFromTop (12);
-
-        auto rb = rr.removeFromTop (62);
-        auto rcol = rb.removeFromLeft (rb.getWidth() / 2 - 8);
-        rb.removeFromLeft (16);
-        rateLabel.setBounds (rcol.removeFromTop (16)); rcol.removeFromTop (6);
-        rateBox.setBounds (rcol.removeFromTop (40));
-        bitLabel.setBounds (rb.removeFromTop (16)); rb.removeFromTop (6);
-        bitBox.setBounds (rb.removeFromTop (40));
-        rateWarn.setBounds (rr.removeFromTop (14));
-        rr.removeFromTop (8);
-
-        advancedToggle.setBounds (rr.removeFromTop (26));
-        const bool adv = advancedToggle.getToggleState();
-        complexPhaseToggle.setVisible (adv);
-        firLenLabel.setVisible (adv); firLenBox.setVisible (adv);
-        trimLabel.setVisible (adv);   trimSlider.setVisible (adv);
-        verifyButton.setVisible (adv); verifyResultLabel.setVisible (adv);
-        learnRefButton.setVisible (adv); learnRefResultLabel.setVisible (adv);
-        autoUpdateToggle.setVisible (adv);
-        overrideToggle.setVisible (adv);   // #3: only reachable with Advanced expanded
-        if (adv) {
-            rr.removeFromTop (4);
-            complexPhaseToggle.setBounds (rr.removeFromTop (26));
-            rr.removeFromTop (6);
-            firLenLabel.setBounds (rr.removeFromTop (16)); rr.removeFromTop (6);
-            firLenBox.setBounds (rr.removeFromTop (40));
-            rr.removeFromTop (8);
-            trimLabel.setBounds (rr.removeFromTop (16)); rr.removeFromTop (4);
-            trimSlider.setBounds (rr.removeFromTop (28));
-            rr.removeFromTop (10);
-            verifyButton.setBounds (rr.removeFromTop (30));
-            rr.removeFromTop (4);
-            verifyResultLabel.setBounds (rr.removeFromTop (16));
-            rr.removeFromTop (10);
-            learnRefButton.setBounds (rr.removeFromTop (30));
-            rr.removeFromTop (4);
-            learnRefResultLabel.setBounds (rr.removeFromTop (16));
-            rr.removeFromTop (10);
-            autoUpdateToggle.setBounds (rr.removeFromTop (26));
-            rr.removeFromTop (6);
-            overrideToggle.setBounds (rr.removeFromTop (26));
+        // Content width = the rail width minus the vertical scrollbar when it's shown, so a child laid
+        // out to the full width isn't hidden behind the bar. getMaximumVisibleWidth() already accounts
+        // for a visible vertical scrollbar.
+        const int contentW = railViewport.getMaximumVisibleWidth();
+        const int contentH = layoutRail (contentW);
+        // Never shorter than the viewport, so the backdrop area is fully covered and there's no
+        // dead band below the last control.
+        railContent.setSize (contentW, juce::jmax (contentH, railViewport.getHeight()));
+        // A first pass laid the children out at contentW assuming NO scrollbar; if adding the content
+        // made the scrollbar appear (or vanish), getMaximumVisibleWidth() changed — relayout once at
+        // the now-correct width so the children fit. One extra pass converges (the height is stable).
+        const int finalW = railViewport.getMaximumVisibleWidth();
+        if (finalW != contentW) {
+            const int h2 = layoutRail (finalW);
+            railContent.setSize (finalW, juce::jmax (h2, railViewport.getHeight()));
         }
     }
 
