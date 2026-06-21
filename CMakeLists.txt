@@ -33,6 +33,7 @@ add_library(eb_core STATIC
     src/cal/CalFile.cpp
     src/cal/CalibrationPairValidator.cpp
     src/cal/FirDesigner.cpp
+    src/audio/Deconvolver.cpp
     src/audio/ProcessingGraph.cpp)
 target_include_directories(eb_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(eb_core PUBLIC cxx_std_20)
