@@ -143,14 +143,15 @@ private:
     double             loadedReferenceRate_ = 48000.0;
     std::atomic<bool>  gradeInFlight_ { false };      // guards against re-posting while a grade job runs
     // Task 4 match poll: the 30 Hz timer calls pollReferenceGrade, but the MATCH (a cross-correlation FFT) is
-    // throttled to ~every kGradePollTicks ticks (~2 s) while Running + referenceLoaded. gradedThisSequence_ is
-    // the one-grade-per-sequence DEBOUNCE: set when a sequence is graded, CLEARED when fresh signal activity
-    // (gradeSignalPresent rising after a settled gap) starts a new sweep sequence. gradeWasSettled_ tracks the
-    // previous poll's settled state so the rising edge can be detected. There is NO absolute level gate here.
+    // throttled to ~every kGradePollTicks ticks (~2 s) while Running + referenceLoaded. Grade on a STABLE
+    // MATCH, not on silence: gradedThisSession_ is the one-grade-per-match DEBOUNCE, set when a match session
+    // grades and CLEARED when the match drops (so a fresh sweep can grade again). lastPollMatched_ holds the
+    // previous throttled poll's match result so two consecutive matched polls (~4 s of sustained match) confirm
+    // the full sweep landed before grading. There is NO absolute level gate, and no silence/settled gate, here.
     int                gradePollTick_       = 0;      // 30 Hz tick counter for the ~2 s match-poll throttle
     static constexpr int kGradePollTicks    = 60;     // ~2 s at the 30 Hz GUI timer
-    bool               gradedThisSequence_  = false;  // debounce latch: this settled sequence already graded
-    bool               gradeWasSettled_     = true;   // previous poll's settled state (start settled = silent)
+    bool               lastPollMatched_     = false;  // previous throttled poll's match result (stable-match edge)
+    bool               gradedThisSession_   = false;  // debounce latch: this match session already graded
     // Cancellable + restartable learn: the button doubles as Learn / Cancel. learnCancelRequested_ is the
     // message-thread -> firPool hand-off (set on a cancel click, polled inside captureLoopback). learning_ is
     // message-thread-only state guarding against a double-start during the brief cancel window.
@@ -223,8 +224,7 @@ private:
     int    lastRefMonStateLogged_ = -1;          // RefMonState int; -1 = never logged
     bool   lastRefLoadedLogged_   = false;
     juce::String lastListenTextLogged_;          // last Listening<->Sweep-in-progress status text logged (Task 4)
-    int    lastInputPeakBucketLogged_ = -1000;   // bucketed input peak (dB) so tiny jitter doesn't spam
-    int    lastCoherBucketLogged_     = -1000;   // bucketed match coherence (0.05 buckets)
+    int    lastCoherBucketLogged_     = -1000;   // bucketed match coherence (0.05 buckets); input peak is NOT a trigger (it floods)
     int    heartbeatTick_ = 0;                    // 30 Hz tick counter; a heartbeat candidate every ~900 (~30 s)
     static constexpr int kHeartbeatTicks = 900;   // ~30 s at the 30 Hz GUI timer
     juce::String lastHeartbeatContent_;           // last heartbeat line logged; identical beats are suppressed

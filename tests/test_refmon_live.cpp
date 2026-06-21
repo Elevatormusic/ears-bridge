@@ -22,8 +22,12 @@
 //   8. Fix 2 presentation-gate invariants (unchanged pure-module behaviour).
 //
 // The match-poll helper here mirrors what MainComponent::pollReferenceGrade() does off the audio thread:
-// snapshot the ring WINDOW (copyGradingResponse) -> referenceMatches (publish coherence) -> if matched
-// AND settled (!gradeSignalPresent) AND not-already-graded -> gradeMeasurementWindow -> publishReferenceGrade.
+// snapshot the ring WINDOW (copyGradingResponse) -> referenceMatches (publish coherence) -> if the match is
+// STABLE (matched on TWO consecutive polls) AND not-already-graded -> gradeMeasurementWindow -> publish.
+// The grade triggers on a STABLE MATCH, NOT on silence: the old !gradeSignalPresent ("settled") gate is gone
+// because the EARS mic never goes silent (it always reads ambient above the cosmetic floor), so a real run
+// never settled and never graded even at coherence 0.99 (the on-device bug). matchPollAndPublish must be
+// called TWICE for a grade to fire (two matched polls confirm the full sweep landed, not still rising).
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -144,23 +148,65 @@ static bool driveResponseThroughSeam (eb::AudioEngine& e, const std::vector<floa
     return everArmed;
 }
 
-// The match-poll debounce state, mirroring MainComponent's gradedThisSequence_ / gradeWasSettled_ members.
-// A fresh run starts settled (silent) + un-graded.
-struct PollDebounce { bool gradedThisSequence = false; bool wasSettled = true; };
+// Bug-1 keep-alive: a block of present-level signal on the RIGHT (INACTIVE-ear) channel only. blockPeak (and
+// thus gradeSignalPresent()) covers BOTH channels, so a present right channel keeps gradeSignalPresent() TRUE;
+// but the grading ring buffers only the ACTIVE ear (left by default), so the LEFT channel stays SILENT and the
+// graded window remains clean (sweep + silence, the sweep's compact correlation lobe intact -> still matches).
+// This is the faithful "the mic never goes silent, yet the captured sweep is clean" condition.
+static void fillKeepAlivePresentRight (std::vector<float>& left, std::vector<float>& right) {
+    std::fill (left.begin(),  left.end(),  0.0f);     // active ear (buffered) stays clean
+    std::fill (right.begin(), right.end(), 0.02f);    // inactive ear present (-34 dBFS) -> gradeSignalPresent TRUE
+}
 
-// Replays MainComponent::pollReferenceGrade(): track the settled/active edge (debounce), copy the published
-// ring WINDOW out, run the match-gate (referenceMatches) — the DETECTOR — publish the coherence, and ONLY
-// when matched AND the signal has SETTLED (!gradeSignalPresent) AND not already graded this sequence does it
-// grade + publish. Returns the grade. There is NO absolute level gate here: the match alone fires the grade.
+// Bug-1 harness: drive a CONTINUOUS matching response whose level NEVER drops below the activity floor, so
+// gradeSignalPresent() stays TRUE the whole time (the run NEVER "settles"). This is the on-device case the
+// old !gradeSignalPresent silence-gate could never grade. We feed the complete sweep on the active (left) ear,
+// then keep a present keep-alive on the INACTIVE (right) ear so the signal never goes silent — while the active
+// ear (the graded ring) sees only silence after the sweep, so the published window stays clean and matching.
+// Returns the steady-present flag (the caller asserts gradeSignalPresent() is TRUE -> never settled).
+static bool driveContinuousNeverSettles (eb::AudioEngine& e, const std::vector<float>& response, int N) {
+    std::vector<float> mono ((size_t) N, 0.0f);
+    std::vector<float> silence ((size_t) N, 0.0f);
+    std::vector<float> scratch ((size_t) std::lround (e.gradingResponseRate() * 28.0) + N, 0.0f);
+
+    // 1) Feed the COMPLETE response on the LEFT (active) channel, draining stale mid-sweep windows.
+    const int total = (int) response.size();
+    for (int off = 0; off < total; off += N) {
+        const int cnt = std::min (N, total - off);
+        std::vector<float> blk ((size_t) N, 0.0f);
+        std::copy (response.begin() + off, response.begin() + off + cnt, blk.begin());
+        e.processCaptureBlockForTest (blk.data(), silence.data(), mono.data(), N);
+        if (e.gradingResponseReady()) e.copyGradingResponse (scratch.data(), (int) scratch.size());
+    }
+
+    // 2) Keep the INACTIVE ear (right) present so the signal NEVER settles, while the active (left) ear is
+    //    silent. Drain stale windows until one holds the complete sweep, then leave it ready for the poll.
+    std::vector<float> keepL ((size_t) N, 0.0f), keepR ((size_t) N, 0.0f);
+    fillKeepAlivePresentRight (keepL, keepR);
+    for (int i = 0; i < 200; ++i) {
+        e.processCaptureBlockForTest (keepL.data(), keepR.data(), mono.data(), N);
+        if (e.gradingResponseReady()) {
+            if (i >= 60) break;   // settle a bit, then leave THIS ready window for the poll (do NOT drain it)
+            e.copyGradingResponse (scratch.data(), (int) scratch.size());   // drain early stale windows
+        }
+    }
+    // The signal is STILL sounding (the last block was present on the right ear) -> never settled.
+    return e.gradeSignalPresent();
+}
+
+// The match-poll debounce state, mirroring MainComponent's lastPollMatched_ / gradedThisSession_ members.
+// A fresh run starts un-matched + un-graded (so two consecutive matched polls are required to grade).
+struct PollDebounce { bool lastPollMatched = false; bool gradedThisSession = false; };
+
+// Replays MainComponent::pollReferenceGrade(): copy the published ring WINDOW out, run the match-gate
+// (referenceMatches) — the DETECTOR — publish the coherence, and grade ONLY on a STABLE MATCH (matched on
+// THIS poll AND the previous poll) that has not already graded this match session. There is NO settled/silence
+// gate and NO absolute level gate: the match alone fires the grade, and it must be stable across two polls.
+// A dropped match clears the session latch so a fresh sweep can grade again. Call TWICE to grade.
 static eb::MeasurementGrade matchPollAndPublish (eb::AudioEngine& e, const std::vector<float>& reference,
                                                  double rate, bool& gradedOut, PollDebounce& db) {
     gradedOut = false;
     eb::MeasurementGrade g;   // default NotGraded
-
-    // Debounce edge: a settled->active transition starts a NEW sweep sequence (clear the graded latch).
-    const bool settled = ! e.gradeSignalPresent();
-    if (db.wasSettled && ! settled) db.gradedThisSequence = false;
-    db.wasSettled = settled;
 
     if (! e.gradingResponseReady()) return g;   // no fresh window published by the capture thread
 
@@ -174,8 +220,14 @@ static eb::MeasurementGrade matchPollAndPublish (eb::AudioEngine& e, const std::
     const auto m = eb::referenceMatches (reference.data(), window.data(),
                                          std::min ((int) reference.size(), (int) window.size()));
     e.setLastMatchCoherence (m.coherence);
-    if (! m.matched || ! settled || db.gradedThisSequence) return g;   // gate FIRST; settled; not re-graded
-    db.gradedThisSequence = true;
+
+    // STABLE-MATCH debounce (mirrors pollReferenceGrade): the match-gate runs FIRST. A dropped match re-arms
+    // the session; a grade fires once when the match holds across TWO consecutive polls.
+    if (! m.matched) db.gradedThisSession = false;
+    const bool stableMatch = m.matched && db.lastPollMatched;
+    db.lastPollMatched = m.matched;
+    if (! stableMatch || db.gradedThisSession) return g;   // gate FIRST; stable across two polls; not re-graded
+    db.gradedThisSession = true;
 
     g = eb::gradeMeasurementWindow (reference.data(), (int) reference.size(),
                                     window.data(), (int) window.size(), rate);
@@ -183,6 +235,55 @@ static eb::MeasurementGrade matchPollAndPublish (eb::AudioEngine& e, const std::
                              g.state == eb::RefMonState::ReferenceStale, g.quality.lowQuality);
     gradedOut = true;
     return g;
+}
+
+// Convenience: run matchPollAndPublish TWICE (mirrors two consecutive throttled ~2 s polls). The first poll
+// CONSUMES the ready window (clearing responseReady_) and only records lastPollMatched; the SECOND poll is the
+// one that can grade. On hardware the capture thread keeps streaming between the throttled polls and
+// re-publishes a fresh window, so here we PUMP a short burst of present-level blocks between the two polls to
+// trigger that re-snapshot — the sweep is still inside the 28 s ring, so the republished window still matches.
+// Returns the grade from whichever poll graded (or the last poll's grade if none did).
+static eb::MeasurementGrade matchPollTwiceAndPublish (eb::AudioEngine& e, const std::vector<float>& reference,
+                                                      double rate, bool& gradedOut, PollDebounce& db) {
+    bool g1 = false, g2 = false;
+    auto r1 = matchPollAndPublish (e, reference, rate, g1, db);
+
+    // Mirror the capture thread re-publishing between the throttled polls: pump >1 snapshot-period of SILENCE
+    // so a fresh window (still holding the sweep in the 28 s ring) is made ready for poll 2 — without
+    // contaminating it, so referenceMatches still sees the same prominent sweep lobe. The 0.5 s snapshot
+    // cadence at 512/48k is ~47 blocks; 80 covers it with margin.
+    const int N = 512;
+    std::vector<float> silence ((size_t) N, 0.0f), mono ((size_t) N, 0.0f);
+    for (int i = 0; i < 80; ++i)
+        e.processCaptureBlockForTest (silence.data(), silence.data(), mono.data(), N);
+
+    auto r2 = matchPollAndPublish (e, reference, rate, g2, db);
+    gradedOut = g1 || g2;
+    return g1 ? r1 : r2;
+}
+
+// Bug-1 two-poll: run the match poll TWICE while KEEPING SIGNAL PRESENT between the polls (present keep-alive
+// on the INACTIVE ear only), so gradeSignalPresent() stays TRUE across both polls and at grade time — the
+// exact condition the removed silence-gate could never grade. The active ear stays silent, so the republished
+// window (the active-ear ring) is still the clean sweep and matches. Returns the grade from whichever graded.
+static eb::MeasurementGrade bug1PollTwicePresent (eb::AudioEngine& e, const std::vector<float>& reference,
+                                                  double rate, bool& gradedOut, PollDebounce& db) {
+    bool g1 = false, g2 = false;
+    auto r1 = matchPollAndPublish (e, reference, rate, g1, db);
+
+    // Pump present-on-the-right keep-alive so a fresh window is republished for poll 2 AND the signal stays
+    // present (gradeSignalPresent() TRUE at grade time) — while the active (left) ring stays clean. The first
+    // poll already drained the prior window, so one re-snapshot publishes during this burst and stays ready.
+    const int N = 512;
+    std::vector<float> mono ((size_t) N, 0.0f);
+    std::vector<float> keepL ((size_t) N, 0.0f), keepR ((size_t) N, 0.0f);
+    fillKeepAlivePresentRight (keepL, keepR);
+    for (int i = 0; i < 80; ++i)
+        e.processCaptureBlockForTest (keepL.data(), keepR.data(), mono.data(), N);
+
+    auto r2 = matchPollAndPublish (e, reference, rate, g2, db);
+    gradedOut = g1 || g2;
+    return g1 ? r1 : r2;
 }
 
 // ==================================================================================================
@@ -213,7 +314,7 @@ TEST_CASE("Live grade (Task 4 headline): a LOW-level matching ESS response grade
 
     bool graded = false;
     PollDebounce db;
-    auto g = matchPollAndPublish (e, ref, fs, graded, db);
+    auto g = matchPollTwiceAndPublish (e, ref, fs, graded, db);
     CHECK (graded);                                     // the match fired the grade DESPITE the low level
     const auto state = (eb::RefMonState) e.refMonState();
     INFO ("published IR-SNR = " << e.refIrSnrDb() << " dB; gradeState = " << (int) g.state
@@ -244,7 +345,7 @@ TEST_CASE("Live grade: a full-amplitude matching ESS response through the seam g
     driveResponseThroughSeam (e, resp, N);
     bool graded = false;
     PollDebounce db;
-    matchPollAndPublish (e, ref, fs, graded, db);
+    matchPollTwiceAndPublish (e, ref, fs, graded, db);
     CHECK (graded);
 
     const auto state = (eb::RefMonState) e.refMonState();
@@ -253,6 +354,44 @@ TEST_CASE("Live grade: a full-amplitude matching ESS response through the seam g
     CHECK (state != eb::RefMonState::NotGraded);
     CHECK_FALSE (eb::any (e.health().flags & eb::HealthFlag::RefMismatch));
     CHECK (e.refIrSnrDb() > 0.0f);
+    CHECK (std::isfinite (e.refIrSnrDb()));
+}
+
+// ==================================================================================================
+// 2b. BUG-1 HEADLINE (the on-device regression): a CONTINUOUS matching response that NEVER settles still
+//     grades. gradeSignalPresent() stays TRUE the WHOLE time (the EARS mic never goes silent), so the OLD
+//     !gradeSignalPresent silence-gate could NEVER have fired — yet two consecutive matched polls grade it.
+//     This proves the silence-gate is GONE and grading now triggers on a STABLE MATCH.
+// ==================================================================================================
+TEST_CASE("Bug 1: a continuous response that NEVER settles still grades on a stable match (silence-gate removed)") {
+    eb::AudioEngine e;
+    const int    N  = 512;
+    const int    sweepLen = 1 << 15;
+    const double fs = 48000.0;
+    e.prepareForTest (fs, N);
+
+    std::vector<float> ref, resp;
+    makeCleanMeasurement (sweepLen, fs, ref, resp);
+
+    e.setReferenceLoaded (true);
+    const bool everPresent = driveContinuousNeverSettles (e, resp, N);
+    REQUIRE (everPresent);                              // the signal is STILL present at the end -> never settled
+    REQUIRE (e.gradeSignalPresent());                  // gradeSignalPresent() is TRUE -> the old gate could not fire
+
+    // Two consecutive matched polls (the new stable-match trigger). With gradeSignalPresent() TRUE throughout,
+    // the OLD code's `! settled` gate would have returned before grading on EVERY poll. It now grades.
+    bool graded = false;
+    PollDebounce db;
+    auto g = bug1PollTwicePresent (e, ref, fs, graded, db);
+    INFO ("published IR-SNR = " << e.refIrSnrDb() << " dB; gradeState = " << (int) g.state
+          << "; coherence = " << e.lastMatchCoherence() << "; signalPresent = " << e.gradeSignalPresent());
+    CHECK (graded);                                    // a grade IS published despite never settling
+    CHECK (e.gradeSignalPresent());                    // and the signal is STILL present (never settled) at grade time
+    const auto state = (eb::RefMonState) e.refMonState();
+    CHECK ((state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedSuspect));
+    CHECK (state != eb::RefMonState::NotGraded);
+    CHECK (state != eb::RefMonState::ReferenceStale);
+    CHECK (e.refIrSnrDb() > 0.0f);                     // an IR-SNR number was produced (the grade ran)
     CHECK (std::isfinite (e.refIrSnrDb()));
 }
 
@@ -282,7 +421,7 @@ TEST_CASE("Live grade: a WRONG-reference response through the seam grades Refere
     driveResponseThroughSeam (e, resp, N);
     bool graded = false;
     PollDebounce db;
-    auto g = matchPollAndPublish (e, ref, fs, graded, db);
+    auto g = matchPollTwiceAndPublish (e, ref, fs, graded, db);
 
     // The match-gate (FIRST) rejects the non-sweep noise: no clean/suspect grade, no quality number. The
     // coarse detector may or may not enter gradeMeasurementWindow; either way the precise gate inside it
@@ -317,7 +456,7 @@ TEST_CASE("Live grade: a finger-snap transient does NOT grade clean (the match-g
 
     bool graded = false;
     PollDebounce db;
-    auto g = matchPollAndPublish (e, ref, fs, graded, db);
+    auto g = matchPollTwiceAndPublish (e, ref, fs, graded, db);
     CHECK_FALSE (graded);                              // the snap is not the sweep -> no grade fired
     CHECK_FALSE (g.match.matched);
     CHECK ((eb::RefMonState) e.refMonState() != eb::RefMonState::GradedClean);
@@ -345,10 +484,12 @@ TEST_CASE("Live grade: NO reference loaded -> NotGraded, no window buffered") {
 }
 
 // ==================================================================================================
-// 6. Debounce: ONE settled sequence grades EXACTLY ONCE. A second poll over the same (still-settled,
-//    unchanged) window does NOT re-grade — the gradedThisSequence_ latch holds until fresh activity.
+// 6. Debounce: a SUSTAINED MATCH grades EXACTLY ONCE, until the match drops and returns. Once a match
+//    session has graded, further polls over the same (still-matching) window do NOT re-grade — the
+//    gradedThisSession_ latch holds until referenceMatches reports a non-match (a fresh sweep), which clears
+//    it so the next sustained match can grade again.
 // ==================================================================================================
-TEST_CASE("Live grade debounce: one settled sequence grades exactly once") {
+TEST_CASE("Live grade debounce: a sustained match grades exactly once until it drops and returns") {
     eb::AudioEngine e;
     const int    N  = 512;
     const int    sweepLen = 1 << 15;
@@ -363,18 +504,68 @@ TEST_CASE("Live grade debounce: one settled sequence grades exactly once") {
 
     bool graded1 = false;
     PollDebounce db;
-    matchPollAndPublish (e, ref, fs, graded1, db);
-    CHECK (graded1);                                   // first poll grades the settled sequence
+    matchPollTwiceAndPublish (e, ref, fs, graded1, db);   // two matched polls -> grades once
+    CHECK (graded1);                                       // first sustained match grades
 
-    // A second poll without any fresh signal activity must NOT re-grade: even though the capture thread may
-    // re-publish a snapshot of the same (still sweep-containing) ring, the gradedThisSequence_ debounce holds
-    // until a fresh settled->active edge starts a NEW sequence — which never happens here (all silence).
-    std::vector<float> silence ((size_t) N, 0.0f), mono ((size_t) N, 0.0f);
-    for (int i = 0; i < 60; ++i)
-        e.processCaptureBlockForTest (silence.data(), silence.data(), mono.data(), N);
+    // Further polls over the same still-matching window must NOT re-grade: the gradedThisSession_ debounce
+    // holds until the match drops (a non-match). The window still contains the sweep, so each of these polls
+    // still matches — yet no grade fires.
+    for (int i = 0; i < 4; ++i) {
+        bool g = false;
+        matchPollAndPublish (e, ref, fs, g, db);
+        CHECK_FALSE (g);                                   // no re-grade while the same match session holds
+    }
+
+    // Drop the match: re-prepare (resets the grading ring to empty -- a fresh run) and drive a NON-matching
+    // NOISE response. A poll over that window is a non-match, which CLEARS the session latch. Re-preparing
+    // keeps the loaded reference; it just gives a clean, un-wrapped ring (the measurement-restart case).
+    e.prepareForTest (fs, N);
+    std::vector<float> noise ((size_t) (sweepLen + 255), 0.0f);
+    unsigned seed = 99u;
+    for (auto& v : noise) { seed = seed * 1664525u + 1013904223u; v = 0.4f * ((float) (seed >> 9) / (float) (1u << 23) - 0.5f); }
+    driveResponseThroughSeam (e, noise, N);
+    bool gNoise = false;
+    matchPollTwiceAndPublish (e, ref, fs, gNoise, db);     // non-match -> clears the session latch, no grade
+    CHECK_FALSE (gNoise);
+
+    // A fresh matching sweep into the clean ring must re-arm and grade again (exactly once per match session).
+    e.prepareForTest (fs, N);
+    driveResponseThroughSeam (e, resp, N);
     bool graded2 = false;
-    matchPollAndPublish (e, ref, fs, graded2, db);
-    CHECK_FALSE (graded2);                             // no re-grade of the same settled sequence
+    matchPollTwiceAndPublish (e, ref, fs, graded2, db);
+    CHECK (graded2);                                       // re-armed: the new match session grades again
+}
+
+// ==================================================================================================
+// 6b. BUG-2: the state does NOT revert to NotLearned when a measurement starts. setReferenceLoaded(true)
+//     publishes Learned, but the prepare-callbacks seam (mirroring start()'s hm.prepare) used to RESET the
+//     published state back to NotLearned — so during a run the state LIED (NotLearned despite a reference
+//     loaded). The seam now re-publishes the honest state after hm.prepare: Learned with a reference,
+//     NotLearned without.
+// ==================================================================================================
+TEST_CASE("Bug 2: state stays Learned (not NotLearned) after a run starts with a reference loaded") {
+    eb::AudioEngine e;
+    const int    N  = 512;
+    const double fs = 48000.0;
+
+    // A reference IS loaded before the run begins (the user learned one). Then the run starts (the seam runs
+    // the same hm.prepare() that start() does). The published state must be Learned, NOT the NotLearned that
+    // hm.prepare() resets to.
+    e.setReferenceLoaded (true);
+    CHECK ((eb::RefMonState) e.refMonState() == eb::RefMonState::Learned);   // honest right after learn
+    e.prepareCallbacksForTest (fs, N, 8192);                                 // mirrors start(): hm.prepare + re-publish
+    CHECK ((eb::RefMonState) e.refMonState() == eb::RefMonState::Learned);   // NOT reverted to NotLearned
+    CHECK ((eb::RefMonState) e.refMonState() != eb::RefMonState::NotLearned);
+}
+
+TEST_CASE("Bug 2: state is NotLearned after a run starts with NO reference loaded") {
+    eb::AudioEngine e;
+    const int    N  = 512;
+    const double fs = 48000.0;
+
+    // No reference loaded (the default). After the run starts, the honest state is NotLearned.
+    e.prepareCallbacksForTest (fs, N, 8192);
+    CHECK ((eb::RefMonState) e.refMonState() == eb::RefMonState::NotLearned);
 }
 
 // ==================================================================================================
