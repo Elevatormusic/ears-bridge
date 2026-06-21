@@ -89,3 +89,19 @@ TEST_CASE("Settings persists update-check preferences", "[update]") {
     CHECK (reloaded.autoCheckUpdates() == false);
     dir.deleteRecursively();
 }
+
+TEST_CASE("Settings persists the advanced Dirac-path override") {
+    // Opt-in advanced override for the combine-mode / output Start gates (#3).
+    // Default OFF (the standard guarded Dirac path); a chosen ON survives a reload.
+    auto dir = makeTempDir();
+    {
+        eb::Settings s (dir);
+        CHECK (s.advancedOverride() == false);   // default OFF
+        s.setAdvancedOverride (true);
+        CHECK (s.advancedOverride() == true);     // in-memory round-trip
+        s.flush();
+    }
+    eb::Settings reloaded (dir);                  // re-open same folder -> reads back the file
+    CHECK (reloaded.advancedOverride() == true);
+    dir.deleteRecursively();
+}

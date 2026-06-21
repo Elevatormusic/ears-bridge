@@ -14,6 +14,7 @@ namespace {
     constexpr const char* kFirLen     = "firLength";
     constexpr const char* kComplex    = "complexPhase";
     constexpr const char* kAutoCheck  = "autoCheckUpdates";
+    constexpr const char* kAdvOverride = "advancedOverride";
 }
 
 Settings::Settings (const juce::File& dir) {
@@ -71,6 +72,12 @@ void Settings::setComplexPhase (bool b) { file->setValue (kComplex, b); }
 
 bool Settings::autoCheckUpdates() const { return file->getBoolValue (kAutoCheck, true); }
 void Settings::setAutoCheckUpdates (bool b) { file->setValue (kAutoCheck, b); }
+
+// Opt-in advanced override for the combine-mode / output Start gates (#3). Default OFF: a
+// fresh install enforces the standard guarded Dirac path. An advanced user must expand
+// Advanced AND tick the toggle to relax the two policy gates (never devices/calibration).
+bool Settings::advancedOverride() const { return file->getBoolValue (kAdvOverride, false); }
+void Settings::setAdvancedOverride (bool b) { file->setValue (kAdvOverride, b); }
 
 void Settings::flush() { file->saveIfNeeded(); }
 

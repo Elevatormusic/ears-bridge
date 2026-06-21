@@ -115,6 +115,9 @@ private:
     juce::ToggleButton advancedToggle { "Advanced" };
     juce::ToggleButton complexPhaseToggle { "Complex (with-phase) FIR" };
     juce::ToggleButton autoUpdateToggle { "Automatically check for updates" };
+    // #3: opt-in escape hatch from the Dirac-path Start gates (combine-mode + virtual output).
+    // Nested inside Advanced so it takes a deliberate expand-and-tick; never bypasses cal/devices.
+    juce::ToggleButton overrideToggle { "Allow non-Dirac use (skip combine-mode / output checks)" };
     juce::Label    firLenLabel; juce::ComboBox firLenBox;
     juce::Label    trimLabel;   juce::Slider trimSlider;
     // L/R check: drive a tone into the LEFT earcup; the engine reports whether L/R are wired right.
