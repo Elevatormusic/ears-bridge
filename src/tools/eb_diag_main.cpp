@@ -475,8 +475,9 @@ int runSelfTest() {
     auto logDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
                       .getChildFile ("EarsBridge").getChildFile ("selftest");
     logDir.createDirectory();
-    // A fresh file each run so the path holds only this run's trace.
-    logDir.getChildFile ("eb.log").deleteFile();
+    // DiagnosticLog now writes a per-launch file (eb-<stamp>.log) and bounds the
+    // folder itself, so we no longer pre-delete a fixed name — currentFile() tells
+    // us exactly which file THIS run wrote.
     eb::DiagnosticLog log (logDir);
     const juce::File logFile = logDir.getChildFile ("selftest.log");
     Trace trace { log };
@@ -537,9 +538,9 @@ int runSelfTest() {
     const std::string summary = "SELFTEST: " + std::to_string (passed) + "/" + std::to_string (total) + " passed";
     trace (summary);
 
-    // Mirror the rotating eb.log to the named selftest.log path the spec asks for (so the path is stable and
-    // self-describing), then print it. The DiagnosticLog wrote to eb.log; copy it to selftest.log.
-    logDir.getChildFile ("eb.log").copyFileTo (logFile);
+    // Mirror this launch's per-launch log to the named selftest.log path the spec asks for (so the path is
+    // stable and self-describing), then print it. The DiagnosticLog wrote to currentFile(); copy it across.
+    log.currentFile().copyFileTo (logFile);
     std::cout << "selftest.log: " << logFile.getFullPathName() << "\n";
 
     return (passed == total) ? 0 : 1;
