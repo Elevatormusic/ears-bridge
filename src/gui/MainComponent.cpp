@@ -1088,6 +1088,15 @@ void MainComponent::updateStatusLine() {
                                    + " dB above the room-noise floor. Quieten the room (close windows, "
                                      "stop fans/AC) or raise the level, then re-measure for a cleaner "
                                      "correction.");
+        } else if (chainVerdict_.checked && ! chainVerdict_.all48k) {
+            // 48k-everywhere VETO. Placed ABOVE the reference-monitor + green "Sweep captured + verified"
+            // branches so a wrong-rate (or unreadable) chain can NEVER read green "verified" — the reference
+            // monitor REQUIRES 48k on all three endpoints, and a 44.1k Dirac output silently invalidates the
+            // measurement. Hard errors above (invalid capture / output-clip / low-SNR) still win — those are
+            // signal failures the user must see first; this is the config layer. chainVerdict_.summary is a
+            // single short title-bar line naming the off-48k / unreadable endpoint(s).
+            statusLine.setText (chainVerdict_.summary, juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::warn());
         } else if ((engine.referenceLoaded()
                     || (eb::RefMonState) engine.refMonState() != eb::RefMonState::NotLearned)
                    && refMonBlocksGreen ((eb::RefMonState) engine.refMonState())
@@ -1228,6 +1237,12 @@ void MainComponent::updateStatusLine() {
             statusLine.setText ("Couldn't confirm left/right from these files - double-check the slots.",
                                 juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+        } else if (chainVerdict_.checked && ! chainVerdict_.all48k) {
+            // 48k-everywhere warning surfaced PRE-START: devices + cals are ready and no higher-precedence
+            // gate (device/mode/override/side) is pending, but the chain isn't all-48k. Warn now so the user
+            // fixes the rate BEFORE running a sweep the reference monitor would have to invalidate.
+            statusLine.setText (chainVerdict_.summary, juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::warn());
         } else {
             statusLine.setText ({}, juce::dontSendNotification);
         }
@@ -1542,6 +1557,52 @@ void MainComponent::updateActiveEarIndicator (bool silent) {
         levelsHint.setText (text, juce::dontSendNotification);
 }
 
+void MainComponent::pollChainConfig() {
+    // 48k-everywhere chain-config check. Throttled to ~1 s (the GUI timer is 30 Hz). Windows fires NO
+    // device-list event for a same-device format change (44.1k->48k) and Dirac's output rate has no event
+    // at all, so we POLL the three endpoint mix formats on the timer (pre-Start too). Each read is a pure
+    // EndpointFormat read (or "" off-Windows -> valid=false -> "couldn't read", never a false pass).
+    if (++chainPollTick_ < kChainPollTicks) return;
+    chainPollTick_ = 0;
+
+    eb::ChainConfig cfg;
+    if (const auto in = inputPicker.selectedDevice())
+        cfg.input = eb::readEndpointFormat (in->name, /*isInput*/ true);
+    if (const auto out = outputPicker.selectedDevice())
+        cfg.cable = eb::readEndpointFormat (out->name, /*isInput*/ false);   // the cable's CAPTURE-feeding render endpoint
+    if (const auto diracOut = eb::readDiracOutputDeviceName(); diracOut.isNotEmpty())
+        cfg.diracOutput = eb::readEndpointFormat (diracOut, /*isInput*/ false);
+
+    chainVerdict_ = eb::checkChainConfig (cfg);
+
+    // Log ON CHANGE only (the summary text is the change key; "all-48k" / "unchecked" both summarise as ""),
+    // and include each endpoint's rate/channels/bits so the failing format is in the log, not just the verdict.
+    const juce::String key = chainVerdict_.checked
+        ? (chainVerdict_.all48k ? juce::String ("ok") : chainVerdict_.summary)
+        : juce::String ("unchecked");
+    if (key != lastChainSummaryLogged_) {
+        auto fmtStr = [] (const eb::EndpointFormat& f) -> juce::String {
+            if (! f.valid) return "<unreadable>";
+            return juce::String (f.mixRateHz, 0) + "Hz/" + juce::String (f.channels) + "ch/"
+                 + juce::String (f.bits) + "bit" + (f.isFloat ? "f" : "");
+        };
+        logLine (chainVerdict_.checked && ! chainVerdict_.all48k
+                     ? eb::DiagnosticLog::Level::Info     // a real mismatch worth surfacing
+                     : eb::DiagnosticLog::Level::Debug,   // ok / unchecked: quieter
+                 juce::String ("Chain config (48k gate): ")
+               + (chainVerdict_.checked ? (chainVerdict_.all48k ? "all 48k" : ("WARN " + chainVerdict_.summary))
+                                        : "unchecked (no endpoint read)")
+               + " | input=" + fmtStr (cfg.input)
+               + " cable=" + fmtStr (cfg.cable)
+               + " diracOutput=" + fmtStr (cfg.diracOutput));
+        lastChainSummaryLogged_ = key;
+        // The pre-Start status line only refreshes on events (updateStartGate), so a chain change while
+        // idle (e.g. Dirac's output rate switched) wouldn't otherwise surface. Refresh it on a verdict
+        // change. When Running, timerCallback already refreshes the line every tick.
+        if (engine.status() != EngineStatus::Running) updateStatusLine();
+    }
+}
+
 void MainComponent::timerCallback() {
     // A device removed mid-run (unplug / sleep / gain-DIP re-enumerate) latches deviceDied_ from its
     // audioDeviceStopped() callback. Tear it down and surface it, instead of leaving the engine sitting
@@ -1576,6 +1637,7 @@ void MainComponent::timerCallback() {
     lowSnrTicks_ = any (engine.health().flags & HealthFlag::LowSnr) ? (lowSnrTicks_ + 1) : 0;
     updateActiveEarIndicator (blockSilent);   // AutoPerEar: highlight the earcup being captured now
     pollReferenceGrade();                      // Plan 5: drain a completed-sweep grade request (off-thread grading)
+    pollChainConfig();                         // 48k-everywhere chain-config check (warn + veto green; pre-Start too)
     if (engine.status() == EngineStatus::Running) updateStatusLine();
 
     // ---- Diagnostic log: reference-monitor transitions ON CHANGE + a ~30 s heartbeat (Task 3) ----

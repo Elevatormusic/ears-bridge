@@ -11,6 +11,7 @@
 #include "gui/RateMenu.h"
 #include "net/UpdateChecker.h"
 #include "diag/DiagnosticLog.h"     // eb::DiagnosticLog (Task 1 of the match-detection + diagnostic-logging build)
+#include "audio/DeviceConfigCheck.h"  // eb::checkChainConfig (48k-everywhere chain-config check)
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -218,6 +219,17 @@ private:
     // Every log line goes through here: it runs the message through DiagnosticLog::redactSerial against
     // loggedSerial_ first, then writes it. A no-op when log_ is null.
     void logLine (eb::DiagnosticLog::Level level, const juce::String& msg);
+    // 48k-everywhere chain-config check (Reference-Based Measurement Monitor). On the GUI timer (throttled
+    // to ~once/sec) read the three endpoints — input = the selected input, cable = the selected OUTPUT,
+    // diracOutput = readDiracOutputDeviceName — run eb::checkChainConfig, store the verdict, and log it ON
+    // CHANGE (with each endpoint's rate/channels/bits). updateStatusLine reads chainVerdict_ to WARN +
+    // VETO the green "verified" line when the chain isn't all-48k. The live reads are Windows/on-device;
+    // the verdict LOGIC is fully unit-tested headless (test_deviceconfigcheck.cpp).
+    void pollChainConfig();
+    eb::ConfigVerdict chainVerdict_;                  // last computed verdict (read by updateStatusLine)
+    int    chainPollTick_ = 0;                        // 30 Hz tick counter for the ~1 s chain-config throttle
+    static constexpr int kChainPollTicks = 30;        // ~1 s at the 30 Hz GUI timer
+    juce::String lastChainSummaryLogged_;             // last chain-config line logged (log on change only)
     // Snapshot the selected input/output device + endpoint format, and the Dirac config, into the log.
     // Called at launch and whenever the device selection / format changes. Pure reads of the existing
     // device-layer + Dirac reads (no new probing).
