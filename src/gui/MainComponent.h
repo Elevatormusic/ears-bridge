@@ -134,7 +134,7 @@ private:
     // OFFLINE against the learned reference, then surfaces the verdict in the status ladder.
     void onLearnReference();         // Advanced affordance: capture + validate + store a loopback reference (on-device)
     void loadStoredReference();      // startup: reload a previously-learned reference.f32 so it survives a restart
-    void pollReferenceGrade();       // timer: drain engine.consumePendingGrade(), run gradeMeasurement off-thread, publish
+    void pollReferenceGrade();       // timer (~2 s): snapshot the ring, referenceMatches it (detector), grade off-thread, publish
     juce::String referenceStatePath_;                 // stored reference file (empty until learned this session)
     // Reference-Based Measurement Monitor (Plan 5): the learned reference held IN MEMORY for grading. The
     // GUI worker (pollReferenceGrade) needs both halves — this reference and the engine's response buffer —
@@ -142,6 +142,15 @@ private:
     std::vector<float> loadedReference_;              // the learned ESS reference samples (empty until learned)
     double             loadedReferenceRate_ = 48000.0;
     std::atomic<bool>  gradeInFlight_ { false };      // guards against re-posting while a grade job runs
+    // Task 4 match poll: the 30 Hz timer calls pollReferenceGrade, but the MATCH (a cross-correlation FFT) is
+    // throttled to ~every kGradePollTicks ticks (~2 s) while Running + referenceLoaded. gradedThisSequence_ is
+    // the one-grade-per-sequence DEBOUNCE: set when a sequence is graded, CLEARED when fresh signal activity
+    // (gradeSignalPresent rising after a settled gap) starts a new sweep sequence. gradeWasSettled_ tracks the
+    // previous poll's settled state so the rising edge can be detected. There is NO absolute level gate here.
+    int                gradePollTick_       = 0;      // 30 Hz tick counter for the ~2 s match-poll throttle
+    static constexpr int kGradePollTicks    = 60;     // ~2 s at the 30 Hz GUI timer
+    bool               gradedThisSequence_  = false;  // debounce latch: this settled sequence already graded
+    bool               gradeWasSettled_     = true;   // previous poll's settled state (start settled = silent)
     // Cancellable + restartable learn: the button doubles as Learn / Cancel. learnCancelRequested_ is the
     // message-thread -> firPool hand-off (set on a cancel click, polled inside captureLoopback). learning_ is
     // message-thread-only state guarding against a double-start during the brief cancel window.
@@ -213,6 +222,7 @@ private:
     // state/peak/coherence/verdict ON CHANGE (not every 30 Hz tick), plus a ~30 s heartbeat tick counter.
     int    lastRefMonStateLogged_ = -1;          // RefMonState int; -1 = never logged
     bool   lastRefLoadedLogged_   = false;
+    juce::String lastListenTextLogged_;          // last Listening<->Sweep-in-progress status text logged (Task 4)
     int    lastInputPeakBucketLogged_ = -1000;   // bucketed input peak (dB) so tiny jitter doesn't spam
     int    lastCoherBucketLogged_     = -1000;   // bucketed match coherence (0.05 buckets)
     juce::String lastDeviceKeyLogged_;           // input|output key pair last snapshotted (re-log on change)

@@ -817,6 +817,9 @@ void MainComponent::onStartStop() {
         if (engine.start (err)) {
             startStop.setButtonText ("Stop");
             inputClipHold_ = 0; silentTicks_ = 0; lowLevelTicks_ = 0; lowSnrTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
+            // Task 4 match-poll debounce: a fresh run starts settled (silent) and un-graded, so the first
+            // sweep's settled->active edge starts a new sequence cleanly and grades exactly once.
+            gradePollTick_ = 0; gradedThisSequence_ = false; gradeWasSettled_ = true; lastListenTextLogged_.clear();
             // Surface a silent format downgrade: WASAPI shared mode can grant a different rate/depth
             // than the user selected, which would otherwise resample with no indication. The split:
             // genuine cautions (a real resample, an unverifiable rail) go on preflightLabel (yellow);
@@ -1003,15 +1006,24 @@ void MainComponent::updateStatusLine() {
             // Before the sweep arms: validity isn't scoped to anything yet, so don't claim "clean" and
             // suppress the in-sweep warnings below (output-clip / silent / low-level), which are only
             // meaningful once Dirac is actually driving the sweep. With a reference loaded the grade no
-            // longer depends on the (gradual-sweep-blind) level arm — the engine listens via the rolling
-            // ring + the deterministic match — so say "Listening" (NOT "waiting", which implied the old,
-            // broken arm). Non-adopters (no reference learned, no verdict yet) keep the unchanged wording.
+            // longer depends on the (level-blind) arm — the engine listens via the rolling ring + the
+            // off-thread reference MATCH (Task 4) — so show the cosmetic activity state: "Sweep in
+            // progress..." while signal is present, "Listening..." while quiet. Non-adopters (no reference
+            // learned, no verdict yet) keep the unchanged wording.
             const bool refEngaged = engine.referenceLoaded()
                                  && (eb::RefMonState) engine.refMonState() != eb::RefMonState::GradedClean
                                  && (eb::RefMonState) engine.refMonState() != eb::RefMonState::GradedSuspect
                                  && (eb::RefMonState) engine.refMonState() != eb::RefMonState::ReferenceStale;
-            statusLine.setText (refEngaged ? "Listening for the Dirac sweep..."
-                                           : "Running - waiting for the Dirac sweep...",
+            // Cosmetic activity flag drives ONLY this text (never the grade): present -> the sweep is
+            // sounding now; quiet -> waiting for it. Log each Listening<->Sweep-in-progress transition.
+            const bool active = engine.gradeSignalPresent();
+            const juce::String refText = active ? "Sweep in progress..." : "Listening for the Dirac sweep...";
+            if (refEngaged && refText != lastListenTextLogged_) {
+                logLine (eb::DiagnosticLog::Level::Info, "RefMon status: " + refText);
+                lastListenTextLogged_ = refText;
+            }
+            statusLine.setText (refEngaged ? refText
+                                           : juce::String ("Running - waiting for the Dirac sweep..."),
                                 juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::textDim());
         } else if (any (h.flags & HealthFlag::ClipOutput)) {
@@ -1342,27 +1354,50 @@ void MainComponent::onLearnReference() {
 }
 
 void MainComponent::pollReferenceGrade() {
-    // Timer-driven: the engine's DETERMINISTIC activity-edge trigger (#7 fix) fired pendingGrade_ after a
-    // measurement sequence finished with a reference loaded. Run the OFFLINE alignment + deconvolution +
-    // gradeMeasurement on the worker (NOT the audio thread, NOT the message thread — it is several FFT
-    // passes), then publish the verdict via the engine atomics so updateStatusLine reflects it. Both halves
-    // are live: the learned reference is held in loadedReference_, and the mic response is buffered
-    // CONTINUOUSLY by the capture thread into the engine's rolling ring (copied out here as a long WINDOW).
-    // The match-gate (inside gradeMeasurementWindow) is the correctness decision: a non-sweep window (a
-    // finger snap, music, the inter-sweep gap) fails it and grades ReferenceStale — never a false clean grade.
-    // Check the act-on-it preconditions BEFORE draining pendingGrade_, so a grade isn't silently consumed
-    // while a prior one is still running (it stays pending and the next poll picks it up).
-    if (gradeInFlight_.load()) return;                                    // a prior grade is still running
+    // Task 4 reference-MATCH grading (replaces the broken absolute-level arm). The capture thread buffers the
+    // active-ear mic response CONTINUOUSLY into the engine's rolling ring and publishes a fresh window snapshot
+    // every ~0.5 s. Here, throttled to ~2 s, we copy that window out and run eb::referenceMatches over it —
+    // the MATCH is the DETECTOR, so a measurement at ANY level (incl. the low ~-25 dBFS the old -24 dBFS arm
+    // could never fire on) is detected. There is NO absolute level gate anywhere in this grade path.
+    //
+    // Order: (1) snapshot the match coherence for the diagnostic log; (2) DEBOUNCE — track the settled/active
+    // edge so one settled sequence grades exactly once (gradedThisSequence_, cleared when fresh activity starts
+    // a new sweep); (3) only when matched AND the signal has SETTLED (!gradeSignalPresent) AND not already
+    // graded this sequence, run the OFFLINE align + match-gate + quality grade on the worker and publish.
     if (loadedReference_.empty() || ! engine.referenceLoaded()) return;   // nothing to grade against
-    if (! engine.consumePendingGrade()) return;                          // no completed-sequence grade to run
 
-    // Copy the FULL rolling-ring WINDOW out of the engine into our own buffer (the allocation lives here,
-    // not the engine). The window is leading silence + the sweep somewhere inside it; the worker aligns
-    // the reference inside it via cross-correlation, so we must NOT truncate it to the reference length.
+    // Debounce edge tracking runs every tick (cheap atomic read) so the rising-activity edge isn't missed
+    // between the throttled match polls. A settled->active transition starts a NEW sweep sequence: clear the
+    // graded latch so the next settle can grade again.
+    const bool settled = ! engine.gradeSignalPresent();
+    if (gradeWasSettled_ && ! settled) gradedThisSequence_ = false;       // fresh activity -> new sequence
+    gradeWasSettled_ = settled;
+
+    if (gradeInFlight_.load()) return;                                    // a prior grade is still running
+    if (++gradePollTick_ < kGradePollTicks) return;                      // ~2 s match-poll throttle
+    gradePollTick_ = 0;
+
+    if (! engine.gradingResponseReady()) return;                         // no fresh ring window published yet
+
+    // Copy the FULL rolling-ring WINDOW out of the engine into our own buffer (the allocation lives here, not
+    // the engine). The window is leading silence + the sweep somewhere inside it; the worker aligns the
+    // reference inside it via cross-correlation, so we must NOT truncate it to the reference length.
     std::vector<float> window ((size_t) juce::jmax (1, (int) std::lround (engine.gradingResponseRate() * 28.0)), 0.0f);
     const int got = engine.copyGradingResponse (window.data(), (int) window.size());
-    if (got <= 0) return;   // no fresh window ready (shouldn't happen when pendingGrade fired, but be safe)
+    if (got <= 0) return;
     window.resize ((size_t) got);
+
+    // The DETECTOR: cross-correlate the window against the learned reference. Publish the coherence so the
+    // diagnostic log + the RefMon-change line see it (the match-gate ran here, FIRST, before any quality).
+    const int matchLen = juce::jmin ((int) loadedReference_.size(), (int) window.size());
+    const auto m = eb::referenceMatches (loadedReference_.data(), window.data(), matchLen);
+    engine.setLastMatchCoherence (m.coherence);
+
+    // Grade ONLY when: it MATCHED (a non-match is never a low-quality grade — the gate runs first), the signal
+    // has SETTLED (the sweep ended, so the window holds the whole sequence), and this sequence has not already
+    // been graded (one-grade-per-sequence debounce). No level gate participates in this decision.
+    if (! m.matched || ! settled || gradedThisSequence_) return;
+    gradedThisSequence_ = true;                                          // latch: don't re-grade this sequence
 
     gradeInFlight_.store (true);
     juce::Component::SafePointer<MainComponent> safe (this);
