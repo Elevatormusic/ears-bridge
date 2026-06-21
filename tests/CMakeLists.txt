@@ -25,6 +25,7 @@ add_executable(eb_tests
     test_rawrailstatus.cpp
     test_snrstatus.cpp
     test_irquality.cpp
+    test_refmonitor.cpp
     test_loopbackreference.cpp
     test_measurementsession.cpp
     test_combinegate.cpp

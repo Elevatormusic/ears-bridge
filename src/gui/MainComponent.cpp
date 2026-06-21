@@ -6,6 +6,8 @@
 #include "platform/DiracCompat.h"
 #include "cal/CalibrationPairValidator.h"   // eb::validateCalibrationPair (P0-07)
 #include "audio/CalibrationGeneration.h"    // eb::CalibrationGeneration (generation lifecycle)
+#include "audio/RefMonitor.h"               // eb::RefMonState / gradeMeasurement / refMonBlocksGreen (Plan 5)
+#include "audio/LoopbackReference.h"        // eb::captureLoopback / validateReferenceCapture / readDiracDeviceType (Plan 5)
 #include <algorithm>
 #include <cmath>
 
@@ -230,6 +232,16 @@ MainComponent::MainComponent() {
     verifyResultLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     verifyResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
     addChildComponent (verifyResultLabel);
+
+    // Reference-Based Measurement Monitor (Plan 5): learn the loopback reference. The capture itself is a
+    // Windows WASAPI loopback (on-device) and must run with Dirac's Processor in Windows Audio (shared)
+    // mode; we detect that read-only and inform. Only meaningful while Stopped (the loopback can't run
+    // alongside the live ASIO measurement).
+    learnRefButton.onClick = [this] { onLearnReference(); };
+    addChildComponent (learnRefButton);
+    learnRefResultLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
+    learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
+    addChildComponent (learnRefResultLabel);
 
     // --- Right pane: cal cards + Levels ---
     styleEyebrow (calEyebrow, "CALIBRATION");
@@ -702,6 +714,7 @@ void MainComponent::updateControlsEnabled() {
     firLenBox.setEnabled          (! frozen);
     complexPhaseToggle.setEnabled (! frozen);
     trimSlider.setEnabled         (! frozen);
+    learnRefButton.setEnabled     (! frozen);   // the loopback learn can't run alongside the live measurement
 }
 
 void MainComponent::syncPlotScales() {
@@ -784,10 +797,47 @@ void MainComponent::updateStatusLine() {
                                    + " dB above the room-noise floor. Quieten the room (close windows, "
                                      "stop fans/AC) or raise the level, then re-measure for a cleaner "
                                      "correction.");
+        } else if ((engine.referenceLoaded()
+                    || (eb::RefMonState) engine.refMonState() != eb::RefMonState::NotLearned)
+                   && refMonBlocksGreen ((eb::RefMonState) engine.refMonState())) {
+            // Reference-Based Measurement Monitor — surfaced ABOVE the green "captured" branch so a NOT-
+            // graded / mismatched / suspect measurement can NEVER read as a clean green capture. The
+            // grading is GUIDANCE (it never invalidated cleanCapture above); the state machine decides the
+            // wording. GradedClean is the only state that falls THROUGH to the green branch below (it is
+            // NOT green-blocking, so refMonBlocksGreen excludes it here). This branch only engages once the
+            // reference monitor is ENGAGED (a reference loaded, or a verdict already published) — when no
+            // reference was ever learned (the NotLearned default) it falls through to the existing ladder,
+            // so users who never opt into the monitor keep the unchanged green "Sweep captured".
+            const auto state = (eb::RefMonState) engine.refMonState();
+            if (state == eb::RefMonState::ReferenceStale) {
+                statusLine.setText ("Reference doesn't match your sweep - re-learn", juce::dontSendNotification);
+                statusLine.setColour (juce::Label::textColourId, Theme::warn());
+                statusLine.setTooltip ("The deconvolution didn't match the learned reference (the gate "
+                                       "failed). Re-learn the reference in Dirac's Windows Audio mode "
+                                       "(Advanced -> Learn reference), then measure again.");
+            } else if (state == eb::RefMonState::GradedSuspect) {
+                // Short note inline (status line is narrow); the full IR-SNR/THD detail goes in the tooltip.
+                const int snr = juce::roundToInt (engine.refIrSnrDb());
+                const int thd = juce::roundToInt (engine.refThdPercent());
+                statusLine.setText ("Measurement quality low - " + juce::String (snr) + " dB IR-SNR",
+                                    juce::dontSendNotification);
+                statusLine.setColour (juce::Label::textColourId, Theme::warn());
+                statusLine.setTooltip ("Graded against the reference: IR-SNR " + juce::String (snr)
+                                       + " dB, distortion " + juce::String (thd)
+                                       + "%. Below the provisional clean cutoff - quieten the room or "
+                                         "raise the level and re-measure. (Guidance; thresholds are "
+                                         "provisional pending on-device ratification.)");
+            } else {
+                // NotLearned / Learned / NotGraded: a reference path exists but nothing clean is graded.
+                statusLine.setText ("Not graded - learn a reference (Advanced)", juce::dontSendNotification);
+                statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+            }
         } else if (h.session == SessionPhase::Complete) {
             // Sweep finished clean: an honest sweep-scoped all-clear (no dropouts / clipping seen during
             // the captured sweep), with the OS-resampled caveat when the input ran through OS SRC.
             juce::String msg = "Sweep captured - no clipping or dropouts detected";
+            if ((eb::RefMonState) engine.refMonState() == eb::RefMonState::GradedClean)
+                msg = "Sweep captured + verified against the reference";   // graded clean against the learned ref
             if (any (h.flags & HealthFlag::OsResampled)) msg += " (OS-resampled - approximate)";
             statusLine.setText (msg, juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::ok());
@@ -884,6 +934,88 @@ void MainComponent::updateStatusLine() {
     }
 }
 
+// ---- Reference-Based Measurement Monitor (Plan 5): learn + grade ----------------------
+void MainComponent::onLearnReference() {
+    // The learn capture is a Windows WASAPI loopback (on-device) — it can only succeed while Dirac's
+    // Processor plays through "Windows Audio" (shared); in ASIO/exclusive the loopback is silent. We
+    // detect the mode READ-ONLY from the settings file (never edit it — auto-switch is deferred to v2)
+    // and warn before we even try. The capture + validate runs OFF the message thread (firPool).
+    if (engine.status() == EngineStatus::Running) {
+        learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
+        learnRefResultLabel.setText ("Stop the bridge before learning a reference.", juce::dontSendNotification);
+        return;
+    }
+
+#if JUCE_WINDOWS
+    // Read-only Dirac-mode detection: inform if it's not in Windows Audio (the loopback will be silent).
+    const juce::String deviceType = eb::readDiracDeviceType();
+    if (deviceType.isNotEmpty() && ! eb::diracDeviceTypeIsWindowsAudio (deviceType)) {
+        learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
+        learnRefResultLabel.setText ("Dirac is in \"" + deviceType + "\" - switch it to Windows Audio first, "
+                                     "then learn.", juce::dontSendNotification);
+        return;
+    }
+
+    learnRefButton.setEnabled (false);
+    learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
+    learnRefResultLabel.setText ("Learning - run a Dirac measurement now (~25 s)...", juce::dontSendNotification);
+
+    juce::Component::SafePointer<MainComponent> safe (this);
+    const double rate = activeRate();
+    firPool->addJob ([safe, rate]() mutable {
+        // Capture the loopback for the full L-then-R sweep sequence (~26 s), then validate the PURE core.
+        auto cap = eb::captureLoopback ("CABLE", 26.0, rate);   // first VB-CABLE-ish render endpoint
+        juce::String resultMsg; bool ok = false;
+        std::vector<float> samples; double capRate = rate;
+        if (! cap.ok) {
+            resultMsg = "Capture failed: " + cap.reason;
+        } else {
+            const auto v = eb::validateReferenceCapture (cap.samples.data(), (int) cap.samples.size(), cap.rate);
+            if (! v.ok) { resultMsg = "Rejected: " + v.reason; }
+            else        { ok = true; samples = std::move (cap.samples); capRate = cap.rate;
+                          resultMsg = "Reference learned (" + juce::String (samples.size() / capRate, 1) + " s)."; }
+        }
+        juce::MessageManager::callAsync ([safe, ok, resultMsg, samples = std::move (samples), capRate]() mutable {
+            auto* mc = safe.getComponent();
+            if (! mc) return;
+            mc->learnRefButton.setEnabled (true);
+            mc->learnRefResultLabel.setColour (juce::Label::textColourId, ok ? Theme::ok() : Theme::warn());
+            mc->learnRefResultLabel.setText (resultMsg, juce::dontSendNotification);
+            if (ok) {
+                // Store the reference + metadata on disk and mark it loaded so the engine grades against it.
+                auto md  = eb::makeReferenceMetadata (samples.data(), (int) samples.size(), capRate);
+                auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                               .getChildFile ("EarsBridge");
+                dir.createDirectory();
+                auto refFile = dir.getChildFile ("reference.f32");
+                refFile.replaceWithData (samples.data(), samples.size() * sizeof (float));
+                mc->referenceStatePath_ = refFile.getFullPathName();
+                mc->engine.setReferenceLoaded (true);
+            }
+        });
+    });
+#else
+    learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
+    learnRefResultLabel.setText ("Reference learning needs the Windows WASAPI loopback.", juce::dontSendNotification);
+#endif
+}
+
+void MainComponent::pollReferenceGrade() {
+    // Timer-driven: a sweep COMPLETED with a reference loaded (the engine set pendingGrade_ at the edge).
+    // Run the OFFLINE deconvolution + gradeMeasurement on the worker (NOT the audio thread), then publish
+    // the verdict via the engine atomics so updateStatusLine reflects it. The per-segment mic-response
+    // CAPTURE that feeds gradeMeasurement is the ON-DEVICE half (it needs the live ASIO measurement buffer,
+    // which the headless engine does not yet expose) — so this scaffolds the worker wiring; the response
+    // buffer hand-off is the remaining on-device piece (see the report).
+    if (! engine.consumePendingGrade()) return;
+    // On-device: load the learned reference + the just-captured response, then:
+    //   auto g = eb::gradeMeasurement (ref.data(), resp.data(), n, rate);
+    //   engine.publishReferenceGrade ((int) g.state, g.quality.irSnrDb, g.quality.thdPercent,
+    //                                 g.state == eb::RefMonState::ReferenceStale, g.quality.lowQuality);
+    // Until the live response buffer is wired, leave the published state as-is (the engine already
+    // published NotGraded for the no-reference case at the edge).
+}
+
 void MainComponent::updateActiveEarIndicator (bool silent) {
     // In AutoPerEar mode, EARS Bridge feeds Dirac only the earcup Dirac is currently sweeping. Show
     // which side that is, so the user can confirm the bridge is following Dirac's left-then-right
@@ -950,6 +1082,7 @@ void MainComponent::timerCallback() {
     // until the next Start re-scopes. Mirrors the lowLevelTicks_ debounce pattern.
     lowSnrTicks_ = any (engine.health().flags & HealthFlag::LowSnr) ? (lowSnrTicks_ + 1) : 0;
     updateActiveEarIndicator (blockSilent);   // AutoPerEar: highlight the earcup being captured now
+    pollReferenceGrade();                      // Plan 5: drain a completed-sweep grade request (off-thread grading)
     if (engine.status() == EngineStatus::Running) updateStatusLine();
 
     // Raw-input (ADC) clipping warning. Re-arm from the edge-triggered, self-clearing recent-clip
@@ -1119,6 +1252,7 @@ void MainComponent::resized() {
         firLenLabel.setVisible (adv); firLenBox.setVisible (adv);
         trimLabel.setVisible (adv);   trimSlider.setVisible (adv);
         verifyButton.setVisible (adv); verifyResultLabel.setVisible (adv);
+        learnRefButton.setVisible (adv); learnRefResultLabel.setVisible (adv);
         autoUpdateToggle.setVisible (adv);
         overrideToggle.setVisible (adv);   // #3: only reachable with Advanced expanded
         if (adv) {
@@ -1134,6 +1268,10 @@ void MainComponent::resized() {
             verifyButton.setBounds (rr.removeFromTop (30));
             rr.removeFromTop (4);
             verifyResultLabel.setBounds (rr.removeFromTop (16));
+            rr.removeFromTop (10);
+            learnRefButton.setBounds (rr.removeFromTop (30));
+            rr.removeFromTop (4);
+            learnRefResultLabel.setBounds (rr.removeFromTop (16));
             rr.removeFromTop (10);
             autoUpdateToggle.setBounds (rr.removeFromTop (26));
             rr.removeFromTop (6);

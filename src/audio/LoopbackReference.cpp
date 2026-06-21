@@ -191,6 +191,16 @@ ReferenceValidation validateReferenceCapture (const float* samples, int n, doubl
 // ---------------------------------------------------------------------------
 // Metadata
 // ---------------------------------------------------------------------------
+// Pure classifier (cross-platform, testable): does the Dirac deviceType string name a
+// Windows-Audio / WASAPI shared output? Case-insensitive substring match on "windows
+// audio" or "wasapi". Unknown/empty -> false (we can't confirm Windows Audio, so the
+// GUI errs toward the cautionary hint rather than a false all-clear).
+bool diracDeviceTypeIsWindowsAudio (const juce::String& deviceType) {
+    if (deviceType.isEmpty()) return false;
+    return deviceType.containsIgnoreCase ("windows audio")
+        || deviceType.containsIgnoreCase ("wasapi");
+}
+
 ReferenceMetadata makeReferenceMetadata (const float* samples, int n, double rate) {
     ReferenceMetadata md;
     md.rate          = rate;
@@ -257,6 +267,46 @@ juce::String readDiracVersion() {
         auto q = after.fromFirstOccurrenceOf ("\"", false, false)
                       .upToFirstOccurrenceOf ("\"", false, false);
         if (q.isNotEmpty() && q.length() < 32) return q.trim();
+    }
+    return {};
+}
+
+juce::String readDiracDeviceType() {
+    // READ-ONLY: the same settings file, looking for a "deviceType" attribute anywhere in the tree
+    // (the output/playback device's type — "Windows Audio", "ASIO", ...). We never write the file.
+    auto appData = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
+    juce::File settings = appData.getChildFile ("Dirac")
+                                 .getChildFile ("Dirac_Live_Processor")
+                                 .getChildFile ("DiracLiveProcessor.settings");
+    if (! settings.existsAsFile())
+        return {};
+    const juce::String text = settings.loadFileAsString();
+    if (text.isEmpty())
+        return {};
+
+    if (auto xml = juce::parseXML (text)) {
+        std::function<juce::String (const juce::XmlElement&)> findType =
+            [&] (const juce::XmlElement& e) -> juce::String {
+                for (auto* name : { "deviceType", "DeviceType", "outputType", "OutputDeviceType", "audioType" })
+                    if (e.hasAttribute (name))
+                        return e.getStringAttribute (name);
+                for (auto* child : e.getChildIterator()) {
+                    auto v = findType (*child);
+                    if (v.isNotEmpty()) return v;
+                }
+                return {};
+            };
+        auto v = findType (*xml);
+        if (v.isNotEmpty()) return v;
+    }
+
+    // Fallback: a loose textual scan for deviceType="...".
+    const int idx = text.indexOfIgnoreCase ("deviceType");
+    if (idx >= 0) {
+        auto after = text.substring (idx);
+        auto q = after.fromFirstOccurrenceOf ("\"", false, false)
+                      .upToFirstOccurrenceOf ("\"", false, false);
+        if (q.isNotEmpty() && q.length() < 48) return q.trim();
     }
     return {};
 }
@@ -428,7 +478,8 @@ LoopbackCaptureResult captureLoopback (const juce::String& filter, double second
 
 namespace eb {
 
-juce::String readDiracVersion() { return {}; }
+juce::String readDiracVersion()    { return {}; }
+juce::String readDiracDeviceType() { return {}; }
 
 LoopbackCaptureResult captureLoopback (const juce::String&, double, double) {
     LoopbackCaptureResult res;

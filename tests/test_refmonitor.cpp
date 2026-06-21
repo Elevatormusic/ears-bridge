@@ -1,0 +1,242 @@
+// Task 4 (Reference-Based Measurement Monitor): the pure glue —
+//  (1) Farina harmonic offsets (the offsets evaluateIr needs; T2 left them as a param),
+//  (2) the workflow state machine (NotLearned/Learned/ReferenceStale/GradedClean/
+//      GradedSuspect/NotGraded) + its transitions — honest by construction (never green
+//      over a not-graded / mismatched / suspect state),
+//  (3) gradeMeasurement: match-gate FIRST, then quality — verified with a synthetic
+//      matching ESS+IR (GradedClean) and a wrong reference (ReferenceStale, no quality).
+//
+// All pure + synthetic (the live capture/measure loop is on-device).
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
+#include <cmath>
+#include <vector>
+#include <random>
+#include <algorithm>
+
+#include "audio/RefMonitor.h"
+
+using eb::farinaHarmonicOffsets;
+using eb::nextRefMonState;
+using eb::refMonBlocksGreen;
+using eb::gradeMeasurement;
+using eb::RefMonState;
+using eb::RefMonInputs;
+
+static constexpr double kPi = 3.14159265358979323846;
+
+// ---------------------------------------------------------------------------
+// Synthetic harness (mirrors tests/test_deconvolver.cpp)
+// ---------------------------------------------------------------------------
+static std::vector<float> makeEss (int n, double fs, double f1 = 20.0, double f2 = 20000.0) {
+    std::vector<float> x ((size_t) n, 0.0f);
+    const double T  = (double) n / fs;
+    const double w1 = 2.0 * kPi * f1;
+    const double w2 = 2.0 * kPi * f2;
+    const double K  = std::log (w2 / w1);
+    const double A  = w1 * T / K;
+    for (int i = 0; i < n; ++i) {
+        const double t   = (double) i / fs;
+        const double phi = A * (std::exp ((t / T) * K) - 1.0);
+        x[(size_t) i] = (float) std::sin (phi);
+    }
+    const int fade = std::min (n / 4, (int) std::lround (0.002 * fs));
+    for (int i = 0; i < fade; ++i) {
+        const float w = 0.5f * (1.0f - std::cos ((float) kPi * (float) i / (float) fade));
+        x[(size_t) i]           *= w;
+        x[(size_t) (n - 1 - i)] *= w;
+    }
+    return x;
+}
+
+static std::vector<float> convolve (const std::vector<float>& sig, const std::vector<float>& ir) {
+    const int ns = (int) sig.size(), ni = (int) ir.size();
+    std::vector<float> y ((size_t) (ns + ni - 1), 0.0f);
+    for (int i = 0; i < ns; ++i) {
+        const float s = sig[(size_t) i];
+        if (s == 0.0f) continue;
+        for (int k = 0; k < ni; ++k)
+            y[(size_t) (i + k)] += s * ir[(size_t) k];
+    }
+    return y;
+}
+
+static std::vector<float> whiteNoise (int n, float amp, unsigned seed) {
+    std::mt19937 rng (seed);
+    std::uniform_real_distribution<float> dist (-amp, amp);
+    std::vector<float> x ((size_t) n, 0.0f);
+    for (auto& v : x) v = dist (rng);
+    return x;
+}
+
+// ===========================================================================
+// 1. Farina harmonic offsets — the offset math against hand-computed values
+// ===========================================================================
+TEST_CASE("farinaHarmonicOffsets: matches the closed-form dt_k = N*ln(k)/ln(f2/f1)") {
+    // sampleRate cancels: off_k = round(N * ln(k) / ln(f2/f1)). Hand-compute for N=48000,
+    // f1=20, f2=20000 (ln(f2/f1) = ln(1000) = 6.907755...).
+    const int    N   = 48000;
+    const double lnR = std::log (20000.0 / 20.0);
+    const int exp2 = (int) std::lround (N * std::log (2.0) / lnR);   // = 4818
+    const int exp3 = (int) std::lround (N * std::log (3.0) / lnR);   // = 7637
+    const int exp4 = (int) std::lround (N * std::log (4.0) / lnR);   // = 9635
+
+    auto offs = farinaHarmonicOffsets (N, 48000.0, 20.0, 20000.0);   // k = 2,3,4
+    REQUIRE (offs.size() == 3);
+    CHECK (offs[0] == exp2);
+    CHECK (offs[1] == exp3);
+    CHECK (offs[2] == exp4);
+    // Sanity against literal hand values (so a sign/formula slip is caught, not just self-consistency):
+    // off_k = round(48000*ln(k)/ln(1000)); ln(1000)=6.907755 -> k2 4817, k3 7634, k4 9633 (±1 ULP).
+    CHECK (std::abs (offs[0] - 4817) <= 1);
+    CHECK (std::abs (offs[1] - 7634) <= 1);
+    CHECK (std::abs (offs[2] - 9633) <= 1);
+    // Harmonics are ordered and strictly increasing (k=2 closest to the impulse).
+    CHECK (offs[0] < offs[1]);
+    CHECK (offs[1] < offs[2]);
+}
+
+TEST_CASE("farinaHarmonicOffsets: independent of sampleRate (offset in SAMPLES only scales with N)") {
+    // Same N, same f1/f2 -> same sample offsets regardless of the rate passed (the rate cancels).
+    auto a = farinaHarmonicOffsets (32768, 48000.0, 20.0, 20000.0);
+    auto b = farinaHarmonicOffsets (32768, 96000.0, 20.0, 20000.0);
+    REQUIRE (a.size() == b.size());
+    for (size_t i = 0; i < a.size(); ++i) CHECK (a[i] == b[i]);
+}
+
+TEST_CASE("farinaHarmonicOffsets: rejects degenerate params + drops out-of-range harmonics") {
+    CHECK (farinaHarmonicOffsets (0,     48000.0).empty());        // no length
+    CHECK (farinaHarmonicOffsets (48000, 0.0).empty());            // no rate
+    CHECK (farinaHarmonicOffsets (48000, 48000.0, 20.0, 20.0).empty());   // f2 <= f1
+    // A SHORT sweep: the 4th-harmonic offset can exceed N and must be dropped.
+    auto few = farinaHarmonicOffsets (4000, 48000.0, 20.0, 20000.0);
+    for (int o : few) { CHECK (o > 0); CHECK (o < 4000); }
+}
+
+// ===========================================================================
+// 2. The workflow state machine — the truth table + honesty invariant
+// ===========================================================================
+TEST_CASE("nextRefMonState: no reference -> NotLearned (never graded)") {
+    CHECK (nextRefMonState ({ /*loaded*/ false, false, false, false }) == RefMonState::NotLearned);
+    // Even if downstream flags are (spuriously) set, no reference still means NotLearned.
+    CHECK (nextRefMonState ({ false, true, true, false }) == RefMonState::NotLearned);
+}
+
+TEST_CASE("nextRefMonState: reference loaded but nothing measured -> Learned") {
+    CHECK (nextRefMonState ({ true, /*measured*/ false, false, false }) == RefMonState::Learned);
+}
+
+TEST_CASE("nextRefMonState: measured + matched + clean -> GradedClean") {
+    CHECK (nextRefMonState ({ true, true, /*matched*/ true, /*lowQuality*/ false }) == RefMonState::GradedClean);
+}
+
+TEST_CASE("nextRefMonState: measured + matched + low quality -> GradedSuspect") {
+    CHECK (nextRefMonState ({ true, true, true, /*lowQuality*/ true }) == RefMonState::GradedSuspect);
+}
+
+TEST_CASE("nextRefMonState: measured + NOT matched -> ReferenceStale (re-learn, gate FIRST)") {
+    // The gate runs before quality: a non-match is ReferenceStale even if lowQuality were somehow false.
+    CHECK (nextRefMonState ({ true, true, /*matched*/ false, false }) == RefMonState::ReferenceStale);
+    CHECK (nextRefMonState ({ true, true, /*matched*/ false, true  }) == RefMonState::ReferenceStale);
+}
+
+TEST_CASE("refMonBlocksGreen: GradedClean is the ONLY non-green-blocking state (honesty invariant)") {
+    CHECK_FALSE (refMonBlocksGreen (RefMonState::GradedClean));   // the only state that allows green
+    CHECK (refMonBlocksGreen (RefMonState::NotLearned));
+    CHECK (refMonBlocksGreen (RefMonState::Learned));
+    CHECK (refMonBlocksGreen (RefMonState::NotGraded));
+    CHECK (refMonBlocksGreen (RefMonState::ReferenceStale));
+    CHECK (refMonBlocksGreen (RefMonState::GradedSuspect));
+}
+
+// ===========================================================================
+// 3. gradeMeasurement — match-gate FIRST, then quality
+// ===========================================================================
+// Build a (reference, response) pair from a clean direct-arrival IR, padding the reference so the
+// FULL linear convolution is kept (truncating the convolution tail corrupts the deconvolution).
+// Returns the padded reference + response, both length n+irLen-1.
+static void makeCleanMeasurement (int sweepLen, double fs,
+                                   std::vector<float>& refOut, std::vector<float>& respOut) {
+    auto ref = makeEss (sweepLen, fs);
+    std::vector<float> roomIr ((size_t) 256, 0.0f);
+    roomIr[50] = 1.0f;                          // a single dominant direct arrival = a clean measurement
+    respOut = convolve (ref, roomIr);           // length sweepLen + 255
+    refOut.assign (respOut.size(), 0.0f);
+    std::copy (ref.begin(), ref.end(), refOut.begin());
+}
+
+TEST_CASE("gradeMeasurement: a matching ESS + a clean IR -> GradedClean (logic path), valid quality") {
+    // A real deconvolved ESS clears ~13 dB IR-SNR / ~0 THD even for a clean impulse — it does NOT clear
+    // the synthetic 20 dB provisional cutoff (an on-device-ratification item; see the report). So the
+    // CLEAN logic path is pinned at a threshold the clean case clears (10 dB), and the suspect path below
+    // uses the default 20 dB on the SAME clean data to prove the matched->suspect branch.
+    const int    n  = 1 << 15;        // 32768
+    const double fs = 48000.0;
+    std::vector<float> ref, resp;
+    makeCleanMeasurement (n, fs, ref, resp);
+    const int m = (int) resp.size();
+
+    auto g = gradeMeasurement (ref.data(), resp.data(), m, fs, 20.0, 20000.0,
+                               /*minIrSnrDb*/ 10.0f, /*maxThdPct*/ 5.0f);
+    CHECK (g.match.matched);                       // the gate passed (right sweep)
+    CHECK (g.state == RefMonState::GradedClean);   // matched + clean (at a ratified-style threshold)
+    CHECK_FALSE (g.quality.lowQuality);
+    CHECK (g.quality.matched);                     // quality was actually computed
+    CHECK (g.quality.irSnrDb > 10.0f);             // a real IR-SNR number is present and clears the cutoff
+    CHECK_FALSE (refMonBlocksGreen (g.state));     // green is allowed for this verdict only
+}
+
+TEST_CASE("gradeMeasurement: matched but BELOW the (provisional) IR-SNR cutoff -> GradedSuspect") {
+    // Same clean data, the DEFAULT 20 dB provisional cutoff: the real ESS deconvolution (~13 dB) does not
+    // clear it, so it grades SUSPECT — proving the matched->suspect branch AND honestly documenting that
+    // the provisional threshold currently flags a clean measurement (the on-device ratification gap).
+    const int    n  = 1 << 15;
+    const double fs = 48000.0;
+    std::vector<float> ref, resp;
+    makeCleanMeasurement (n, fs, ref, resp);
+    const int m = (int) resp.size();
+
+    auto g = gradeMeasurement (ref.data(), resp.data(), m, fs);   // default kMinIrSnrDb = 20 dB
+    CHECK (g.match.matched);
+    CHECK (g.state == RefMonState::GradedSuspect);
+    CHECK (g.quality.lowQuality);
+    CHECK (refMonBlocksGreen (g.state));           // suspect must NOT read as green
+}
+
+TEST_CASE("gradeMeasurement: a WRONG reference -> ReferenceStale, NO quality number") {
+    const int    n  = 1 << 15;
+    const double fs = 48000.0;
+    // refA is the learned reference; the response is to a DIFFERENT sweep (refB, narrower band)
+    // convolved with a room IR — i.e. the user re-learnt against the wrong/stale sweep.
+    auto refA = makeEss (n, fs, 20.0,  20000.0);
+    auto refB = makeEss (n, fs, 100.0, 8000.0);
+    std::vector<float> roomIr ((size_t) 256, 0.0f);
+    roomIr[40] = 1.0f; roomIr[90] = 0.25f;
+    auto resp = convolve (refB, roomIr);
+    resp.resize ((size_t) n);
+
+    auto g = gradeMeasurement (refA.data(), resp.data(), n, fs);
+    CHECK_FALSE (g.match.matched);                     // the gate caught the mismatch
+    CHECK (g.state == RefMonState::ReferenceStale);    // "re-learn", NOT a quality verdict
+    CHECK_FALSE (g.quality.matched);                   // we did NOT grade a non-match
+    CHECK_FALSE (g.quality.lowQuality);
+    CHECK (g.quality.irSnrDb == Catch::Approx (0.0f)); // no quality number was produced
+}
+
+TEST_CASE("gradeMeasurement: white-noise response -> ReferenceStale (not a low-quality grade)") {
+    const int    n  = 1 << 15;
+    const double fs = 48000.0;
+    auto ref  = makeEss (n, fs);
+    auto resp = whiteNoise (n, 0.5f, 99u);             // no sweep at all
+    auto g = gradeMeasurement (ref.data(), resp.data(), n, fs);
+    CHECK_FALSE (g.match.matched);
+    CHECK (g.state == RefMonState::ReferenceStale);    // a non-match is a GATE failure, never "low quality"
+    CHECK_FALSE (g.quality.lowQuality);
+}
+
+TEST_CASE("gradeMeasurement: null/empty inputs -> ReferenceStale (never green on no data)") {
+    auto g = gradeMeasurement (nullptr, nullptr, 0, 48000.0);
+    CHECK (g.state == RefMonState::ReferenceStale);
+    CHECK (refMonBlocksGreen (g.state));
+}

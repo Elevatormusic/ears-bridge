@@ -161,6 +161,29 @@ public:
     // Message-thread read of the lock-free snapshot (the project's int-milli publish idiom).
     float completedSnrDb() const noexcept { return completedSnrDbMilli_.load() / 1000.0f; }
 
+    // ---- Reference-Based Measurement Monitor (Plan 5) ----
+    // Raise the GUIDANCE reference flags (NEITHER is invalidating — raise() leaves cleanCapture alone for
+    // both since they are not in the invalidating mask). Called by the engine when a measurement was graded
+    // against a learned reference. RefMismatch = the match-gate failed; RefLowQuality = matched but suspect.
+    void raiseRefMismatch()   noexcept { raise (HealthFlag::RefMismatch); }
+    void raiseRefLowQuality() noexcept { raise (HealthFlag::RefLowQuality); }
+
+    // Publish the reference-grade verdict SNAPSHOT (the SNR lesson): the workflow state (RefMonState's
+    // underlying int) + the IR-SNR dB + the THD % the grade used, frozen TOGETHER the instant the grade is
+    // computed, so the displayed numbers can never drift away from the flag that was raised. Reference
+    // grading is OFFLINE (off the audio thread), so this is a message/worker-thread store, not the audio
+    // thread — but the lock-free atomic publish keeps the GUI read consistent. dB/% use the int-milli idiom.
+    void publishRefGrade (int refMonState, float irSnrDb, float thdPercent) noexcept {
+        refMonState_.store (refMonState);
+        const float snr = std::isfinite (irSnrDb)    ? juce::jlimit (-200.0f, 200.0f, irSnrDb)    : 0.0f;
+        const float thd = std::isfinite (thdPercent) ? juce::jlimit (   0.0f, 1000.0f, thdPercent) : 0.0f;
+        refIrSnrDbMilli_.store ((int) std::lround (snr * 1000.0f));
+        refThdPctMilli_.store  ((int) std::lround (thd * 1000.0f));
+    }
+    int   refMonState()  const noexcept { return refMonState_.load(); }
+    float refIrSnrDb()   const noexcept { return refIrSnrDbMilli_.load() / 1000.0f; }
+    float refThdPercent() const noexcept { return refThdPctMilli_.load() / 1000.0f; }
+
     // ---- D8 addition: runtime format revalidation ----
     // Call once from RenderCallback::audioDeviceAboutToStart with the device's granted format.
     // Stores the reference snapshot. RT-safe (atomic stores). A zero rate sentinel means
@@ -204,6 +227,13 @@ private:
     // completedSnrDb(). Frozen at the moment the verdict is computed so the displayed dB can't drift away
     // from the dB that raised the sticky LowSnr flag. 0 until a sweep completes; cleared in reset().
     std::atomic<int>       completedSnrDbMilli_ { 0 };
+
+    // Reference-Based Measurement Monitor (Plan 5): the published grade snapshot. refMonState_ holds
+    // RefMonState's underlying int (default 0 == NotLearned). The dB/% are int-milli fixed-point. Written
+    // TOGETHER in publishRefGrade off the audio thread (offline grading); GUI reads the lock-free trio.
+    std::atomic<int>       refMonState_     { 0 };   // RefMonState::NotLearned == 0
+    std::atomic<int>       refIrSnrDbMilli_ { 0 };
+    std::atomic<int>       refThdPctMilli_  { 0 };
 
     // Confirmed-clip detection. railRun*_ / longestRun_ are CAPTURE-THREAD-ONLY scratch (written only
     // in analyzeInputBlock); the *_A_ atomics publish to the GUI thread.

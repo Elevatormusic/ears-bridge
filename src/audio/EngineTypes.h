@@ -31,7 +31,12 @@ enum class HealthFlag : unsigned {
     OsResampled   = 1u << 9, // guidance: OS SRC resampled the INPUT (D2) -> clip detection approximate; NOT invalidating
     SweepRetimed  = 1u << 10, // INVALIDATING: a forced mid-sweep SRC correction retimed the sweep
     FormatChanged = 1u << 11, // INVALIDATING: sample rate / bit depth / channels changed mid-run
-    LowSnr        = 1u << 12  // guidance: the sweep was not cleanly above the room-noise floor (SNR); NOT invalidating (warn now, ratify later)
+    LowSnr        = 1u << 12, // guidance: the sweep was not cleanly above the room-noise floor (SNR); NOT invalidating (warn now, ratify later)
+    // Reference-Based Measurement Monitor (Plan 5). BOTH are GUIDANCE — NOT in the invalidating mask
+    // (they never flip cleanCapture). They are raised at the completed-sweep edge ONLY when a learned
+    // reference is loaded; the deconvolution/grade is computed OFF the audio thread (see AudioEngine).
+    RefMismatch   = 1u << 13, // guidance: the measurement did NOT match the learned reference -> re-learn (gate failed)
+    RefLowQuality = 1u << 14  // guidance: matched, but the IR quality (IR-SNR/THD) was below the PROVISIONAL cutoff
 };
 constexpr HealthFlag operator| (HealthFlag a, HealthFlag b) noexcept {
     return static_cast<HealthFlag> (static_cast<unsigned> (a) | static_cast<unsigned> (b));
