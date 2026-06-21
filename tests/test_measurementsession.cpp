@@ -203,3 +203,44 @@ TEST_CASE("MeasurementSession: pre-sweep floor-confidence reflects the warm-up s
         CHECK_FALSE (s.preSweepFloorStable());
     }
 }
+
+// ---- SNR Task 3: the SweepActive->Complete edge for the engine's once-per-sweep SNR verdict ----
+
+TEST_CASE("MeasurementSession: consumeSweepComplete fires exactly once per SweepActive->Complete edge") {
+    MeasurementSession s; s.reset();
+    arm (s);                                                            // left earcup sweep
+    CHECK (s.phase() == SessionPhase::SweepActive);
+    CHECK_FALSE (s.consumeSweepComplete());                             // not while the sweep is live
+    blocks (s, MeasurementSession::kDefaultSilenceBlocks + 2, kQuiet);  // terminal silence -> Complete
+    CHECK (s.phase() == SessionPhase::Complete);
+    CHECK (s.consumeSweepComplete());                                   // the edge fires once
+    CHECK_FALSE (s.consumeSweepComplete());                             // and is drained (no re-fire)
+
+    // A SECOND sweep (right earcup) re-arms then completes -> the edge fires once more.
+    arm (s);
+    CHECK (s.phase() == SessionPhase::SweepActive);
+    blocks (s, MeasurementSession::kDefaultSilenceBlocks + 2, kQuiet);
+    CHECK (s.phase() == SessionPhase::Complete);
+    CHECK (s.consumeSweepComplete());                                   // per-segment, once each
+}
+
+TEST_CASE("MeasurementSession: completedFloorStable snapshots the finished sweep's confidence before reseed") {
+    MeasurementSession s; s.reset();
+    // A steady quiet pre-sweep window -> the live floor reads stable, then a rise arms.
+    blocks (s, MeasurementSession::kArmWarmupBlocks + 12, 0.003f);
+    CHECK (s.preSweepFloorStable());                                    // live: this onset's floor is trusted
+    blocks (s, MeasurementSession::kArmSustainBlocks, 0.2f);            // the rise that arms
+    CHECK (s.phase() == SessionPhase::SweepActive);
+
+    // Drive to Complete in ONE step so the snapshot is read at the edge, before post-Complete quiet
+    // blocks re-establish the live floorStable_ for the next onset.
+    blocks (s, MeasurementSession::kDefaultSilenceBlocks - 1, kQuiet);
+    CHECK (s.phase() == SessionPhase::SweepActive);                     // not yet complete
+    s.observeBlockPeak (kQuiet);                                        // the block that crosses -> Complete
+    CHECK (s.phase() == SessionPhase::Complete);
+    CHECK (s.consumeSweepComplete());
+    // The SNAPSHOT preserved the trusted confidence of the sweep that just finished (the value the
+    // engine's verdict must read at the edge). Without this snapshot — taken before the next-onset
+    // reseed — the verdict would falsely read "untrusted" and suppress a real low-SNR warning.
+    CHECK (s.completedFloorStable());
+}

@@ -1,4 +1,5 @@
 #include "audio/AudioEngine.h"
+#include "gui/SnrStatus.h"   // SNR: pure evaluateSnr verdict (RT-safe; snrNote/String is GUI-side only)
 #include <cmath>
 namespace eb {
 
@@ -51,6 +52,17 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
             float spkL = 0.0f, spkR = 0.0f;
             eb::HealthMonitor::blockPeakPerEar (l, r, numSamples, spkL, spkR);
             e.hm.observeSweepPeak (spkL, spkR);
+        }
+        // SNR: once per SweepActive->Complete edge (the sweep just finished), compute the per-ear SNR
+        // verdict ONCE and raise the LowSnr GUIDANCE flag on a noisy sweep. RT-safe: evaluateSnr is a few
+        // log10 + compares + atomic reads, raiseLowSnr is one atomic OR -- NO alloc/lock, and NO String
+        // (snrNote runs GUI-side in Task 4). completedFloorStable() (not preSweepFloorStable()) holds the
+        // floor confidence of the sweep that just finished, snapshotted before the next-onset reseed.
+        if (e.session_.consumeSweepComplete()) {
+            const auto v = eb::evaluateSnr (e.session_.armNoiseFloor(),
+                                            e.hm.maxSweepPeakL(), e.hm.maxSweepPeakR(),
+                                            e.session_.completedFloorStable());
+            if (v.lowSnr) e.hm.raiseLowSnr();
         }
         // In-measurement only: an invalidating flag (clip/NaN/dropout/drift) latches the session Invalid
         // so the GUI's phase-gated wording matches cleanCapture(). Single-writer: the capture thread is
