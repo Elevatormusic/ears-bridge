@@ -208,16 +208,24 @@ MainComponent::MainComponent() {
 
     // --- Advanced disclosure ---
     advancedToggle.setButtonText ("Advanced");
-    advancedToggle.onClick = [this] { resized(); };
+    advancedToggle.onClick = [this] {
+        logLine (eb::DiagnosticLog::Level::Debug,
+                 juce::String ("Toggle: Advanced=") + (advancedToggle.getToggleState() ? "on" : "off"));
+        resized();
+    };
     railContent.addAndMakeVisible (advancedToggle);
     complexPhaseToggle.setButtonText ("Complex (with-phase) FIR");
     complexPhaseToggle.onClick = [this] {
+        logLine (eb::DiagnosticLog::Level::Debug,
+                 juce::String ("Toggle: Complex (with-phase) FIR=") + (complexPhaseToggle.getToggleState() ? "on" : "off"));
         settings.setComplexPhase (complexPhaseToggle.getToggleState());
         rebuildFirsAsync();
     };
     railContent.addChildComponent (complexPhaseToggle);
     autoUpdateToggle.setToggleState (settings.autoCheckUpdates(), juce::dontSendNotification);
     autoUpdateToggle.onClick = [this] {
+        logLine (eb::DiagnosticLog::Level::Debug,
+                 juce::String ("Toggle: Automatically check for updates=") + (autoUpdateToggle.getToggleState() ? "on" : "off"));
         settings.setAutoCheckUpdates (autoUpdateToggle.getToggleState());
         settings.flush();
         if (! autoUpdateToggle.getToggleState() && updateLink.isVisible()) {
@@ -229,6 +237,8 @@ MainComponent::MainComponent() {
     // #3: advanced override toggle. Restore its persisted state; on click, persist + re-run the gate.
     overrideToggle.setToggleState (settings.advancedOverride(), juce::dontSendNotification);
     overrideToggle.onClick = [this] {
+        logLine (eb::DiagnosticLog::Level::Debug,
+                 juce::String ("Toggle: Allow non-Dirac use=") + (overrideToggle.getToggleState() ? "on" : "off"));
         settings.setAdvancedOverride (overrideToggle.getToggleState());
         settings.flush();
         updateStartGate();   // recompute Start enabled-ness + the status line for the new policy
@@ -257,6 +267,9 @@ MainComponent::MainComponent() {
 
     // L/R wiring check: play a tone into the LEFT earcup, then the engine reports which mic responded.
     verifyButton.onClick = [this] {
+        logLine (eb::DiagnosticLog::Level::Debug,
+                 juce::String ("Button: ") + (engine.lrVerifyActive() ? "Stop L/R check clicked"
+                                                                      : "Check L/R wiring clicked"));
         if (engine.lrVerifyActive()) {   // toggle off
             engine.endLrVerify();
             verifyTicks = 0;
@@ -294,6 +307,7 @@ MainComponent::MainComponent() {
     // zips the whole logs dir to a user-chosen path. Both are message-thread-only affordances.
     openLogButton.onClick = [this] {
         if (log_) {
+            logLine (eb::DiagnosticLog::Level::Debug, "Button: Open log folder clicked");
             logLine (eb::DiagnosticLog::Level::Info, "User opened the log folder.");
             log_->directory().revealToUser();
         }
@@ -301,6 +315,7 @@ MainComponent::MainComponent() {
     railContent.addChildComponent (openLogButton);
     exportLogButton.onClick = [this] {
         if (log_ == nullptr) return;
+        logLine (eb::DiagnosticLog::Level::Debug, "Button: Export log clicked");
         logLine (eb::DiagnosticLog::Level::Info, "User requested a log export.");
         auto suggested = juce::File::getSpecialLocation (juce::File::userDesktopDirectory)
                              .getChildFile ("EarsBridge-logs.zip");
@@ -722,6 +737,12 @@ void MainComponent::onCombineChosen() {
     const auto mode = combineModel[(size_t) idx].mode;
     settings.setCombineMode (mode);
     engine.setCombineMode (mode);
+    const char* modeName = mode == CombineMode::AutoPerEar ? "Auto per-ear"
+                         : mode == CombineMode::Average    ? "Average"
+                         : mode == CombineMode::Sum        ? "Sum"
+                         : mode == CombineMode::LeftOnly   ? "Left only"
+                                                           : "Right only";
+    logLine (eb::DiagnosticLog::Level::Debug, juce::String ("Combine mode: ") + modeName);
     juce::String h;
     switch (mode) {
         case CombineMode::AutoPerEar:
@@ -804,10 +825,12 @@ void MainComponent::rebuildFirsAsync() {
 
 void MainComponent::onStartStop() {
     if (engine.status() == EngineStatus::Running) {
+        logLine (eb::DiagnosticLog::Level::Debug, "Button: Stop clicked");
         engine.stop();
         startStop.setButtonText ("Start");
         logLine (eb::DiagnosticLog::Level::Info, "Stop: measurement stopped by the user.");
     } else {
+        logLine (eb::DiagnosticLog::Level::Debug, "Button: Start clicked");
         if (verifyTicks > 0) {   // a pending L/R check holds the capture device; clear its GUI state
             verifyTicks = 0;
             verifyButton.setButtonText ("Check L/R wiring");
@@ -864,6 +887,24 @@ void MainComponent::updateStartGate() {
     const bool ready    = eb::startReady (haveDevs, haveCals, wrongMode, physicalOutput,
                                           settings.advancedOverride());
     startStop.setEnabled (running || ready);
+    // Debug, on-change only (updateStartGate runs at 30 Hz): record WHETHER the gate is enabled and, when
+    // disabled, the exact reason from the locals above — this is what explains a greyed-out Start button.
+    {
+        const int gateState = (running || ready) ? 1 : 0;
+        if (gateState != lastStartGateLogged_) {
+            lastStartGateLogged_ = gateState;
+            if (gateState == 1) {
+                logLine (eb::DiagnosticLog::Level::Debug, "Start gate: enabled");
+            } else {
+                logLine (eb::DiagnosticLog::Level::Debug,
+                         juce::String ("Start gate: disabled (haveDevs=") + (haveDevs ? "1" : "0")
+                       + " haveCals="       + (haveCals ? "1" : "0")
+                       + " wrongMode="      + (wrongMode ? "1" : "0")
+                       + " physicalOutput=" + (physicalOutput ? "1" : "0")
+                       + " override="       + (settings.advancedOverride() ? "1" : "0") + ")");
+            }
+        }
+    }
     verifyButton.setEnabled (! running && inputPicker.selectedDevice().has_value());   // needs the EARS, while stopped
     updateCalProblems();
     updateControlsEnabled();
@@ -1232,12 +1273,15 @@ void MainComponent::onLearnReference() {
     // atomic the firPool job polls (inside captureLoopback) and show a brief "Cancelling..." note. The job's
     // callAsync continuation owns restoring the idle state, so we don't touch learning_/text here.
     if (learning_) {
+        logLine (eb::DiagnosticLog::Level::Debug, "Button: Cancel learning clicked");
         learnCancelRequested_.store (true, std::memory_order_relaxed);
         learnRefButton.setEnabled (false);   // re-enabled by the job continuation; blocks a double-cancel/start
         learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
         learnRefResultLabel.setText ("Cancelling...", juce::dontSendNotification);
         return;
     }
+
+    logLine (eb::DiagnosticLog::Level::Debug, "Button: Learn reference clicked");
 
     // --- Pre-start guards (only apply before a capture is in flight) ---
     // The learn capture is a Windows WASAPI loopback (on-device) — it can only succeed while Dirac's
