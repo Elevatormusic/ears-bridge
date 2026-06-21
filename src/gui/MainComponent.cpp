@@ -80,7 +80,8 @@ MainComponent::MainComponent() {
     // --- Input picker ---
     inputPicker.onDeviceChosen = [this] (const DeviceId& d) { onInputChosen (d); };
     railContent.addAndMakeVisible (inputPicker);
-    inputGainHint.setText ("Keep the EARS gain switch at its factory 18 dB - only lower it if the input clips.",
+    inputGainHint.setText ("Leave the EARS gain switch alone (changing it drops the jig from Windows). "
+                           "Set levels in Dirac: Master output, then Mic gain.",
                            juce::dontSendNotification);
     inputGainHint.setColour (juce::Label::textColourId, Theme::textDim());
     inputGainHint.setFont (juce::Font (juce::FontOptions (11.5f)));
@@ -263,11 +264,20 @@ MainComponent::MainComponent() {
     addAndMakeVisible (rightCal);
     styleEyebrow (levelsEyebrow, "LEVELS");
     addAndMakeVisible (levelsEyebrow);
-    levelsHint.setText ("Set your amp so the L and R meters reach the green band.", juce::dontSendNotification);
+    levelsHint.setText ("Set Dirac's Master output so the L and R meters reach the green band.", juce::dontSendNotification);
     levelsHint.setColour (juce::Label::textColourId, Theme::textDim());
     levelsHint.setFont (juce::Font (juce::FontOptions (11.5f)));
     levelsHint.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (levelsHint);
+    // Dirac Mic-gain caption: EARS Bridge attenuates its output for auto-headroom; tell the user to add
+    // about that many dB of positive Mic gain in Dirac so Dirac records at a healthy level. The number
+    // comes from engine.headroomAttenuationDb() and is refreshed whenever a cal loads (updateStartGate).
+    diracMicGainHint.setColour (juce::Label::textColourId, Theme::textDim());
+    diracMicGainHint.setFont (juce::Font (juce::FontOptions (12.0f)));
+    diracMicGainHint.setJustificationType (juce::Justification::topLeft);
+    diracMicGainHint.setMinimumHorizontalScale (1.0f);
+    addAndMakeVisible (diracMicGainHint);
+    updateDiracMicGainHint();   // seed it (likely the ~0 dB form until cals load)
     meterL.setTitle ("Left input level");
     meterR.setTitle ("Right input level");
     meterOut.setTitle ("Output level");
@@ -280,9 +290,9 @@ MainComponent::MainComponent() {
     inputClipHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     inputClipHint.setJustificationType (juce::Justification::topLeft);
     inputClipHint.setColour (juce::Label::textColourId, Theme::danger());
-    inputClipHint.setText ("EARS mic input near full scale - lower the EARS gain switch a step and/or "
-                           "Dirac's playback level, then re-measure. Dirac won't flag this: the clip is "
-                           "at the mic, before Dirac records.",
+    inputClipHint.setText ("EARS mic input near full scale - lower Dirac's Master output (try ~-12.5 dB). "
+                           "Don't touch the EARS gain switch. Dirac won't flag this: the clip is at the "
+                           "mic, before Dirac records.",
                            juce::dontSendNotification);
     addChildComponent (inputClipHint);   // hidden until a raw-input clip is seen
 
@@ -674,7 +684,22 @@ void MainComponent::updateStartGate() {
     verifyButton.setEnabled (! running && inputPicker.selectedDevice().has_value());   // needs the EARS, while stopped
     updateCalProblems();
     updateControlsEnabled();
+    updateDiracMicGainHint();   // a cal load/clear changed the auto-headroom -> refresh the Mic-gain number
     updateStatusLine();
+}
+
+void MainComponent::updateDiracMicGainHint() {
+    // EARS Bridge attenuates its own output by the auto makeup-headroom (see ProcessingGraph::recomputeHeadroom).
+    // Surface that number so the user adds about the same positive Mic gain in Dirac and Dirac records at a
+    // healthy level. The number changes only when a cal loads, so this is cheap to call from updateStartGate.
+    const float n = engine.headroomAttenuationDb();   // >= 0 dB; 0 when no attenuation (unity / cut / flat cal)
+    juce::String text = (n >= 0.5f)
+        ? "EARS Bridge attenuates its output ~" + juce::String (juce::roundToInt (n))
+          + " dB for headroom - add about +" + juce::String (juce::roundToInt (n))
+          + " dB on Dirac's Mic gain (watch Dirac's input meter)."
+        : "Set Dirac's Mic gain so Dirac records at a healthy level (watch Dirac's input meter).";
+    if (text != diracMicGainHint.getText())
+        diracMicGainHint.setText (text, juce::dontSendNotification);
 }
 
 void MainComponent::updateCalProblems() {
@@ -761,9 +786,10 @@ void MainComponent::applyTextColours() {
     styleEyebrow (calEyebrow,    "CALIBRATION");
     styleEyebrow (levelsEyebrow, "LEVELS");
     // levelsHint colour/text is owned by the timer (updateActiveEarIndicator), so it is not set here.
-    combineHint.setColour    (juce::Label::textColourId, Theme::textDim());
-    inputGainHint.setColour  (juce::Label::textColourId, Theme::textDim());
-    outputHint.setColour     (juce::Label::textColourId, Theme::textDim());
+    combineHint.setColour      (juce::Label::textColourId, Theme::textDim());
+    inputGainHint.setColour    (juce::Label::textColourId, Theme::textDim());
+    diracMicGainHint.setColour (juce::Label::textColourId, Theme::textDim());
+    outputHint.setColour       (juce::Label::textColourId, Theme::textDim());
     preflightLabel.setColour (juce::Label::textColourId, Theme::warn());
     preflightInfo.setColour  (juce::Label::textColourId, Theme::textDim());
     rateWarn.setColour       (juce::Label::textColourId, Theme::warn());
@@ -1193,7 +1219,7 @@ void MainComponent::updateActiveEarIndicator (bool silent) {
             col  = Theme::textDim();
         }
     } else {
-        text = "Set your amp so the L and R meters reach the green band.";
+        text = "Set Dirac's Master output so the L and R meters reach the green band.";
         col  = Theme::textDim();
     }
     // setColour no-ops when unchanged; setText only on a real change -> no per-tick repaint churn. The
@@ -1495,6 +1521,10 @@ void MainComponent::resized() {
         meterL.setBounds   (lv.removeFromTop (mh));
         meterR.setBounds   (lv.removeFromTop (mh));
         meterOut.setBounds (lv.removeFromTop (mh));
+
+        // Dirac Mic-gain caption: sits just below the Levels card, above the (conditional) clip hint.
+        pp.removeFromTop (8);
+        diracMicGainHint.setBounds (pp.removeFromTop (34));
 
         if (inputClipHint.isVisible()) {
             pp.removeFromTop (8);

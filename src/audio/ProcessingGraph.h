@@ -3,6 +3,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include "audio/CombineMode.h"
 #include <atomic>
+#include <cmath>
 namespace eb {
 class ProcessingGraph {
 public:
@@ -40,6 +41,16 @@ public:
     // Published lock-free for the GUI's "active side" indicator. Meaningful only while AutoPerEar is the
     // live mode with signal present; the GUI gates on mode + level.
     int activeEar() const noexcept { return activeEar_.load (std::memory_order_relaxed); }
+
+    // How much (>= 0 dB) the auto makeup-headroom is attenuating the output, i.e. -20*log10(headroomGain).
+    // headroomGain is <= 1 (it only ever cuts), so this is always >= 0 dB; 0 when no attenuation (unity
+    // FIRs or a cut/flat cal). The GUI surfaces this number so the user can add about that many dB of
+    // positive Mic gain in Dirac to compensate for the attenuation EARS Bridge applies. Updates whenever a
+    // cal loads (recomputeHeadroom runs on setFir/setFirPair/clearFir). Lock-free; GUI-timer read.
+    float headroomAttenuationDb() const noexcept {
+        const float g = headroomGain.load();
+        return g > 0.0f ? -20.0f * std::log10 (g) : 0.0f;
+    }
 private:
     // Auto makeup-attenuation so the per-ear correction FIR can never push the mono output past
     // 0 dBFS, whatever the playback level. Because Dirac normalizes the measurement, only the

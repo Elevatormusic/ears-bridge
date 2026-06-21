@@ -305,6 +305,7 @@ float AudioEngine::completedSweepSnrDb()   const noexcept {
     return hm.completedSnrDb();
 }
 int  AudioEngine::autoActiveEar()          const noexcept { return graph.activeEar(); }
+float AudioEngine::headroomAttenuationDb() const noexcept { return graph.headroomAttenuationDb(); }
 
 // ---- Reference-Based Measurement Monitor (Plan 5) ----
 void AudioEngine::setReferenceLoaded (bool loaded) noexcept { referenceLoaded_.store (loaded); }
