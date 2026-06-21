@@ -37,6 +37,24 @@ The capture device and the virtual output device run on independent clocks, so t
 
 Both installers are currently unsigned, so the first launch shows a one-time security prompt — see the install steps below.
 
+## Roadmap
+
+EARS Bridge is in active development. A look at recent and upcoming work:
+
+**Shipped**
+- Per-ear calibration combined into the single microphone Dirac expects, with an Auto per-ear mode that follows Dirac's sweep so each earcup is measured cleanly.
+- One-click Dirac shared-mode fix for the virtual cable.
+- Measurement-integrity safeguards — clipping, dropouts, clock drift, and mid-run format changes are detected, so a corrupted capture is never reported as clean.
+- Calibration validation that checks your left/right files before a measurement starts.
+- Automated build + test on Windows and macOS; releases are gated on the test suite.
+
+**In progress**
+- Reference-based measurement quality verification — EARS Bridge captures Dirac's own sweep and deconvolves your measurement against it, grading the signal-to-noise and distortion of each capture so you know it's genuinely clean.
+- A signal-chain status panel — sample rate, channels, bit depth, and routing verified across the whole chain at a glance.
+- Sweep-to-noise SNR checks and smarter per-ear detection.
+
+This is alpha software, so the list will shift as we learn from real measurements.
+
 ## Requirements
 
 ### Hardware
