@@ -43,6 +43,15 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
         e.bridge.setSweepActive (e.session_.sweepActive());   // D6: freeze the SRC ratio during the sweep, release between sweeps
 
         e.hm.analyzeInputBlock (l, r, numSamples);             // detection (raw input): peak, run, NaN
+        // SNR numerator: while the sweep is active, latch this block's per-ear peak (the per-ear max
+        // over the SweepActive window). Gated here -- observeSweepPeak only runs inside the sweep, so
+        // pre/post-sweep room noise never inflates the numerator. resetMeasurementLatches() above
+        // already zeroed the latch on the onset edge.
+        if (e.session_.sweepActive()) {
+            float spkL = 0.0f, spkR = 0.0f;
+            eb::HealthMonitor::blockPeakPerEar (l, r, numSamples, spkL, spkR);
+            e.hm.observeSweepPeak (spkL, spkR);
+        }
         // In-measurement only: an invalidating flag (clip/NaN/dropout/drift) latches the session Invalid
         // so the GUI's phase-gated wording matches cleanCapture(). Single-writer: the capture thread is
         // the only writer of session phase_; a render-side dropout sets cleanCapture=false and is
@@ -456,6 +465,11 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
     if (session_.consumeSweepStarted()) hm.resetMeasurementLatches();
     bridge.setSweepActive (session_.sweepActive());                  // D6: mirror the capture-callback freeze sync
     hm.analyzeInputBlock (inL, inR, numSamples);                      // same analysis as the capture callback
+    if (session_.sweepActive()) {                                    // SNR numerator (mirror the capture callback)
+        float spkL = 0.0f, spkR = 0.0f;
+        eb::HealthMonitor::blockPeakPerEar (inL, inR, numSamples, spkL, spkR);
+        hm.observeSweepPeak (spkL, spkR);
+    }
     if (session_.inMeasurement() && ! hm.cleanCapture()) session_.markInvalid();
     if (graph.process (inL, inR, outMono, numSamples)) hm.reportNonFinite();
 }

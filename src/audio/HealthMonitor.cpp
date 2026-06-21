@@ -39,6 +39,7 @@ void HealthMonitor::reset() {
     flagBits.store (0);                 // Plan 4: clear the sticky flags on a fresh run
     recentClip_.store (false);
     reachedGood_.store (false);         // a fresh run has not yet reached a healthy capture level
+    maxSweepPeakLMilli_.store (0); maxSweepPeakRMilli_.store (0);   // SNR numerator: 0 until a sweep runs
     railRunL_ = railRunR_ = longestRun_ = 0;
     prevL_ = prevR_ = 0.0f;
     railSamplesL_.store (0); railSamplesR_.store (0); longestRunA_.store (0);
@@ -57,6 +58,7 @@ void HealthMonitor::resetMeasurementLatches() noexcept {
     // the in-sweep clip caveat still fires).
     flagBits.fetch_and (static_cast<unsigned> (HealthFlag::OsResampled));
     recentClip_.store (false);
+    maxSweepPeakLMilli_.store (0); maxSweepPeakRMilli_.store (0);   // SNR numerator: re-scope to THIS sweep window
     railRunL_ = railRunR_ = longestRun_ = 0;
     prevL_ = prevR_ = 0.0f;                              // fix-slice flat-run scratch (mirror reset())
     railSamplesL_.store (0); railSamplesR_.store (0); longestRunA_.store (0);
@@ -141,6 +143,16 @@ void HealthMonitor::analyzeInputBlock (const float* l, const float* r, int n) no
     // ClipInput GUIDANCE flag at kClipLinear (-1 dBFS) via its internal `|| peak >= kClipLinear` check,
     // so only the visual latch moves to the rail; guidance is unchanged.
     reportInLevels (pkL, pkR, pkL >= kRailCeiling, pkR >= kRailCeiling);
+}
+
+void HealthMonitor::observeSweepPeak (float pkL, float pkR) noexcept {
+    // SNR numerator: latch the per-ear running max while the sweep is active. The engine only calls
+    // this when session_.sweepActive() is true, so no in-method gate is needed. Single writer
+    // (capture thread): a relaxed load, std::max in fixed-point, store -- no alloc/lock.
+    const int lMilli = (int) std::lround (juce::jlimit (0.0f, 8.0f, pkL) * 1000.0f);
+    const int rMilli = (int) std::lround (juce::jlimit (0.0f, 8.0f, pkR) * 1000.0f);
+    if (lMilli > maxSweepPeakLMilli_.load()) maxSweepPeakLMilli_.store (lMilli);
+    if (rMilli > maxSweepPeakRMilli_.load()) maxSweepPeakRMilli_.store (rMilli);
 }
 
 void HealthMonitor::reportInLevels (float peakL, float peakR, bool clipL, bool clipR) {
