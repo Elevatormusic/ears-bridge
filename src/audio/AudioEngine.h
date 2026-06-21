@@ -99,6 +99,13 @@ public:
     // guidance so a too-quiet capture can't masquerade as "clean").
     bool reachedGoodLevel() const noexcept;
 
+    // SNR: the min-ear sweep-to-noise dB of the sweep that just completed (the value that drives the
+    // LowSnr guidance flag). Recomputed GUI-side from the already-published lock-free atomics
+    // (armNoiseFloor / maxSweepPeakL/R / completedFloorStable) via eb::evaluateSnr, so the status line
+    // can name the dB without the engine carrying extra state. 0 until a sweep completes. Message-thread
+    // read only; the flag (health().flags & LowSnr) is the source of truth for WHETHER to warn.
+    float completedSweepSnrDb() const noexcept;
+
     // AutoPerEar: which earcup is currently being fed to Dirac (0 = left, 1 = right). Drives the GUI
     // "capturing Left/Right" indicator; only meaningful while running in AutoPerEar with signal.
     int autoActiveEar() const noexcept;

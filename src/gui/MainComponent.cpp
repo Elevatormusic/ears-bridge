@@ -609,7 +609,7 @@ void MainComponent::onStartStop() {
         juce::String err;
         if (engine.start (err)) {
             startStop.setButtonText ("Stop");
-            inputClipHold_ = 0; silentTicks_ = 0; lowLevelTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
+            inputClipHold_ = 0; silentTicks_ = 0; lowLevelTicks_ = 0; lowSnrTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
             // Surface a silent format downgrade: WASAPI shared mode can grant a different rate/depth
             // than the user selected, which would otherwise resample with no indication. The split:
             // genuine cautions (a real resample, an unverifiable rail) go on preflightLabel (yellow);
@@ -751,6 +751,7 @@ void MainComponent::applyTitleBarTheme() {
 
 void MainComponent::updateStatusLine() {
     const auto st = engine.status();
+    statusLine.setTooltip ({});   // only the low-SNR branch sets a tooltip; clear it on every other path
     if (st == EngineStatus::Running) {
         const auto h = engine.health();
         // An invalidating condition is reported the instant it latches, regardless of phase.
@@ -768,6 +769,21 @@ void MainComponent::updateStatusLine() {
             // clamp stops a cable over, but it distorts the sweep -- flag it, don't pass it as "clean".
             statusLine.setText ("Output clipping - lower the level or avoid Sum", juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::warn());
+        } else if (lowSnrTicks_ >= kLowSnrHoldTicks) {
+            // SNR guidance, BEFORE the green "Sweep captured" branch so a noisy sweep never reads as
+            // "clean" (clean = no dropouts/clipping, which a low-SNR sweep can still pass). The engine
+            // raised LowSnr at the sweep's edge off a TRUSTED floor only (honest silence otherwise).
+            // The status line shares the title bar and is narrow, so keep the inline text SHORT and
+            // complete (no clipping); the full guidance ("quieten the room or raise the level, then
+            // re-measure") lives in the tooltip. snrNote's long form is the wording source of record.
+            const int snrDb = juce::roundToInt (engine.completedSweepSnrDb());
+            statusLine.setText ("Low SNR: sweep only " + juce::String (snrDb)
+                                + " dB over the room noise - re-measure", juce::dontSendNotification);
+            statusLine.setColour (juce::Label::textColourId, Theme::warn());
+            statusLine.setTooltip ("The Dirac sweep was only " + juce::String (snrDb)
+                                   + " dB above the room-noise floor. Quieten the room (close windows, "
+                                     "stop fans/AC) or raise the level, then re-measure for a cleaner "
+                                     "correction.");
         } else if (h.session == SessionPhase::Complete) {
             // Sweep finished clean: an honest sweep-scoped all-clear (no dropouts / clipping seen during
             // the captured sweep), with the OS-resampled caveat when the input ran through OS SRC.
@@ -928,6 +944,11 @@ void MainComponent::timerCallback() {
     // otherwise reads as "clean".
     const bool tooQuiet = ! blockSilent && ! engine.reachedGoodLevel();
     lowLevelTicks_ = tooQuiet ? (lowLevelTicks_ + 1) : 0;
+    // Low-SNR (sweep-to-noise) guidance: the engine raised LowSnr at the just-finished sweep's edge.
+    // It's a per-sweep latch (sticky for the run), so a short debounce only steadies the first render;
+    // it never decays mid-run (the flag stays set), which is intended -- a noisy sweep stays flagged
+    // until the next Start re-scopes. Mirrors the lowLevelTicks_ debounce pattern.
+    lowSnrTicks_ = any (engine.health().flags & HealthFlag::LowSnr) ? (lowSnrTicks_ + 1) : 0;
     updateActiveEarIndicator (blockSilent);   // AutoPerEar: highlight the earcup being captured now
     if (engine.status() == EngineStatus::Running) updateStatusLine();
 
