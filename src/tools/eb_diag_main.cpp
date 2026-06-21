@@ -9,6 +9,7 @@
 #include <juce_audio_devices/juce_audio_devices.h>
 #include "audio/AudioEngine.h"
 #include "audio/ModelDetect.h"
+#include "platform/EndpointFormat.h"     // dogfood the promoted full endpoint-format read API
 #include "audio/ReferenceGradePoller.h"   // selftest: the headless grade-poll decision
 #include "audio/RefMonitor.h"             // selftest: RefMonState
 #include "diag/DiagnosticLog.h"           // selftest: write the trace through the real log path
@@ -242,14 +243,23 @@ static int loopCapture (const juce::String& filter, int seconds) {
     if (FAILED (ac->GetMixFormat (&mix)) || mix == nullptr) {
         std::cout << "GetMixFormat FAILED\n"; ac->Release(); match->Release(); en->Release(); CoUninitialize(); return 44;
     }
-    // Decode the mix format (handle WAVEFORMATEXTENSIBLE so float-vs-PCM is correct for the WAV + peak).
-    const DWORD rate     = mix->nSamplesPerSec;
-    const WORD  channels = mix->nChannels;
-    const WORD  bits     = mix->wBitsPerSample;
-    bool isFloat = (mix->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
-    if (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix->cbSize >= 22) {
-        auto* wx = reinterpret_cast<WAVEFORMATEXTENSIBLE*> (mix);
-        isFloat = (wx->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+    // Decode the mix format via the promoted platform API (eb::readEndpointFormat), which does the same
+    // GetMixFormat + WAVEFORMATEXTENSIBLE float-vs-PCM decode keyed on this RENDER endpoint. Fall back to
+    // the raw blob decode if the read can't resolve, so the loopback path is never blocked. The raw `mix`
+    // pointer is still required below for IAudioClient::Initialize and writeWav.
+    eb::EndpointFormat ef = eb::readEndpointFormat (matchName, /*isInput*/ false);
+    const DWORD rate     = ef.valid ? (DWORD) ef.mixRateHz : mix->nSamplesPerSec;
+    const WORD  channels = ef.valid ? (WORD)  ef.channels  : mix->nChannels;
+    const WORD  bits     = ef.valid ? (WORD)  ef.bits      : mix->wBitsPerSample;
+    bool isFloat;
+    if (ef.valid) {
+        isFloat = ef.isFloat;
+    } else {
+        isFloat = (mix->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
+        if (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix->cbSize >= 22) {
+            auto* wx = reinterpret_cast<WAVEFORMATEXTENSIBLE*> (mix);
+            isFloat = (wx->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+        }
     }
     std::cout << "  mixFormat: " << rate << " Hz / " << channels << "ch / " << bits << "-bit "
               << (isFloat ? "float" : "PCM") << "\n";

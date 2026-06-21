@@ -37,5 +37,10 @@ double endpointMixSampleRateForName (const juce::String& deviceName, bool /*isIn
     return 0.0;
 }
 
+// macOS does not (yet) expose the full WASAPI-style mix-format struct here; the full read is a Windows
+// feature. Return {valid=false} so callers treat it as "couldn't read", never as a good format. (The
+// pure interpretMixFormat lives in the cross-platform body of EndpointFormat.cpp and is built on macOS.)
+EndpointFormat readEndpointFormat (const juce::String&, bool) { return {}; }
+
 } // namespace eb
 #endif
