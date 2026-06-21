@@ -831,9 +831,11 @@ void MainComponent::updateStatusLine() {
          && ((isRealEarsInput() && outputPicker.selectedDevice().has_value()
               && ! outputPicker.selectedDevice()->isVirtualSink)
              || (isRealEarsWithCable() && settings.combineMode() != CombineMode::AutoPerEar));
+        const auto lCal = leftCal.calFile();   // bind once: calFile() returns optional<CalFile> by value
+        const auto rCal = rightCal.calFile();
         const bool bothSideUnknown =
-            leftCal.calFile().has_value()  && leftCal.calFile()->side  == eb::CalSide::Unknown
-         && rightCal.calFile().has_value() && rightCal.calFile()->side == eb::CalSide::Unknown;
+            lCal.has_value()  && lCal->side  == eb::CalSide::Unknown
+         && rCal.has_value() && rCal->side == eb::CalSide::Unknown;
         if (overrideRelaxing) {
             statusLine.setText ("Advanced override on - not the standard Dirac path.",
                                 juce::dontSendNotification);
