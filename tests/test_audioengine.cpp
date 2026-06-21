@@ -60,11 +60,15 @@ TEST_CASE("AudioEngine seam: a clean input stays valid") {
     CHECK (e.cleanCapture());
 }
 
-TEST_CASE("AudioEngine seam: session starts Idle and arms after a sustained loud run") {
+TEST_CASE("AudioEngine seam: session starts Idle and arms after a rise above the floor") {
     eb::AudioEngine e;
     e.prepareForTest (48000.0, 8);
     CHECK (e.sessionPhase() == eb::SessionPhase::Idle);
     std::vector<float> loud (8, 0.5f), sil (8, 0.0f), mono (8, 0.0f);
+    // A quiet floor (warm-up settles low), then a sustained loud RISE: arms under the rise-over-floor rule.
+    for (int i = 0; i < eb::MeasurementSession::kArmWarmupBlocks + 2; ++i)
+        e.processCaptureBlockForTest (sil.data(), sil.data(), mono.data(), 8);
+    CHECK (e.sessionPhase() == eb::SessionPhase::Preflight);
     for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i)
         e.processCaptureBlockForTest (loud.data(), sil.data(), mono.data(), 8);
     CHECK (e.sessionPhase() == eb::SessionPhase::SweepActive);
@@ -74,12 +78,14 @@ TEST_CASE("AudioEngine seam: session starts Idle and arms after a sustained loud
 TEST_CASE("AudioEngine seam: a clip ON the sweep-onset block invalidates") {
     eb::AudioEngine e;
     e.prepareForTest (48000.0, 8);
-    // Two clean-loud ramp blocks, then a clip block that COMPLETES the arm: the onset block's clip is
-    // analyzed AFTER the latch re-scope, so it stands.
+    // A quiet floor (warm-up), then clean-loud ramp blocks, then a clip block that COMPLETES the arm:
+    // the onset block's clip is analyzed AFTER the latch re-scope, so it stands.
     std::vector<float> loud (8, 0.5f), sil (8, 0.0f), mono (8, 0.0f);
     std::vector<float> clip { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f };
-    e.processCaptureBlockForTest (loud.data(), sil.data(), mono.data(), 8);
-    e.processCaptureBlockForTest (loud.data(), sil.data(), mono.data(), 8);
+    for (int i = 0; i < eb::MeasurementSession::kArmWarmupBlocks + 2; ++i)
+        e.processCaptureBlockForTest (sil.data(), sil.data(), mono.data(), 8);
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks - 1; ++i)   // qualifying blocks 1..N-1
+        e.processCaptureBlockForTest (loud.data(), sil.data(), mono.data(), 8);
     e.processCaptureBlockForTest (clip.data(), sil.data(), mono.data(), (int) clip.size());  // arms + clips
     CHECK (e.sessionPhase() == eb::SessionPhase::Invalid);
     CHECK (eb::any (e.health().flags & eb::HealthFlag::ClipConfirmed));
@@ -148,9 +154,11 @@ TEST_CASE("AudioEngine seam: a clip DURING the sweep invalidates and latches the
         e.processCaptureBlockForTest (l.data(), r.data(), mono.data(), (int) l.size());
     };
     std::vector<float> loud (8, 0.5f);
+    std::vector<float> quiet (8, 0.0f);
     std::vector<float> clip { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f };
 
-    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i) run (loud);  // arm
+    for (int i = 0; i < eb::MeasurementSession::kArmWarmupBlocks + 2; ++i) run (quiet);  // quiet floor + warm-up
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i) run (loud);  // arm (rise above floor)
     CHECK (e.sessionPhase() == eb::SessionPhase::SweepActive);
     CHECK (e.cleanCapture());
 
@@ -167,7 +175,8 @@ TEST_CASE("AudioEngine seam: a clean sweep then sustained silence reaches Comple
         std::vector<float> l (8, v), r (8, 0.0f), mono (8, 0.0f);
         e.processCaptureBlockForTest (l.data(), r.data(), mono.data(), 8);
     };
-    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i) run (0.5f);   // arm
+    for (int i = 0; i < eb::MeasurementSession::kArmWarmupBlocks + 2; ++i) run (0.0f);  // quiet floor + warm-up
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i) run (0.5f);   // arm (rise above floor)
     CHECK (e.sessionPhase() == eb::SessionPhase::SweepActive);
     // prepareForTest configured the silence window for block=8 @ 48k (a large block count); drive enough
     // quiet blocks to cross it. Use the session's configured need via kSilenceCompleteSeconds.
@@ -187,7 +196,8 @@ TEST_CASE("AudioEngine seam: the RIGHT-earcup sweep after a gap is still scored 
     std::vector<float> loud (8, 0.5f), quiet (8, 0.0f);
     std::vector<float> clip { 0.2f, 1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f };
 
-    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i) runL (loud);  // LEFT sweep
+    for (int i = 0; i < eb::MeasurementSession::kArmWarmupBlocks + 2; ++i) runL (quiet);  // quiet floor + warm-up
+    for (int i = 0; i < eb::MeasurementSession::kArmSustainBlocks; ++i) runL (loud);  // LEFT sweep (rise above floor)
     const int need = (int) std::lround (eb::MeasurementSession::kSilenceCompleteSeconds * 48000.0 / 8.0) + 2;
     for (int i = 0; i < need; ++i) runL (quiet);                                      // long inter-sweep gap
     CHECK (e.sessionPhase() == eb::SessionPhase::Complete);                           // provisional
@@ -205,8 +215,12 @@ TEST_CASE("AudioEngine: a sustained loud sweep freezes the ClockBridge ratio, th
     e.prepareForTest (48000.0, 512);
     std::vector<float> loud (512, 0.3f), mono (512, 0.0f), quiet (512, 0.0f);  // 0.3 > kSweepStartLinear (-24 dBFS)
     CHECK_FALSE (e.bridgeSweepFrozen());
-    // kArmSustainBlocks (3) sustained loud blocks arm SweepActive -> the capture sync freezes the bridge.
-    for (int b = 0; b < 4; ++b) e.processCaptureBlockForTest (loud.data(), loud.data(), mono.data(), 512);
+    // A quiet floor settles the noise floor low + clears the warm-up; then a sustained loud RISE above
+    // floor*kArmRiseRatio for kArmSustainBlocks arms SweepActive -> the capture sync freezes the bridge.
+    for (int b = 0; b < eb::MeasurementSession::kArmWarmupBlocks + 2; ++b)
+        e.processCaptureBlockForTest (quiet.data(), quiet.data(), mono.data(), 512);
+    for (int b = 0; b < eb::MeasurementSession::kArmSustainBlocks; ++b)
+        e.processCaptureBlockForTest (loud.data(), loud.data(), mono.data(), 512);
     CHECK (e.bridgeSweepFrozen());
     CHECK (e.sweepActive());
     // Sustained silence completes the segment -> session leaves SweepActive -> the bridge releases.
