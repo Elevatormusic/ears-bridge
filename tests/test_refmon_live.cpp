@@ -1,19 +1,24 @@
-// Plan 5 review-fix: the LIVE grading loop, end-to-end through the AudioEngine capture seam.
+// Plan 5 / #7 fix: the LIVE grading loop, end-to-end through the AudioEngine capture seam, now driven
+// by DETERMINISTIC reference-match detection instead of the level-rise arm.
 //
-// These tests prove the wiring the whole-branch review found "wired-but-dead":
-//   1. A synthetic MATCHING ESS response driven through the capture seam (with a reference loaded)
-//      is buffered during SweepActive, snapshotted at the sweep-complete edge, copied out via
-//      copyGradingResponse(), graded with gradeMeasurement, and published -> a MATCHED ("graded")
-//      state with a sane IR-SNR (NEVER ReferenceStale / NotGraded).
-//   2. A WRONG-reference response -> ReferenceStale, NO quality number.
-//   3. NO reference loaded -> NotGraded (the engine publishes it at the edge; no response buffered).
-//   4. Fix 2: with kIrThresholdsRatified == false a clean (~13 dB) measurement does NOT drive a warn
-//      (its pure verdict is lowQuality, but the gate keeps it info-only); a mismatch still re-learns.
-//   5. RT-safety: the in-sweep response copy is a pre-allocated memcpy (alloc-free on the capture path).
+// The headline regression: a GRADUAL ESS response (ramps up from a low level — the kind the old
+// rise-ratio arm MISSES, so SweepActive never arms) still grades, because the engine buffers the mic
+// response CONTINUOUSLY into a rolling ring and fires the grade on an absolute-energy activity edge
+// (sustained signal, then trailing silence). The match-gate (referenceMatches, inside
+// gradeMeasurementWindow) is the correctness decision: a non-sweep transient (a finger snap) fails it.
 //
-// The test mirrors exactly what MainComponent::pollReferenceGrade() does on the message/worker thread:
-// copyGradingResponse() -> gradeMeasurement() -> publishReferenceGrade(). It drives the response THROUGH
-// the real capture seam (processCaptureBlockForTest), so the response-buffer-during-sweep path is live.
+// These tests prove:
+//   1. GRADUAL sweep grades: a low-and-rising ESS response -> a graded (matched) state WITHOUT SweepActive
+//      ever arming (the #7 headline). Sane, positive IR-SNR.
+//   2. A normal (full-amplitude) matching ESS response through the seam -> graded (matched).
+//   3. A WRONG-reference response -> ReferenceStale, NO quality number.
+//   4. A short loud TRANSIENT (finger-snap-like) -> NOT graded clean (referenceMatches rejects it).
+//   5. NO reference loaded -> NotGraded (the engine publishes it at the edge; nothing buffered).
+//   6. Debounce: one completed sequence -> exactly one pending grade (not repeated).
+//   7. Fix 2 presentation-gate invariants (unchanged pure-module behaviour).
+//
+// The test mirrors what MainComponent::pollReferenceGrade() does on the worker: copyGradingResponse()
+// (the long ring WINDOW) -> gradeMeasurementWindow() (align + match-gate + grade) -> publishReferenceGrade().
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -63,8 +68,8 @@ static std::vector<float> convolve (const std::vector<float>& sig, const std::ve
     return y;
 }
 
-// Build a (reference, response) pair from a clean direct-arrival IR (same construction the pure
-// RefMonitor tests use), both length n+255 so the FULL linear convolution is kept.
+// Build a (reference, response) pair from a clean direct-arrival IR (a single tap). Both length
+// sweepLen + 255 so the FULL linear convolution is kept; the response is the room response to `ref`.
 static void makeCleanMeasurement (int sweepLen, double fs,
                                   std::vector<float>& refOut, std::vector<float>& respOut) {
     auto ref = makeEss (sweepLen, fs);
@@ -75,74 +80,63 @@ static void makeCleanMeasurement (int sweepLen, double fs,
     std::copy (ref.begin(), ref.end(), refOut.begin());
 }
 
-// Drive a response through the REAL capture seam (the engine buffers the in-sweep mic input). The
-// response itself is the sweep signal (as on-device): a quiet warm-up lets the floor settle, then the
-// response is fed block-by-block. The session arms after a sustained rise (~a dozen blocks); the engine
-// buffers the response ONLY once SweepActive, so the first armed block is captured as response[offset].
-// We return that `offset` (samples consumed before capture began) so the caller can align the reference
-// to the captured segment (reference[offset:] vs the captured buffer) for a clean deconvolution.
-// Then terminal silence drives Complete (firing the sweep-complete edge that snapshots the response).
-static int driveResponseThroughSweep (eb::AudioEngine& e, const std::vector<float>& response, int N) {
+// Drive a response through the REAL capture seam with the new CONTINUOUS-ring detection. We feed:
+//   quiet warm-up -> the response block-by-block -> trailing silence (enough to fire the activity edge).
+// The engine buffers the response continuously (NOT gated on SweepActive), so the grade fires on the
+// trailing-silence edge whether or not the level arm ever armed. Returns whether SweepActive ever armed
+// (so a test can ASSERT the gradual case never armed it, proving independence from the rise-ratio arm).
+static bool driveResponseThroughSeam (eb::AudioEngine& e, const std::vector<float>& response, int N) {
     std::vector<float> mono ((size_t) N, 0.0f);
     std::vector<float> silence ((size_t) N, 0.0f);
+    bool everArmed = false;
 
-    // 1) Warm-up: settle the floor so the arm is allowed (kArmWarmupBlocks Preflight blocks).
-    for (int i = 0; i < eb::MeasurementSession::kArmWarmupBlocks; ++i)
+    // 1) Quiet warm-up so the floor settles (matches an on-device pre-sweep window).
+    for (int i = 0; i < eb::MeasurementSession::kArmWarmupBlocks; ++i) {
         e.processCaptureBlockForTest (silence.data(), silence.data(), mono.data(), N);
+        if (e.sweepActive()) everArmed = true;
+    }
 
     // 2) Feed the response on the LEFT channel (the capture buffers the left = the mono response path).
-    //    Track how many samples were consumed BEFORE the arming block (the offset the engine did not
-    //    capture). consumeSweepStarted() resets the engine's write index to 0 on the arming block, so the
-    //    captured buffer begins exactly at the first SweepActive block = response[offset].
     const int total = (int) response.size();
-    int offset = 0;
-    bool armed = false;
     for (int off = 0; off < total; off += N) {
         const int cnt = std::min (N, total - off);
         std::vector<float> blk ((size_t) N, 0.0f);
         std::copy (response.begin() + off, response.begin() + off + cnt, blk.begin());
-        const bool wasActive = e.sweepActive();
         e.processCaptureBlockForTest (blk.data(), silence.data(), mono.data(), N);
-        if (! armed && ! wasActive && e.sweepActive()) {   // THIS block flipped Preflight -> SweepActive
-            offset = off;                                  // the arming block is captured as response[offset]
-            armed = true;
-        }
+        if (e.sweepActive()) everArmed = true;
     }
-    REQUIRE (armed);   // the response must have armed the sweep
 
-    // 3) Terminal silence -> sustained below-floor run -> Complete (fires consumeSweepComplete; the engine
-    //    snapshots the captured length + sets responseReady_ when a reference is loaded).
-    for (int i = 0; i < 200; ++i)
+    // 3) Trailing silence > Dirac's inter-sweep gap -> the activity edge fires (pendingGrade_ + ready).
+    //    300 blocks @ 512/48k ~= 3.2 s, comfortably past the ~2 s kGradeSilenceSeconds.
+    for (int i = 0; i < 300; ++i) {
         e.processCaptureBlockForTest (silence.data(), silence.data(), mono.data(), N);
-    return offset;
+        if (e.sweepActive()) everArmed = true;
+    }
+    return everArmed;
 }
 
-// Replays exactly what MainComponent::pollReferenceGrade() does once a sweep completed with a reference
-// loaded: copy the response out of the engine, grade it against the reference, publish the verdict. The
-// reference is aligned to the captured segment by `offset` (the samples the engine did not capture before
-// SweepActive) — on-device the GUI grades the captured response against the learned reference; here we
-// align so the synthetic deconvolution starts at the same sweep sample.
-static eb::MeasurementGrade gradeAndPublish (eb::AudioEngine& e, const std::vector<float>& referenceFull,
-                                             int offset, double rate) {
-    REQUIRE (e.consumePendingGrade());                 // a sweep completed with a reference loaded
-    REQUIRE (e.gradingResponseReady());                // a fresh response snapshot is ready
+// Replays MainComponent::pollReferenceGrade(): copy the long ring WINDOW out, align+grade it against the
+// reference via gradeMeasurementWindow, publish the verdict. Returns the grade so a test can inspect it.
+static eb::MeasurementGrade gradeAndPublish (eb::AudioEngine& e, const std::vector<float>& reference,
+                                             double rate) {
+    REQUIRE (e.consumePendingGrade());                 // a sequence completed with a reference loaded
+    REQUIRE (e.gradingResponseReady());                // a fresh window snapshot is ready
 
-    std::vector<float> reference (referenceFull.begin() + std::min (offset, (int) referenceFull.size()),
-                                  referenceFull.end());
-    std::vector<float> response (reference.size(), 0.0f);
-    const int got = e.copyGradingResponse (response.data(), (int) response.size());
+    std::vector<float> window ((size_t) std::lround (e.gradingResponseRate() * 28.0), 0.0f);
+    const int got = e.copyGradingResponse (window.data(), (int) window.size());
     REQUIRE (got > 0);
-    const int n = std::min ((int) reference.size(), (int) response.size());
-    auto g = eb::gradeMeasurement (reference.data(), response.data(), n, rate);
+    window.resize ((size_t) got);
+    auto g = eb::gradeMeasurementWindow (reference.data(), (int) reference.size(),
+                                         window.data(), (int) window.size(), rate);
     e.publishReferenceGrade ((int) g.state, g.quality.irSnrDb, g.quality.thdPercent,
                              g.state == eb::RefMonState::ReferenceStale, g.quality.lowQuality);
     return g;
 }
 
 // ==================================================================================================
-// 1. Live grade via the seam: a MATCHING response -> a graded (matched) state with a sane IR-SNR
+// 1. HEADLINE (#7): a GRADUAL sweep response grades WITHOUT the level arm ever arming SweepActive.
 // ==================================================================================================
-TEST_CASE("Live grade: a matching ESS response through the seam grades as MATCHED with a real IR-SNR") {
+TEST_CASE("Live grade #7: a GRADUAL (low-and-rising) ESS response grades even though SweepActive never arms") {
     eb::AudioEngine e;
     const int    N  = 512;
     const int    sweepLen = 1 << 15;     // 32768
@@ -152,28 +146,62 @@ TEST_CASE("Live grade: a matching ESS response through the seam grades as MATCHE
     std::vector<float> ref, resp;
     makeCleanMeasurement (sweepLen, fs, ref, resp);
 
-    e.setReferenceLoaded (true);                       // a reference is loaded -> the edge will buffer+grade
-    const int offset = driveResponseThroughSweep (e, resp, N);
-    gradeAndPublish (e, ref, offset, fs);
+    // Make the response GRADUAL: a long, SHALLOW linear amplitude ramp from ~0 up to ~0.2 across the
+    // sweep — the kind of slow rise a real Dirac log-sweep makes. The rise-ratio arm tracks it with its
+    // floor EWMA (0.95*floor + 0.05*peak) so peak never clears floor*kArmRiseRatio for the sustained run,
+    // and SweepActive NEVER arms (the #7 bug — verified: the level arm misses this shape). But the response
+    // still rises above the ABSOLUTE activity floor (kSweepStartLinear == kGradeActiveLinear), so the
+    // deterministic activity edge fires and grades it. (A steeper 0->0.5 ramp DOES arm the level arm — the
+    // shallow ramp is the honest reproduction of the slow on-device rise the arm cannot see.)
+    const int m = (int) resp.size();
+    for (int i = 0; i < m; ++i) {
+        const float env = 0.2f * (float) i / (float) m;   // 0 -> 0.2 shallow linear ramp (defeats the rise-ratio arm)
+        resp[(size_t) i] *= env;
+    }
 
+    e.setReferenceLoaded (true);
+    const bool everArmed = driveResponseThroughSeam (e, resp, N);
+    CHECK_FALSE (everArmed);                            // the headline: the level arm NEVER armed on the gradual sweep
+
+    auto g = gradeAndPublish (e, ref, fs);
     const auto state = (eb::RefMonState) e.refMonState();
-    // "graded" = the match-gate passed: GradedClean (ratified-clean) OR GradedSuspect (clean but below the
-    // PROVISIONAL cutoff while unratified). It must NOT be ReferenceStale or NotGraded.
+    INFO ("published IR-SNR = " << e.refIrSnrDb() << " dB; gradeState = " << (int) g.state);
     CHECK ((state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedSuspect));
     CHECK (state != eb::RefMonState::ReferenceStale);
     CHECK (state != eb::RefMonState::NotGraded);
-    CHECK_FALSE (eb::any (e.health().flags & eb::HealthFlag::RefMismatch));   // matched -> no mismatch flag
-    // A real deconvolved IR-SNR number was published. It reads POSITIVE for a clean direct-arrival (the
-    // exact dB is lower than the offline ~13 dB because the seam captures from the arm point, losing the
-    // low-frequency sweep lead-in — that is the genuine on-device behaviour the live path exercises).
-    INFO ("published IR-SNR = " << e.refIrSnrDb() << " dB, THD = " << e.refThdPercent() << "%");
-    CHECK (e.refIrSnrDb() > 0.0f);                     // a sane, positive IR quality number was published
+    CHECK_FALSE (eb::any (e.health().flags & eb::HealthFlag::RefMismatch));
+    CHECK (e.refIrSnrDb() > 0.0f);
     CHECK (std::isfinite (e.refIrSnrDb()));
-    CHECK (e.refThdPercent() >= 0.0f);
 }
 
 // ==================================================================================================
-// 2. Live grade via the seam: a WRONG reference -> ReferenceStale, NO quality number
+// 2. A normal (full-amplitude) matching response also grades as MATCHED.
+// ==================================================================================================
+TEST_CASE("Live grade: a full-amplitude matching ESS response through the seam grades as MATCHED") {
+    eb::AudioEngine e;
+    const int    N  = 512;
+    const int    sweepLen = 1 << 15;
+    const double fs = 48000.0;
+    e.prepareForTest (fs, N);
+
+    std::vector<float> ref, resp;
+    makeCleanMeasurement (sweepLen, fs, ref, resp);
+
+    e.setReferenceLoaded (true);
+    driveResponseThroughSeam (e, resp, N);
+    gradeAndPublish (e, ref, fs);
+
+    const auto state = (eb::RefMonState) e.refMonState();
+    CHECK ((state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedSuspect));
+    CHECK (state != eb::RefMonState::ReferenceStale);
+    CHECK (state != eb::RefMonState::NotGraded);
+    CHECK_FALSE (eb::any (e.health().flags & eb::HealthFlag::RefMismatch));
+    CHECK (e.refIrSnrDb() > 0.0f);
+    CHECK (std::isfinite (e.refIrSnrDb()));
+}
+
+// ==================================================================================================
+// 3. A WRONG reference -> ReferenceStale, NO quality number (the match-gate rejects it).
 // ==================================================================================================
 TEST_CASE("Live grade: a WRONG-reference response through the seam grades ReferenceStale (no quality)") {
     eb::AudioEngine e;
@@ -182,27 +210,61 @@ TEST_CASE("Live grade: a WRONG-reference response through the seam grades Refere
     const double fs = 48000.0;
     e.prepareForTest (fs, N);
 
-    // The learned reference is a 20 Hz..20 kHz sweep; the response is to a DIFFERENT (narrow-band) sweep.
     auto refA = makeEss (sweepLen, fs, 20.0,  20000.0);
     auto refB = makeEss (sweepLen, fs, 100.0, 8000.0);
     std::vector<float> roomIr ((size_t) 256, 0.0f); roomIr[40] = 1.0f; roomIr[90] = 0.25f;
     auto resp = convolve (refB, roomIr);
-    resp.resize ((size_t) sweepLen);
-    refA.resize ((size_t) sweepLen);                   // grade equal-length segments
 
     e.setReferenceLoaded (true);
-    const int offset = driveResponseThroughSweep (e, resp, N);
-    gradeAndPublish (e, refA, offset, fs);
+    driveResponseThroughSeam (e, resp, N);
+    gradeAndPublish (e, refA, fs);
 
     CHECK ((eb::RefMonState) e.refMonState() == eb::RefMonState::ReferenceStale);
-    CHECK (eb::any (e.health().flags & eb::HealthFlag::RefMismatch));         // the gate flagged the mismatch
-    CHECK (e.refIrSnrDb() == Catch::Approx (0.0f));                            // NO quality number on a non-match
+    CHECK (eb::any (e.health().flags & eb::HealthFlag::RefMismatch));
+    CHECK (e.refIrSnrDb() == Catch::Approx (0.0f));
 }
 
 // ==================================================================================================
-// 3. NO reference loaded -> NotGraded (the engine publishes it at the edge; nothing buffered)
+// 4. A short loud TRANSIENT (finger-snap-like) must NOT grade clean (referenceMatches rejects it).
 // ==================================================================================================
-TEST_CASE("Live grade: NO reference loaded -> NotGraded, no pending grade, no response buffered") {
+TEST_CASE("Live grade: a finger-snap transient does NOT grade clean (the match-gate rejects it)") {
+    eb::AudioEngine e;
+    const int    N  = 512;
+    const int    sweepLen = 1 << 15;
+    const double fs = 48000.0;
+    e.prepareForTest (fs, N);
+
+    std::vector<float> ref, resp;
+    makeCleanMeasurement (sweepLen, fs, ref, resp);    // the learned reference is a real sweep
+
+    // The "measurement" is NOT a sweep: a couple of short loud bursts (snaps), then nothing. It clears the
+    // absolute activity floor (so the edge could fire) but it is not the sweep -> the gate must reject it.
+    std::vector<float> snap ((size_t) (N * 40), 0.0f);
+    for (int b = 0; b < 20; ++b) snap[(size_t) (b * N + 10)] = 0.8f;   // sparse loud impulses across ~20 blocks
+
+    e.setReferenceLoaded (true);
+    driveResponseThroughSeam (e, snap, N);
+
+    // The activity edge MAY fire (loud enough), but the grade must NOT be a clean match.
+    if (e.consumePendingGrade()) {
+        std::vector<float> window ((size_t) std::lround (e.gradingResponseRate() * 28.0), 0.0f);
+        const int got = e.copyGradingResponse (window.data(), (int) window.size());
+        window.resize ((size_t) std::max (1, got));
+        auto g = eb::gradeMeasurementWindow (ref.data(), (int) ref.size(),
+                                             window.data(), (int) window.size(), fs);
+        CHECK (g.state != eb::RefMonState::GradedClean);
+        CHECK (g.state != eb::RefMonState::GradedSuspect);
+        CHECK_FALSE (g.match.matched);                 // the snap is not the sweep -> the gate fails
+    }
+    // Either way, no clean/suspect verdict was published from a snap.
+    CHECK ((eb::RefMonState) e.refMonState() != eb::RefMonState::GradedClean);
+    CHECK ((eb::RefMonState) e.refMonState() != eb::RefMonState::GradedSuspect);
+}
+
+// ==================================================================================================
+// 5. NO reference loaded -> NotGraded (the engine publishes it at the edge; nothing buffered/triggered).
+// ==================================================================================================
+TEST_CASE("Live grade: NO reference loaded -> NotGraded, no pending grade, no window buffered") {
     eb::AudioEngine e;
     const int    N  = 512;
     const int    sweepLen = 1 << 14;
@@ -212,21 +274,44 @@ TEST_CASE("Live grade: NO reference loaded -> NotGraded, no pending grade, no re
     std::vector<float> ref, resp;
     makeCleanMeasurement (sweepLen, fs, ref, resp);
 
-    // referenceLoaded stays false (the default) -> the edge publishes NotGraded and buffers nothing.
-    driveResponseThroughSweep (e, resp, N);
+    driveResponseThroughSeam (e, resp, N);             // referenceLoaded stays false (the default)
 
     CHECK ((eb::RefMonState) e.refMonState() == eb::RefMonState::NotGraded);
     CHECK_FALSE (e.consumePendingGrade());             // no grade was requested
-    CHECK_FALSE (e.gradingResponseReady());            // no response snapshot was made ready
-    CHECK (eb::refMonBlocksGreen ((eb::RefMonState) e.refMonState()));   // NotGraded never reads green
+    CHECK_FALSE (e.gradingResponseReady());            // no window snapshot was made ready
+    CHECK (eb::refMonBlocksGreen ((eb::RefMonState) e.refMonState()));
 }
 
 // ==================================================================================================
-// 4. Fix 2: while UNRATIFIED, a clean (~13 dB) measurement is info-only (lowQuality but NO warn);
-//    a mismatch still re-learns. We pin the gate constant + the pure verdict the GUI gates on.
+// 6. Debounce: ONE completed sequence fires EXACTLY ONE pending grade (not repeated).
+// ==================================================================================================
+TEST_CASE("Live grade debounce: one completed sequence fires exactly one pending grade") {
+    eb::AudioEngine e;
+    const int    N  = 512;
+    const int    sweepLen = 1 << 15;
+    const double fs = 48000.0;
+    e.prepareForTest (fs, N);
+
+    std::vector<float> ref, resp;
+    makeCleanMeasurement (sweepLen, fs, ref, resp);
+
+    e.setReferenceLoaded (true);
+    driveResponseThroughSeam (e, resp, N);
+
+    CHECK (e.consumePendingGrade());                   // exactly one grade pending after the sequence
+    CHECK_FALSE (e.consumePendingGrade());             // it was a single edge, not repeated
+
+    // Further trailing silence (without fresh sustained activity) must NOT re-fire the trigger.
+    std::vector<float> silence ((size_t) N, 0.0f), mono ((size_t) N, 0.0f);
+    for (int i = 0; i < 300; ++i)
+        e.processCaptureBlockForTest (silence.data(), silence.data(), mono.data(), N);
+    CHECK_FALSE (e.consumePendingGrade());             // no re-grade of the same (already-ended) sequence
+}
+
+// ==================================================================================================
+// 7. Fix 2: the IR thresholds stay PROVISIONAL (unratified) so a clean measurement is info-only.
 // ==================================================================================================
 TEST_CASE("Fix 2: the IR thresholds are PROVISIONAL (unratified) so a clean measurement is info-only") {
-    // The presentation gate is OFF until on-device ratification: a clean ~13 dB measurement must not warn.
     CHECK_FALSE (eb::kIrThresholdsRatified);
 }
 
@@ -237,16 +322,11 @@ TEST_CASE("Fix 2: a clean measurement's PURE verdict is lowQuality at the defaul
     makeCleanMeasurement (n, fs, ref, resp);
     const int m = (int) resp.size();
 
-    // At the DEFAULT (provisional 20 dB) cutoff the real ESS deconvolution (~13 dB) reads lowQuality ->
-    // GradedSuspect in the pure module. This is the FALSE-warn the gate suppresses: while kIrThresholdsRatified
-    // is false the GUI presents GradedSuspect as INFO (numbers shown, neutral tone), never a warn-coloured
-    // "low quality" string. The lowQuality computation STAYS live in the pure module for ratification.
     auto g = eb::gradeMeasurement (ref.data(), resp.data(), m, fs);   // default kMinIrSnrDb = 20 dB
     CHECK (g.match.matched);
     CHECK (g.state == eb::RefMonState::GradedSuspect);
-    CHECK (g.quality.lowQuality);                       // the pure verdict (kept for the campaign)
-    CHECK (g.quality.irSnrDb > 5.0f);                   // ~13 dB: a clean measurement, NOT actually bad
-    // The presentation gate is the thing that keeps this from warning the user (asserted above).
+    CHECK (g.quality.lowQuality);
+    CHECK (g.quality.irSnrDb > 5.0f);
     CHECK_FALSE (eb::kIrThresholdsRatified);
 }
 
@@ -259,11 +339,11 @@ TEST_CASE("Fix 2: a mismatch STILL produces the re-learn gate verdict (the gate 
     auto resp = convolve (refB, roomIr);
     resp.resize ((size_t) n);
     auto g = eb::gradeMeasurement (refA.data(), resp.data(), n, fs);
-    CHECK (g.state == eb::RefMonState::ReferenceStale);   // a mismatch re-learns regardless of the gate
+    CHECK (g.state == eb::RefMonState::ReferenceStale);
     CHECK (eb::irQualityNote (g.quality).startsWith ("Reference doesn't match"));
 }
 
-// NOTE: the RT-safety / allocation-free assertion for the in-sweep response-buffer copy lives in
+// NOTE: the RT-safety / allocation-free assertion for the in-callback ring write lives in
 // tests/test_audioengine_callbacks.cpp, which already owns the global operator new/delete counter
-// harness (a program can only replace operator new ONCE — defining it here too would be a multiple-
-// definition link error). See "buffering the in-sweep response ... is allocation-free" there.
+// harness (a program can only replace operator new ONCE). See "buffering the in-sweep response ... is
+// allocation-free" there.

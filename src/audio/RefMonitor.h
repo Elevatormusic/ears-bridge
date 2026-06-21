@@ -155,4 +155,44 @@ struct MeasurementGrade {
     return g;
 }
 
+// ---- Window grading (pure; the engine's worker calls this) ---------------------------------------
+// The #7 deterministic-detection counterpart to gradeMeasurement(). The engine now buffers the mic
+// response CONTINUOUSLY into a rolling ring (NOT gated on the level arm), so the snapshot the worker
+// receives is a LONG window (~kGradingSeconds) whose FRONT is leading silence/room noise and whose
+// sweep sits somewhere INSIDE it. This helper locates the sweep inside that window via the matched-
+// filter cross-correlation (crossCorrelateAlign), extracts the aligned reference-length segment, and
+// grades it with gradeMeasurement (which re-runs the match-gate FIRST, so a non-sweep window — a
+// finger snap, music, the inter-sweep gap — fails the gate and returns ReferenceStale, NOT a grade).
+//
+//   reference / refLen     : the learned ESS reference.
+//   window / windowLen      : the rolling-ring snapshot (>= refLen; leading silence + the sweep inside).
+// On windowLen < refLen we fall back to grading the window as-is (short capture); otherwise we align.
+// PURE + OFFLINE (a cross-correlation FFT pass + gradeMeasurement's two passes). Run OFF the audio thread.
+[[nodiscard]] inline MeasurementGrade gradeMeasurementWindow (const float* reference, int refLen,
+                                                             const float* window, int windowLen,
+                                                             double sampleRate,
+                                                             double f1 = 20.0, double f2 = 20000.0,
+                                                             float minIrSnrDb = kMinIrSnrDb,
+                                                             float maxThdPct  = kMaxThdPct) {
+    MeasurementGrade g;
+    if (reference == nullptr || window == nullptr || refLen <= 0 || windowLen <= 0) {
+        g.state = RefMonState::ReferenceStale;   // no data to trust -> never green
+        return g;
+    }
+    // Short window: nothing to search through -> grade what we have (equal-length segment).
+    if (windowLen < refLen)
+        return gradeMeasurement (reference, window, windowLen, sampleRate, f1, f2, minIrSnrDb, maxThdPct);
+
+    // Locate the sweep inside the long window: crossCorrelateAlign(ref, window) returns the lag of the
+    // window relative to the reference. A POSITIVE delay means the sweep starts `delay` samples into the
+    // window (the leading silence). Clamp so the extracted segment stays inside the window.
+    const AlignResult a = crossCorrelateAlign (reference, refLen, window, windowLen);
+    int start = a.delaySamples;
+    if (start < 0)                       start = 0;
+    if (start > windowLen - refLen)      start = windowLen - refLen;   // keep refLen samples in range
+    if (start < 0)                       start = 0;
+    const int n = (windowLen - start < refLen) ? (windowLen - start) : refLen;
+    return gradeMeasurement (reference, window + start, n, sampleRate, f1, f2, minIrSnrDb, maxThdPct);
+}
+
 } // namespace eb
