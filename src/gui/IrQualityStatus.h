@@ -37,6 +37,16 @@ static constexpr float kMinIrSnrDb = 20.0f;
 // PROVISIONAL — on-device ratification needed.
 static constexpr float kMaxThdPct  = 5.0f;
 
+// PROVISIONAL — on-device ratification gate (review fix). FALSE until the IR-SNR/THD cutoffs are
+// ratified on real hardware. A clean deconvolved ESS reads only ~13 dB IR-SNR (see test_refmonitor.cpp
+// and the report), so the default kMinIrSnrDb=20 would flag a GOOD measurement as low-quality — a false
+// "low quality" warn. While this is false, the GUI shows the IR-SNR/THD numbers as INFO (neutral/dim
+// tone), NOT a pass/fail warn: a clean measurement never reads as a warning. The match-gate (a mismatch)
+// STILL shows the "re-learn" message — that gate is always valid. The thresholds and the lowQuality
+// computation stay live in the PURE module (IrQualityStatus / RefMonitor) for the ratification campaign;
+// only the GUI presentation is gated here. Flip to true once the cutoffs are ratified on-device.
+static constexpr bool kIrThresholdsRatified = false;
+
 struct IrQuality {
     bool  matched    = false;   // mirrors the match-gate; if false we did NOT grade quality
     float irSnrDb    = 0.0f;    // main-peak energy vs the noise-tail energy (10*log10)

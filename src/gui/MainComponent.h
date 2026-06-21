@@ -11,6 +11,7 @@
 #include "net/UpdateChecker.h"
 #include <atomic>
 #include <memory>
+#include <vector>
 
 namespace eb {
 
@@ -113,6 +114,12 @@ private:
     void onLearnReference();         // Advanced affordance: capture + validate + store a loopback reference (on-device)
     void pollReferenceGrade();       // timer: drain engine.consumePendingGrade(), run gradeMeasurement off-thread, publish
     juce::String referenceStatePath_;                 // stored reference file (empty until learned this session)
+    // Reference-Based Measurement Monitor (Plan 5): the learned reference held IN MEMORY for grading. The
+    // GUI worker (pollReferenceGrade) needs both halves — this reference and the engine's response buffer —
+    // to run gradeMeasurement OFFLINE. Populated on a successful learn; the rate drives the Farina offsets.
+    std::vector<float> loadedReference_;              // the learned ESS reference samples (empty until learned)
+    double             loadedReferenceRate_ = 48000.0;
+    std::atomic<bool>  gradeInFlight_ { false };      // guards against re-posting while a grade job runs
     // Transport.
     juce::TextButton startStop { "Start" };
     juce::Label statusLine;

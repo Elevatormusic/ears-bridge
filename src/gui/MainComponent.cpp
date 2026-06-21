@@ -799,7 +799,14 @@ void MainComponent::updateStatusLine() {
                                      "correction.");
         } else if ((engine.referenceLoaded()
                     || (eb::RefMonState) engine.refMonState() != eb::RefMonState::NotLearned)
-                   && refMonBlocksGreen ((eb::RefMonState) engine.refMonState())) {
+                   && refMonBlocksGreen ((eb::RefMonState) engine.refMonState())
+                   // Fix 2 (review): while the IR-SNR/THD cutoffs are UNRATIFIED, GradedSuspect must NOT
+                   // be treated as a green-blocking WARN — a clean deconvolved ESS reads only ~13 dB and
+                   // would false-warn. Drop it OUT of this warn branch so it falls through to the green
+                   // "captured" branch and shows the numbers as INFO instead. (The pure module still
+                   // computes lowQuality for the ratification campaign; only the presentation is gated.)
+                   && ! (! eb::kIrThresholdsRatified
+                         && (eb::RefMonState) engine.refMonState() == eb::RefMonState::GradedSuspect)) {
             // Reference-Based Measurement Monitor — surfaced ABOVE the green "captured" branch so a NOT-
             // graded / mismatched / suspect measurement can NEVER read as a clean green capture. The
             // grading is GUIDANCE (it never invalidated cleanCapture above); the state machine decides the
@@ -816,7 +823,8 @@ void MainComponent::updateStatusLine() {
                                        "failed). Re-learn the reference in Dirac's Windows Audio mode "
                                        "(Advanced -> Learn reference), then measure again.");
             } else if (state == eb::RefMonState::GradedSuspect) {
-                // Short note inline (status line is narrow); the full IR-SNR/THD detail goes in the tooltip.
+                // Reached ONLY when the cutoffs ARE ratified (the unratified case is excluded above and
+                // shows the numbers as info in the green branch). A real below-cutoff measurement: warn.
                 const int snr = juce::roundToInt (engine.refIrSnrDb());
                 const int thd = juce::roundToInt (engine.refThdPercent());
                 statusLine.setText ("Measurement quality low - " + juce::String (snr) + " dB IR-SNR",
@@ -824,9 +832,8 @@ void MainComponent::updateStatusLine() {
                 statusLine.setColour (juce::Label::textColourId, Theme::warn());
                 statusLine.setTooltip ("Graded against the reference: IR-SNR " + juce::String (snr)
                                        + " dB, distortion " + juce::String (thd)
-                                       + "%. Below the provisional clean cutoff - quieten the room or "
-                                         "raise the level and re-measure. (Guidance; thresholds are "
-                                         "provisional pending on-device ratification.)");
+                                       + "%. Below the clean cutoff - quieten the room or raise the level "
+                                         "and re-measure.");
             } else {
                 // NotLearned / Learned / NotGraded: a reference path exists but nothing clean is graded.
                 statusLine.setText ("Not graded - learn a reference (Advanced)", juce::dontSendNotification);
@@ -835,9 +842,21 @@ void MainComponent::updateStatusLine() {
         } else if (h.session == SessionPhase::Complete) {
             // Sweep finished clean: an honest sweep-scoped all-clear (no dropouts / clipping seen during
             // the captured sweep), with the OS-resampled caveat when the input ran through OS SRC.
+            const auto refState = (eb::RefMonState) engine.refMonState();
+            const bool graded   = refState == eb::RefMonState::GradedClean
+                               || refState == eb::RefMonState::GradedSuspect;   // both = matched + measured
             juce::String msg = "Sweep captured - no clipping or dropouts detected";
-            if ((eb::RefMonState) engine.refMonState() == eb::RefMonState::GradedClean)
-                msg = "Sweep captured + verified against the reference";   // graded clean against the learned ref
+            // Fix 2: a matched measurement reads "verified". While the cutoffs are unratified we append the
+            // IR-SNR/THD as INFO (neutral, in the ok-coloured line) rather than warning — a clean
+            // measurement (~13 dB) must never read as a warning, but the numbers stay visible for tuning.
+            if (refState == eb::RefMonState::GradedClean)
+                msg = "Sweep captured + verified against the reference";
+            else if (graded && ! eb::kIrThresholdsRatified) {
+                const int snr = juce::roundToInt (engine.refIrSnrDb());
+                const int thd = juce::roundToInt (engine.refThdPercent());
+                msg = "Sweep captured + verified - IR-SNR " + juce::String (snr) + " dB, THD "
+                    + juce::String (thd) + "% (calibration pending)";
+            }
             if (any (h.flags & HealthFlag::OsResampled)) msg += " (OS-resampled - approximate)";
             statusLine.setText (msg, juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::ok());
@@ -960,11 +979,20 @@ void MainComponent::onLearnReference() {
     learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
     learnRefResultLabel.setText ("Learning - run a Dirac measurement now (~25 s)...", juce::dontSendNotification);
 
+    // Fix 3 (review): do NOT hard-code "CABLE". Loopback-capture the render endpoint DIRAC PLAYS TO — which
+    // is the device the user selected in the OUTPUT picker (the virtual cable feeding Dirac). Pass that
+    // device's name as the loopback target so a differently-named cable (Voicemeeter, a renamed VB-CABLE,
+    // a second cable) still works. Fall back to "CABLE" only when no output is selected, with a clear note.
+    juce::String renderTarget = "CABLE";
+    if (auto out = outputPicker.selectedDevice(); out.has_value() && out->name.isNotEmpty())
+        renderTarget = out->name;
+
     juce::Component::SafePointer<MainComponent> safe (this);
     const double rate = activeRate();
-    firPool->addJob ([safe, rate]() mutable {
+    firPool->addJob ([safe, rate, renderTarget]() mutable {
         // Capture the loopback for the full L-then-R sweep sequence (~26 s), then validate the PURE core.
-        auto cap = eb::captureLoopback ("CABLE", 26.0, rate);   // first VB-CABLE-ish render endpoint
+        // renderTarget is the OUTPUT picker's selected device name (the endpoint Dirac plays to).
+        auto cap = eb::captureLoopback (renderTarget, 26.0, rate);   // the selected output render endpoint
         juce::String resultMsg; bool ok = false;
         std::vector<float> samples; double capRate = rate;
         if (! cap.ok) {
@@ -990,6 +1018,10 @@ void MainComponent::onLearnReference() {
                 auto refFile = dir.getChildFile ("reference.f32");
                 refFile.replaceWithData (samples.data(), samples.size() * sizeof (float));
                 mc->referenceStatePath_ = refFile.getFullPathName();
+                // Hold the reference IN MEMORY so pollReferenceGrade can deconvolve a measurement
+                // against it OFFLINE (it pairs this with the engine's captured response buffer).
+                mc->loadedReference_     = samples;     // copy (samples is moved-in but still readable here)
+                mc->loadedReferenceRate_ = capRate;
                 mc->engine.setReferenceLoaded (true);
             }
         });
@@ -1002,18 +1034,46 @@ void MainComponent::onLearnReference() {
 
 void MainComponent::pollReferenceGrade() {
     // Timer-driven: a sweep COMPLETED with a reference loaded (the engine set pendingGrade_ at the edge).
-    // Run the OFFLINE deconvolution + gradeMeasurement on the worker (NOT the audio thread), then publish
-    // the verdict via the engine atomics so updateStatusLine reflects it. The per-segment mic-response
-    // CAPTURE that feeds gradeMeasurement is the ON-DEVICE half (it needs the live ASIO measurement buffer,
-    // which the headless engine does not yet expose) — so this scaffolds the worker wiring; the response
-    // buffer hand-off is the remaining on-device piece (see the report).
-    if (! engine.consumePendingGrade()) return;
-    // On-device: load the learned reference + the just-captured response, then:
-    //   auto g = eb::gradeMeasurement (ref.data(), resp.data(), n, rate);
-    //   engine.publishReferenceGrade ((int) g.state, g.quality.irSnrDb, g.quality.thdPercent,
-    //                                 g.state == eb::RefMonState::ReferenceStale, g.quality.lowQuality);
-    // Until the live response buffer is wired, leave the published state as-is (the engine already
-    // published NotGraded for the no-reference case at the edge).
+    // Run the OFFLINE deconvolution + gradeMeasurement on the worker (NOT the audio thread, NOT the message
+    // thread — gradeMeasurement is two FFT passes), then publish the verdict via the engine atomics so
+    // updateStatusLine reflects it. Both halves are now live: the learned reference is held in
+    // loadedReference_ and the per-sweep mic response is buffered by the capture thread into the engine's
+    // pre-allocated response buffer (copied out here via copyGradingResponse).
+    // Check the act-on-it preconditions BEFORE draining pendingGrade_, so a grade isn't silently consumed
+    // while a prior one is still running (it stays pending and the next poll picks it up).
+    if (gradeInFlight_.load()) return;                                    // a prior grade is still running
+    if (loadedReference_.empty() || ! engine.referenceLoaded()) return;   // nothing to grade against
+    if (! engine.consumePendingGrade()) return;                          // no completed-sweep grade to run
+
+    // Copy the ready response OUT of the engine into our own buffer (the allocation lives here, not the
+    // engine). Sized to the reference length so deconvolve works on equal-length segments; copyGradingResponse
+    // returns the number of valid samples it actually captured this sweep.
+    std::vector<float> response (loadedReference_.size(), 0.0f);
+    const int got = engine.copyGradingResponse (response.data(), (int) response.size());
+    if (got <= 0) return;   // no fresh response ready (shouldn't happen when pendingGrade fired, but be safe)
+
+    gradeInFlight_.store (true);
+    juce::Component::SafePointer<MainComponent> safe (this);
+    auto reference = loadedReference_;                 // copy for the worker (message-thread snapshot)
+    const double rate = loadedReferenceRate_;
+    const int n = juce::jmin ((int) reference.size(), (int) response.size());
+    firPool->addJob ([safe, reference = std::move (reference), response = std::move (response), rate, n]() mutable {
+        // OFFLINE on the worker: match-gate FIRST, then quality (gradeMeasurement enforces the order).
+        auto g = eb::gradeMeasurement (reference.data(), response.data(), n, rate);
+        const int   state   = (int) g.state;
+        const bool  mismatch = (g.state == eb::RefMonState::ReferenceStale);
+        const float irSnr   = g.quality.irSnrDb;
+        const float thd     = g.quality.thdPercent;
+        const bool  lowQ    = g.quality.lowQuality;
+        juce::MessageManager::callAsync ([safe, state, irSnr, thd, mismatch, lowQ]() {
+            auto* mc = safe.getComponent();
+            if (! mc) return;
+            // Publish the verdict snapshot (the SNR lesson: trio published together); raise the guidance
+            // flag matching the verdict. NEITHER flag invalidates the capture (they are guidance only).
+            mc->engine.publishReferenceGrade (state, irSnr, thd, mismatch, lowQ);
+            mc->gradeInFlight_.store (false);
+        });
+    });
 }
 
 void MainComponent::updateActiveEarIndicator (bool silent) {

@@ -169,3 +169,42 @@ TEST_CASE("AudioEngine callbacks: steady-state capture+render are allocation-fre
     INFO ("alloc count in 500 capture+render blocks = " << g_allocCount.load());
     CHECK (g_allocCount.load() == 0);
 }
+
+// Plan 5 review-fix: buffering the in-sweep mic RESPONSE during SweepActive must be a PRE-ALLOCATED
+// memcpy on the capture path — no allocation. With a reference loaded and the session armed into
+// SweepActive, every driven capture block memcpy's the response into the pre-allocated buffer; assert
+// the measured region stays allocation-free. (Counterpart to the live-grading tests in test_refmon_live.cpp.)
+TEST_CASE("AudioEngine callbacks: buffering the in-sweep response is allocation-free") {
+    eb::AudioEngine e;
+    const int N = 256, cap = 8192;
+    e.prepareCallbacksForTest (48000.0, N, cap);
+    e.setLeftCalFir  (unitImpulse (8));
+    e.setRightCalFir (unitImpulse (8));
+    e.setReferenceLoaded (true);                       // arm the response-buffering path (gates the memcpy)
+
+    std::vector<float> silence (N, 0.0f);
+    std::vector<float> loud    (N, 0.5f);              // loud constant arms + holds SweepActive
+
+    // Warm-up OUTSIDE the measured region. A QUIET warm-up first lets the session floor settle (a constant
+    // loud input from block 1 poisons the floor and never arms), then loud blocks arm SweepActive.
+    for (int b = 0; b < 16; ++b) e.driveCaptureCallback (silence.data(), silence.data(), N);
+    bool active = false;
+    for (int b = 0; b < 256 && ! active; ++b) {
+        e.driveCaptureCallback (loud.data(), loud.data(), N);
+        if (e.sweepActive()) active = true;
+        else juce::Thread::sleep (1);
+    }
+    REQUIRE (active);                                  // we are in SweepActive, buffering the response now
+
+    // Settle the async Convolution IR load / gain ramp (still loud, so SweepActive holds) before measuring.
+    for (int b = 0; b < 200; ++b) { e.driveCaptureCallback (loud.data(), loud.data(), N); juce::Thread::sleep (1); }
+
+    g_allocCount.store (0);
+    g_countAllocs.store (true);
+    for (int b = 0; b < 500; ++b)                       // every block memcpy's into the pre-allocated buffer
+        e.driveCaptureCallback (loud.data(), loud.data(), N);
+    g_countAllocs.store (false);
+
+    INFO ("alloc count in 500 in-sweep capture blocks = " << g_allocCount.load());
+    CHECK (g_allocCount.load() == 0);
+}
