@@ -314,7 +314,14 @@ int  AudioEngine::autoActiveEar()          const noexcept { return graph.activeE
 float AudioEngine::headroomAttenuationDb() const noexcept { return graph.headroomAttenuationDb(); }
 
 // ---- Reference-Based Measurement Monitor (Plan 5) ----
-void AudioEngine::setReferenceLoaded (bool loaded) noexcept { referenceLoaded_.store (loaded); }
+void AudioEngine::setReferenceLoaded (bool loaded) noexcept {
+    referenceLoaded_.store (loaded);
+    // Publish an HONEST state immediately so the GUI/log don't read the NotLearned default while a
+    // reference IS loaded: a loaded-but-ungraded reference is Learned, not NotLearned. A later
+    // match-poll grade overwrites this; clearing the reference returns to NotLearned. (Message-thread
+    // caller -- learn / startup reload -- and publishRefGrade is just atomic stores.)
+    hm.publishRefGrade ((int) (loaded ? RefMonState::Learned : RefMonState::NotLearned), 0.0f, 0.0f);
+}
 bool AudioEngine::referenceLoaded()        const noexcept { return referenceLoaded_.load(); }
 bool AudioEngine::gradeSignalPresent()     const noexcept { return gradeSignalPresent_.load (std::memory_order_relaxed); }
 

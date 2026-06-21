@@ -225,9 +225,11 @@ private:
     juce::String lastListenTextLogged_;          // last Listening<->Sweep-in-progress status text logged (Task 4)
     int    lastInputPeakBucketLogged_ = -1000;   // bucketed input peak (dB) so tiny jitter doesn't spam
     int    lastCoherBucketLogged_     = -1000;   // bucketed match coherence (0.05 buckets)
-    juce::String lastDeviceKeyLogged_;           // input|output key pair last snapshotted (re-log on change)
-    int    heartbeatTick_ = 0;                    // 30 Hz tick counter; a heartbeat line every ~900 (~30 s)
+    int    heartbeatTick_ = 0;                    // 30 Hz tick counter; a heartbeat candidate every ~900 (~30 s)
     static constexpr int kHeartbeatTicks = 900;   // ~30 s at the 30 Hz GUI timer
+    juce::String lastHeartbeatContent_;           // last heartbeat line logged; identical beats are suppressed
+    int    heartbeatsSuppressed_ = 0;             // consecutive suppressed identical beats (idle de-dup)
+    static constexpr int kHeartbeatKeepalive = 20; // force a beat after this many suppressed (~10 min alive pulse)
 
     // Hosts hover tooltips (e.g. the full 32-bit-float explanation on the neutral info line). A single
     // window owned by the component is enough for the whole app; declared last so it is destroyed
