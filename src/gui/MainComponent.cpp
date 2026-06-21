@@ -1084,8 +1084,12 @@ void MainComponent::updateStatusLine() {
                                        + "%. Below the clean cutoff - quieten the room or raise the level "
                                          "and re-measure.");
             } else {
-                // NotLearned / Learned / NotGraded: a reference path exists but nothing clean is graded.
-                statusLine.setText ("Not graded - learn a reference (Advanced)", juce::dontSendNotification);
+                // Learned / NotGraded / NotLearned: nothing clean is graded yet. Distinguish a LOADED
+                // reference (don't tell the user to "learn" one they already have) from none at all.
+                statusLine.setText (engine.referenceLoaded()
+                        ? "Reference ready - Start and run a Dirac sweep"
+                        : "Not graded - learn a reference (Advanced)",
+                    juce::dontSendNotification);
                 statusLine.setColour (juce::Label::textColourId, Theme::textDim());
             }
         } else if (h.session == SessionPhase::Complete) {
@@ -1523,17 +1527,25 @@ void MainComponent::timerCallback() {
             lastCoherBucketLogged_      = coherBucket;
         }
     }
-    // ~30 s heartbeat: one steady-state snapshot line so the rolling window reflects a long run without
-    // flooding (every kHeartbeatTicks ticks at 30 Hz). Keeps the ~30-minute window well inside the cap.
+    // ~30 s heartbeat, DE-DUPLICATED: a steady-state snapshot, but only when the line actually CHANGES,
+    // plus a sparse keep-alive (~every kHeartbeatKeepalive beats) so a long idle still shows the app is
+    // alive. An idle "status=Stopped ... <-120 dBFS" repeated every 30 s otherwise clogs the rolling
+    // window with ~200 identical lines and pushes real data out (user-reported).
     if (++heartbeatTick_ >= kHeartbeatTicks) {
         heartbeatTick_ = 0;
         const char* st = engine.status() == EngineStatus::Running ? "Running"
                        : engine.status() == EngineStatus::Error   ? "Error" : "Stopped";
-        logLine (eb::DiagnosticLog::Level::Info,
-                 juce::String ("Heartbeat: status=") + st
+        juce::String content = juce::String ("Heartbeat: status=") + st
                + " refMon=" + refMonStateName (engine.refMonState())
                + " referenceLoaded=" + (engine.referenceLoaded() ? "yes" : "no")
-               + " inputPeak=" + linToDbStr (engine.lastInputBlockPeak()) + " dBFS");
+               + " inputPeak=" + linToDbStr (engine.lastInputBlockPeak()) + " dBFS";
+        if (content != lastHeartbeatContent_ || heartbeatsSuppressed_ >= kHeartbeatKeepalive) {
+            logLine (eb::DiagnosticLog::Level::Info, content);
+            lastHeartbeatContent_ = content;
+            heartbeatsSuppressed_ = 0;
+        } else {
+            ++heartbeatsSuppressed_;   // identical to the last logged beat -> suppress (idle de-dup)
+        }
     }
 
     // Raw-input (ADC) clipping warning. Re-arm from the edge-triggered, self-clearing recent-clip
