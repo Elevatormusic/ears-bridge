@@ -111,3 +111,24 @@ TEST_CASE("CalFile::sideFromFilename: words win, bare letters need a delimiter, 
     CHECK (eb::sideFromFilename ("L_and_R.txt")      == eb::CalSide::Unknown);
     CHECK (eb::sideFromFilename ("left_right.txt")   == eb::CalSide::Unknown);
 }
+
+// calSideMismatched is the PER-SLOT single-file check: it must flag a wrong-side file the moment ONE
+// slot is loaded, independent of the other slot (the regression that shipped twice -- the swap banner
+// used to need BOTH files loaded). Unknown side is never accused; an empty slot is never flagged.
+TEST_CASE("CalFile::calSideMismatched flags a wrong-side file in a single slot") {
+    using eb::CalSide;
+    // The headline case: a RIGHT file alone in the LEFT slot -> flagged (no second file needed).
+    CHECK (eb::calSideMismatched (true, CalSide::Right, CalSide::Left)  == true);
+    CHECK (eb::calSideMismatched (true, CalSide::Left,  CalSide::Right) == true);
+    // Correct side -> not flagged.
+    CHECK (eb::calSideMismatched (true, CalSide::Left,  CalSide::Left)  == false);
+    CHECK (eb::calSideMismatched (true, CalSide::Right, CalSide::Right) == false);
+    // Unknown side (a generically named file with no side marker) -> never falsely accused.
+    CHECK (eb::calSideMismatched (true, CalSide::Unknown, CalSide::Left)  == false);
+    CHECK (eb::calSideMismatched (true, CalSide::Unknown, CalSide::Right) == false);
+    // Empty slot -> never flagged.
+    CHECK (eb::calSideMismatched (false, CalSide::Right, CalSide::Left)   == false);
+    // End-to-end with the filename detector: "R_HPN_..." in the LEFT slot is the user's exact case.
+    CHECK (eb::calSideMismatched (true, eb::sideFromFilename ("R_HPN_000-0000.txt"),
+                                  CalSide::Left) == true);
+}
