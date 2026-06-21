@@ -22,12 +22,22 @@ class MeasurementSession {
 public:
     // Sustained input peak (linear) that arms the sweep. -24 dBFS == the app's healthy-level floor
     // (HealthMonitor::kGoodLevelLinear): a correctly-leveled Dirac sweep (the app targets -18..-12 dBFS)
-    // clears it, while typical room noise (~ -30 dBFS) stays below. Arming also requires kArmSustainBlocks
-    // consecutive blocks so a single loud transient (door slam, cable bump) cannot arm.
-    static constexpr float kSweepStartLinear      = 0.06310f;   // -24 dBFS
-    static constexpr int   kArmSustainBlocks      = 3;          // consecutive above-threshold blocks to arm
+    // clears it, while typical room noise (~ -30 dBFS) stays below. This is the ABSOLUTE backstop; the
+    // arm ALSO requires a RISE above the tracked noise floor (see kArmRiseRatio) so steady noise that
+    // happens to sit above -24 dBFS cannot arm. Arming also requires kArmSustainBlocks consecutive
+    // blocks so a single loud transient (door slam, cable bump) cannot arm.
+    static constexpr float kSweepStartLinear      = 0.06310f;   // -24 dBFS (absolute backstop)
+    static constexpr int   kArmSustainBlocks      = 8;          // consecutive qualifying blocks to arm
+    // #7: a qualifying arm block must also rise at least this factor above the tracked noise floor
+    // (4.0 == +12 dB). A real Dirac log sweep starts near-silent and ramps up, so it clears the floor by
+    // far; steady room noise (even loud-steady) hugs its own floor, so floor*kArmRiseRatio overtakes it.
+    static constexpr float kArmRiseRatio          = 4.0f;       // +12 dB rise above the noise floor
+    // Minimum Preflight blocks observed (the floor settling) before an arm run may COMPLETE. Without it,
+    // loud-steady energy from the very first block would arm off the low seed before the floor catches
+    // up. A real session always has a quiet pre-sweep window, so this never delays a genuine sweep.
+    static constexpr int   kArmWarmupBlocks       = 8;          // Preflight floor-settling blocks before arming
     // Below this counts as silence for the sweep-end detector. Same -50 dBFS no-signal floor the level
-    // guidance uses, kept independent so the two can't desync by accident.
+    // guidance uses, kept independent so the two can't desync by accident. Also the noiseFloor_ seed.
     static constexpr float kSilenceFloorLinear    = 0.00316f;   // -50 dBFS
     // Terminal post-signal silence that ends a sweep segment, expressed in TIME. configure() converts
     // it to a block count for the real block size; kDefaultSilenceBlocks is the pre-configure default
@@ -61,15 +71,20 @@ public:
 
 private:
     // Shared, sustained-rise re-arm helper for Preflight (first onset) and Complete (re-take/2nd sweep).
-    // Returns true when the kArmSustainBlocks run completes this block.
-    bool advanceArmRun (float peak) noexcept;
+    // Returns true when the kArmSustainBlocks run of rise-above-floor blocks completes this block.
+    // requireWarmup gates the FIRST onset on kArmWarmupBlocks (Complete re-arm doesn't need it).
+    bool advanceArmRun (float peak, bool requireWarmup) noexcept;
 
     std::atomic<int>  phase_        { (int) SessionPhase::Idle };
     std::atomic<bool> sweepStarted_ { false };   // edge, drained by consumeSweepStarted()
-    int  armRun_            = 0;                  // CAPTURE-THREAD scratch: consecutive above-threshold blocks
+    int  armRun_            = 0;                  // CAPTURE-THREAD scratch: consecutive rise-above-floor blocks
     int  silenceRun_        = 0;                  // CAPTURE-THREAD scratch: consecutive below-floor blocks in-sweep
     bool sawSignal_         = false;              // CAPTURE-THREAD scratch: signal seen since SweepActive entry
     int  silenceBlocksNeeded_ = kDefaultSilenceBlocks;   // configured terminal-silence count
+    // #7: capture-thread noise-floor tracker (single writer, no alloc/lock). Updated only while armRun_==0
+    // so a rising sweep can't poison it; an arm block requires peak >= noiseFloor_ * kArmRiseRatio.
+    float noiseFloor_      = kSilenceFloorLinear; // CAPTURE-THREAD scratch: EWMA of the pre-sweep room floor
+    int   preflightBlocks_ = 0;                   // CAPTURE-THREAD scratch: Preflight blocks seen (warm-up gate)
 };
 
 } // namespace eb
