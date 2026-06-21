@@ -10,13 +10,25 @@
 namespace eb {
 
 // ---- Match-gate cutoffs --------------------------------------------------
-// PROVISIONAL — on-device ratification needed. These defaults are chosen so the
-// synthetic tests cleanly separate a matching sweep (and a noisy-but-matching
-// one) from a wrong sweep / white noise; the real cutoffs are tuned on hardware
-// during the learn/measure campaign (carried in the plan's on-device-ratification
-// list alongside the IR-quality thresholds).
-static constexpr float kMatchCoherenceMin = 0.5f;   // min cross-correlation peak prominence
-static constexpr float kMainLobeMin       = 0.5f;   // min fraction of cross-correlation energy in the main lobe
+// ON-DEVICE RATIFIED (2026-06-21, Auto per-ear, real Dirac sweep). The old 0.5/0.5
+// defaults were tuned on SYNTHETIC near-delta responses and the grade NEVER fired on real
+// hardware. A real EARS-mic response is the sweep CONVOLVED with the earcup+coupler impulse
+// response, so its cross-correlation against the clean reference is that IR — energy spread
+// across the decay, not a delta. Measured populations:
+//     case                         coherence   mainLobe
+//     real CORRECT sweep            0.97-0.99    0.28      <- must PASS
+//     real room AMBIENT             0.74         0.005     <- must FAIL
+//     synthetic WRONG sweep         0.909        0.48      <- must FAIL (honesty)
+//     synthetic noisy match (6dB)   0.981        0.80      <- must PASS
+//     synthetic white noise         0.724        0.019     <- must FAIL
+// The decisive fact: the WRONG sweep's mainLobe (0.48) is HIGHER than the real correct
+// sweep's (0.28), so mainLobe cannot reject a wrong chirp — but COHERENCE cleanly separates
+// the right chirp (>=0.97) from a wrong chirp (0.909) and ambient (0.74). So coherence is the
+// PRIMARY discriminator (0.95, in the gap between 0.909 and 0.97), and mainLobe is a LOOSE
+// floor (0.08) that just passes the spread real IR (0.28) while rejecting flat noise/ambient
+// (0.005-0.019). matched = coherence>=0.95 AND mainLobe>=0.08 classifies every case correctly.
+static constexpr float kMatchCoherenceMin = 0.95f;   // primary gate: right chirp (>=0.97) vs wrong (0.909)/ambient (0.74)
+static constexpr float kMainLobeMin       = 0.08f;   // loose floor: passes the spread real IR (~0.28), rejects noise (~0.02)
 
 // ---- Cross-correlation alignment -----------------------------------------
 struct AlignResult {

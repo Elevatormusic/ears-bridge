@@ -1494,6 +1494,18 @@ void MainComponent::pollReferenceGrade() {
     const auto d = gradePoller_.decide (window.data(), (int) window.size(),
                                         loadedReference_.data(), (int) loadedReference_.size());
     engine.setLastMatchCoherence (d.coherence);
+    // DIAGNOSTIC (grade-not-firing investigation): log EVERY decide() poll's full match-gate internals so we can
+    // see WHY a high-coherence real sweep may not grade. matched needs BOTH gates (coherence>=min AND mainLobe>=
+    // kMainLobeMin); a real headphone response is the sweep convolved with the earcup IR, which spreads the
+    // cross-correlation energy and can drop mainLobe below the synthetic-tuned min. The matched SEQUENCE across
+    // polls also shows whether the two-consecutive-matched stable debounce is being met. DEBUG; msg-thread-only.
+    logLine (eb::DiagnosticLog::Level::Debug,
+             juce::String ("GradePoll: coher=") + juce::String (d.coherence, 3)
+             + " mainLobe=" + juce::String (d.mainLobe, 3)
+             + " matched=" + juce::String (d.matched ? "1" : "0")
+             + " align=" + juce::String (d.alignOffset)
+             + " winLen=" + juce::String ((int) window.size())
+             + " didGrade=" + juce::String (d.didGrade ? "1" : "0"));
     if (! d.didGrade) return;                                             // need a stable, not-yet-graded match
 
     gradeInFlight_.store (true);

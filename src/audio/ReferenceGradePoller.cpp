@@ -58,6 +58,7 @@ GradePollResult ReferenceGradePoller::decide (const float* window, int winLen,
     r.alignOffset = matchStart;
     const MatchVerdict m = referenceMatches (reference, window + matchStart, matchLen);
     r.coherence = m.coherence;
+    r.mainLobe  = m.mainLobeConcentration;   // the 2nd gate — surfaced for the diagnostic log
     r.matched   = m.matched;
 
     // 2) STABLE-MATCH debounce (exactly MainComponent::pollReferenceGrade): the match-gate runs FIRST. A
