@@ -170,6 +170,16 @@ public:
     float refIrSnrDb()    const noexcept;
     float refThdPercent() const noexcept;
 
+    // ---- Diagnostic getters (read-only, lock-free) — the GUI logs the detector's internals ----
+    // lastInputBlockPeak(): the most recent capture block's input peak (max |sample| over L/R), stored on
+    // the audio thread at the pk site (the *Milli_ fixed-point idiom). lastMatchCoherence(): the coherence
+    // from the last referenceMatches poll — Task 4's match poll writes it via setLastMatchCoherence(); it
+    // reads 0 until then. Both back std::atomic<int> milli stores; the getters are pure lock-free reads.
+    float lastInputBlockPeak() const noexcept;
+    float lastMatchCoherence() const noexcept;
+    // Writer for the match coherence (Task 4's poll, message/worker thread). Single writer; lock-free.
+    void  setLastMatchCoherence (float coherence) noexcept;
+
     // Device-loss handling. A capture/render device that the OS removes mid-run (unplug, sleep,
     // gain-DIP re-enumerate) calls audioDeviceStopped(); we latch deviceDied_ there (never tear down
     // from inside that callback -- re-entrant with JUCE's close()). The GUI drains consumeDeviceDied()
@@ -269,6 +279,13 @@ private:
     // deconvolution — it only stores these two atomics at the edge.
     std::atomic<bool> referenceLoaded_ { false };
     std::atomic<bool> pendingGrade_    { false };
+
+    // Diagnostic getters (Task 2): the *Milli_ fixed-point idiom (value * 1000 in an atomic<int>).
+    // lastInputPeakMilli_ is written by the AUDIO thread at the pk site (single writer, relaxed) so the
+    // getter reflects the live input level. lastMatchCoherMilli_ is written by Task 4's match poll (single
+    // writer, message/worker thread); 0 until then. Both are lock-free reads on the GUI side.
+    std::atomic<int> lastInputPeakMilli_  { 0 };
+    std::atomic<int> lastMatchCoherMilli_ { 0 };
 
     // Live grading buffers (the #7 deterministic-detection fix). BOTH are PRE-ALLOCATED in prepare/start
     // (sized for kGradingSeconds at the active rate) and NEVER resized on the audio thread.

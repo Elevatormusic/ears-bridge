@@ -309,6 +309,36 @@ TEST_CASE("Live grade debounce: one completed sequence fires exactly one pending
 }
 
 // ==================================================================================================
+// Task 2: the read-only diagnostic getter lastInputBlockPeak() reflects the live input block peak.
+// Drive a block at a KNOWN peak through the capture seam (which computes pk = blockPeak(l,r)) and assert
+// the getter returns ~that peak. lastMatchCoherence() defaults to 0 (Task 4 writes it). The *Milli_ idiom
+// quantizes to 1/1000, so a small tolerance covers the round-trip.
+// ==================================================================================================
+TEST_CASE("Task 2 diag getter: lastInputBlockPeak() reflects the driven block peak; lastMatchCoherence() defaults to 0") {
+    eb::AudioEngine e;
+    const int    N  = 512;
+    const double fs = 48000.0;
+    e.prepareForTest (fs, N);
+
+    // Before any block, both getters read their default 0.
+    CHECK (e.lastInputBlockPeak()  == Catch::Approx (0.0f));
+    CHECK (e.lastMatchCoherence()  == Catch::Approx (0.0f));
+
+    // Drive a block whose peak is a known value: a constant 0.5 on the left, quieter 0.25 on the right.
+    // blockPeak is the max |sample| over BOTH channels, so the expected peak is 0.5.
+    const float knownPeak = 0.5f;
+    std::vector<float> inL ((size_t) N, knownPeak);
+    std::vector<float> inR ((size_t) N, 0.25f);
+    std::vector<float> mono ((size_t) N, 0.0f);
+    e.processCaptureBlockForTest (inL.data(), inR.data(), mono.data(), N);
+
+    // The getter mirrors the live input level (within the 1/1000 fixed-point quantization tolerance).
+    CHECK (e.lastInputBlockPeak() == Catch::Approx (knownPeak).margin (0.001f));
+    // lastMatchCoherence stays at its default until Task 4's match poll sets it.
+    CHECK (e.lastMatchCoherence() == Catch::Approx (0.0f));
+}
+
+// ==================================================================================================
 // 7. Fix 2: the IR thresholds stay PROVISIONAL (unratified) so a clean measurement is info-only.
 // ==================================================================================================
 TEST_CASE("Fix 2: the IR thresholds are PROVISIONAL (unratified) so a clean measurement is info-only") {
