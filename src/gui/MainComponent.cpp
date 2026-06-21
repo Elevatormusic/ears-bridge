@@ -7,6 +7,7 @@
 #include "cal/CalibrationPairValidator.h"   // eb::validateCalibrationPair (P0-07)
 #include "audio/CalibrationGeneration.h"    // eb::CalibrationGeneration (generation lifecycle)
 #include "audio/RefMonitor.h"               // eb::RefMonState / gradeMeasurement / refMonBlocksGreen (Plan 5)
+#include "gui/SnrStatus.h"                  // eb::kMinSweepSnrDb (sweep-to-noise SNR threshold; match-window SNR fix)
 #include "audio/LoopbackReference.h"        // eb::captureLoopback / validateReferenceCapture / readDiracDeviceType (Plan 5)
 #include "platform/EndpointFormat.h"        // eb::endpointMixSampleRateForName (the WASAPI mix-format rate)
 #include <algorithm>
@@ -1479,12 +1480,29 @@ void MainComponent::pollReferenceGrade() {
         const float irSnr   = g.irSnrDb;
         const float thd     = g.thdPercent;
         const bool  lowQ    = g.lowQuality;
-        juce::MessageManager::callAsync ([safe, state, irSnr, thd, mismatch, lowQ]() {
+        // Sweep-to-room-noise SNR computed from the SAME match-aligned window (off-thread, here on the worker).
+        // This REPLACES the dead level-arm SNR check (AudioEngine::evaluateSnr scoped to MeasurementSession's
+        // rise-ratio arm, which never fires on a gradual Dirac log-sweep): a genuinely low-SNR sweep is now
+        // flagged whenever it GRADES. snrValid is false when neither a leading nor a trailing noise region is
+        // usable -> we must NOT flag (no false positive / no div-by-0).
+        const float sweepSnr  = g.sweepSnrDb;
+        const bool  snrValid  = g.sweepSnrValid;
+        juce::MessageManager::callAsync ([safe, state, irSnr, thd, mismatch, lowQ, sweepSnr, snrValid]() {
             auto* mc = safe.getComponent();
             if (! mc) return;
             // Publish the verdict snapshot (the SNR lesson: trio published together); raise the guidance
             // flag matching the verdict. NEITHER flag invalidates the capture (they are guidance only).
             mc->engine.publishReferenceGrade (state, irSnr, thd, mismatch, lowQ);
+            // Match-window sweep-SNR fix: publish the sweep SNR (so the existing "Low SNR: sweep only N dB over
+            // the room noise" status line names the exact dB) and raise the GUIDANCE LowSnr flag when the sweep
+            // ran too close to the room floor. Match-gate already passed (we only get here when g.didGrade), so a
+            // non-sweep never reaches this. GUIDANCE only: LowSnr is not in the invalidating mask, so cleanCapture
+            // is untouched. kMinSweepSnrDb stays PROVISIONAL (on-device ratification).
+            if (snrValid) {
+                mc->engine.publishCompletedSweepSnrDb (sweepSnr);
+                if (sweepSnr < eb::kMinSweepSnrDb)
+                    mc->engine.raiseLowSnr();
+            }
             mc->gradeInFlight_.store (false);
         });
     });

@@ -16,6 +16,7 @@
 #include <catch2/catch_approx.hpp>
 
 #include "audio/ReferenceGradePoller.h"
+#include "gui/SnrStatus.h"   // eb::kMinSweepSnrDb — the GUI threshold the sweep-SNR predicate uses
 
 #include <vector>
 #include <cmath>
@@ -427,4 +428,101 @@ TEST_CASE("ReferenceGradePoller: a NaN/Inf window never matches (no crash, no co
     CHECK (d.coherence < 1.0f);                       // and never the degenerate coherence=1.0
     auto r = p.poll (resp.data(), (int) resp.size(), ref.data(), (int) ref.size(), fs);
     CHECK_FALSE (r.didGrade);                          // no grade fires from a NaN/Inf window
+}
+
+// The GUI predicate that raises the LowSnr guidance flag (MainComponent::pollReferenceGrade): flag iff the SNR
+// is VALID and the sweep ran below the provisional threshold. Mirror it so the tests assert the exact decision.
+static bool wouldRaiseLowSnr (const eb::GradePollResult& r) {
+    return r.sweepSnrValid && r.sweepSnrDb < eb::kMinSweepSnrDb;
+}
+
+// ==================================================================================================
+// SNR-CLEAN (the match-window sweep-SNR fix): a LOUD sweep over QUIET leading room noise grades with a HIGH
+// sweepSnrDb and the LowSnr predicate is FALSE. The SNR is computed from the SAME aligned window the grade
+// keyed off (sweep region vs leading-noise region) — it fires on a real sweep WITHOUT the dead level arm.
+// ==================================================================================================
+TEST_CASE("ReferenceGradePoller: a clean (loud sweep, quiet noise) window has high sweep SNR, LowSnr NOT raised [SNR-CLEAN]") {
+    const int    sweepLen = 1 << 15;
+    const double fs = 48000.0;
+    const int    winLen = sweepLen * 3;
+    const int    offset = sweepLen;                     // a full sweepLen of LEADING room noise before the sweep
+    std::vector<float> ref, window;
+    // Loud sweep (peak ~0.3 after the room IR) over VERY quiet leading noise (~-66 dBFS) -> a large sweep/noise ratio.
+    makeOffsetMeasurement (sweepLen, fs, offset, winLen, /*leadNoise*/ 0.0005f, ref, window);
+
+    eb::ReferenceGradePoller p;
+    p.poll (window.data(), (int) window.size(), ref.data(), (int) ref.size(), fs);            // poll 1: arm
+    auto r = p.poll (window.data(), (int) window.size(), ref.data(), (int) ref.size(), fs);   // poll 2: grade
+    REQUIRE (r.didGrade);
+    CHECK (r.sweepSnrValid);                            // a usable leading-noise region was present
+    CHECK (r.sweepSnrDb > eb::kMinSweepSnrDb);          // the loud sweep sits well above the quiet floor
+    CHECK_FALSE (wouldRaiseLowSnr (r));                 // -> the GUI does NOT raise LowSnr
+}
+
+// ==================================================================================================
+// SNR-NOISY: a sweep only a FEW dB above a LOUD leading-noise region grades, but its sweepSnrDb is LOW
+// (< kMinSweepSnrDb) and the LowSnr predicate is TRUE — exactly the user-reported "noisy but read clean"
+// case the dead level arm missed. The grade itself still fires (the match-gate is noise-robust).
+// ==================================================================================================
+TEST_CASE("ReferenceGradePoller: a noisy window (sweep barely above loud noise) has low sweep SNR -> LowSnr predicate true [SNR-NOISY]") {
+    const int    sweepLen = 1 << 15;
+    const double fs = 48000.0;
+    const int    winLen = sweepLen * 3;
+    const int    offset = sweepLen;                     // a full sweepLen of LEADING room noise before the sweep
+    std::vector<float> ref, window;
+    // LOUD leading noise under a sweep whose room-IR response peaks ~0 dBFS: an ESS spreads its energy over time,
+    // so its RMS is far below its peak — with noise this loud the sweep RMS sits only a few dB over the noise RMS,
+    // a low sweep-to-noise SNR (a genuinely noisy capture that must be flagged). leadNoise tuned so sweepSnrDb sits
+    // a few dB BELOW kMinSweepSnrDb while the match-gate still locks (it is noise-robust).
+    makeOffsetMeasurement (sweepLen, fs, offset, winLen, /*leadNoise*/ 0.30f, ref, window);
+
+    eb::ReferenceGradePoller p;
+    p.poll (window.data(), (int) window.size(), ref.data(), (int) ref.size(), fs);            // poll 1: arm
+    auto r = p.poll (window.data(), (int) window.size(), ref.data(), (int) ref.size(), fs);   // poll 2: grade
+    REQUIRE (r.didGrade);                               // the match still fires through the noise
+    CHECK (r.state != RefMonState::ReferenceStale);
+    CHECK (r.sweepSnrValid);
+    CHECK (r.sweepSnrDb < eb::kMinSweepSnrDb);          // the sweep ran too close to the loud room floor
+    CHECK (wouldRaiseLowSnr (r));                       // -> the GUI raises the LowSnr guidance flag
+}
+
+// ==================================================================================================
+// SNR-DEGENERATE: the sweep is at offset 0 with NO usable leading noise AND no trailing silence. The SNR has
+// no floor to measure against, so it is marked INVALID and the LowSnr predicate is FALSE — no false flag, no
+// divide-by-~0. The grade itself still fires; only the SNR side-channel abstains.
+// ==================================================================================================
+TEST_CASE("ReferenceGradePoller: a degenerate window (sweep at offset 0, no noise region) yields invalid SNR -> no false flag [SNR-DEGENERATE]") {
+    const int    sweepLen = 1 << 15;
+    const double fs = 48000.0;
+    std::vector<float> ref, resp;
+    makeCleanMeasurement (sweepLen, fs, ref, resp);     // sweep at index 0; window length == refLen (no lead, no trail)
+    scaleToPeak (resp, 0.3f);
+
+    eb::ReferenceGradePoller p;
+    p.poll (resp.data(), (int) resp.size(), ref.data(), (int) ref.size(), fs);            // poll 1: arm
+    auto r = p.poll (resp.data(), (int) resp.size(), ref.data(), (int) ref.size(), fs);   // poll 2: grade
+    REQUIRE (r.didGrade);                               // the grade still fires
+    CHECK_FALSE (r.sweepSnrValid);                      // but there is no noise region to measure against
+    CHECK_FALSE (wouldRaiseLowSnr (r));                 // -> the GUI does NOT raise LowSnr (no false positive)
+}
+
+// Direct unit check of computeSweepSnr's edge-case fallback: when the LEADING region is too short but a longer
+// TRAILING-silence region exists, the SNR falls back to it and stays valid (the documented edge case).
+TEST_CASE("ReferenceGradePoller::computeSweepSnr falls back to trailing silence when the lead is too short [SNR-FALLBACK]") {
+    const int    sweepLen = 1 << 15;
+    const double fs = 48000.0;
+    std::vector<float> ref, resp;
+    makeCleanMeasurement (sweepLen, fs, ref, resp);     // resp == the room response to the sweep
+    scaleToPeak (resp, 0.3f);
+    const int respLen = (int) resp.size();
+    // A window with the sweep at offset 0 (lead length 0) but a LONG trailing-silence tail with faint noise.
+    const int winLen = respLen + sweepLen;              // a full sweepLen of trailing room after the sweep
+    std::vector<float> window ((size_t) winLen, 0.0f);
+    addNoise (window, 0.0005f, 77u);                    // faint room noise across the whole window
+    for (int i = 0; i < respLen; ++i) window[(size_t) i] += resp[(size_t) i];   // sweep at the front
+
+    eb::GradePollResult g;
+    eb::ReferenceGradePoller::computeSweepSnr (window.data(), winLen, /*alignOffset*/ 0, respLen, g);
+    CHECK (g.sweepSnrValid);                            // the trailing-silence fallback supplied a floor
+    CHECK (g.sweepSnrDb > eb::kMinSweepSnrDb);          // loud sweep over faint trailing noise -> high SNR
 }

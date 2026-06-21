@@ -35,6 +35,17 @@ struct GradePollResult {
     float thdPercent  = 0.0f;
     bool  mismatch    = false;                      // state == ReferenceStale (raise the RefMismatch flag)
     bool  lowQuality  = false;                      // the IR-quality guidance flag (info-only)
+
+    // SWEEP-to-room-noise SNR computed from the SAME aligned grade window (valid only when didGrade). This is
+    // the data-quality check the broken level arm used to scope (AudioEngine::evaluateSnr on the level arm's
+    // SweepActive->Complete edge, which a gradual Dirac log-sweep never reaches). It is recomputed HERE off the
+    // match-aligned window so it fires on ANY real sweep that grades. sweepSnrDb = 20*log10(rms(sweep)/rms(noise))
+    // where the SWEEP region is [alignOffset, alignOffset+refLen) and the NOISE region is the LEADING room noise
+    // [0, alignOffset). sweepSnrValid is false when neither a leading nor a trailing noise region is usable (a
+    // sweep at offset 0 with no trailing silence) — the caller MUST NOT raise LowSnr on an invalid SNR (no false
+    // flag, no divide-by-~0). GUIDANCE only: it never invalidates cleanCapture.
+    float sweepSnrDb    = 0.0f;
+    bool  sweepSnrValid = false;
 };
 
 // The stateful grade-poll decision. Holds the two-poll debounce state; otherwise pure logic. NOT
@@ -77,6 +88,16 @@ public:
                                         const float* reference, int refLen, double rate);
     static GradePollResult gradeWindow (const float* window, int winLen,
                                         const float* reference, int refLen, double rate, int alignOffset);
+
+    // Sweep-to-room-noise SNR from the SAME match-aligned window the grade keyed off of. The SWEEP region is
+    // [alignOffset, alignOffset+refLen) (clamped to the window); the NOISE region is the LEADING room noise the
+    // ring captured before the sweep, [0, alignOffset). snrDb = 20*log10(rms(sweep)/rms(noise)). EDGE CASES: if
+    // the leading region is too short to estimate a floor (alignOffset near 0), fall back to the TRAILING-silence
+    // region [alignOffset+refLen, winLen) when it is longer; if NEITHER noise region is usable, return valid=false
+    // (the caller must skip the SNR — no divide-by-~0, no false flag). Pure + off-thread (a couple of RMS sums).
+    // Sets out.sweepSnrDb / out.sweepSnrValid on the supplied result. Static: touches no debounce state.
+    static void computeSweepSnr (const float* window, int winLen, int alignOffset, int refLen,
+                                 GradePollResult& out) noexcept;
 
     // Clear the debounce state (call on Start/Stop — a fresh run starts un-matched + un-graded, so two
     // consecutive matched polls are again required before the first grade).
