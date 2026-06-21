@@ -201,6 +201,39 @@ bool diracDeviceTypeIsWindowsAudio (const juce::String& deviceType) {
         || deviceType.containsIgnoreCase ("wasapi");
 }
 
+// Pure parser (cross-platform, testable): pull the OUTPUT device name -- the device Dirac plays the
+// sweep to -- from a DiracLiveProcessor.settings XML document. It lives on the <DEVICESETUP> element
+// as audioOutputDeviceName (NOT audioInputDeviceName, which is the recording side / the cable, and is
+// usually blank). Returns "" when absent/unparseable.
+juce::String parseDiracOutputDeviceName (const juce::String& settingsXml) {
+    if (settingsXml.isEmpty()) return {};
+    if (auto xml = juce::parseXML (settingsXml)) {
+        std::function<juce::String (const juce::XmlElement&)> findName =
+            [&] (const juce::XmlElement& e) -> juce::String {
+                for (auto* name : { "audioOutputDeviceName", "OutputDeviceName", "outputDeviceName" })
+                    if (e.hasAttribute (name)) {
+                        auto v = e.getStringAttribute (name);
+                        if (v.isNotEmpty()) return v;
+                    }
+                for (auto* child : e.getChildIterator()) {
+                    auto v = findName (*child);
+                    if (v.isNotEmpty()) return v;
+                }
+                return {};
+            };
+        auto v = findName (*xml);
+        if (v.isNotEmpty()) return v;
+    }
+    // Fallback: a loose textual scan for audioOutputDeviceName="...".
+    const int idx = settingsXml.indexOfIgnoreCase ("audioOutputDeviceName");
+    if (idx >= 0) {
+        auto q = settingsXml.substring (idx).fromFirstOccurrenceOf ("\"", false, false)
+                                            .upToFirstOccurrenceOf ("\"", false, false);
+        if (q.isNotEmpty() && q.length() < 128) return q.trim();
+    }
+    return {};
+}
+
 ReferenceMetadata makeReferenceMetadata (const float* samples, int n, double rate) {
     ReferenceMetadata md;
     md.rate          = rate;
@@ -309,6 +342,18 @@ juce::String readDiracDeviceType() {
         if (q.isNotEmpty() && q.length() < 48) return q.trim();
     }
     return {};
+}
+
+juce::String readDiracOutputDeviceName() {
+    // READ-ONLY: the device Dirac plays the sweep TO -- the loopback target for the reference capture.
+    // Read the settings file and hand it to the pure parser. We never write the file.
+    auto appData = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
+    juce::File settings = appData.getChildFile ("Dirac")
+                                 .getChildFile ("Dirac_Live_Processor")
+                                 .getChildFile ("DiracLiveProcessor.settings");
+    if (! settings.existsAsFile())
+        return {};
+    return parseDiracOutputDeviceName (settings.loadFileAsString());
 }
 
 namespace {
@@ -497,8 +542,9 @@ LoopbackCaptureResult captureLoopback (const juce::String& filter, double second
 
 namespace eb {
 
-juce::String readDiracVersion()    { return {}; }
-juce::String readDiracDeviceType() { return {}; }
+juce::String readDiracVersion()         { return {}; }
+juce::String readDiracDeviceType()      { return {}; }
+juce::String readDiracOutputDeviceName() { return {}; }
 
 LoopbackCaptureResult captureLoopback (const juce::String&, double, double,
                                        const std::atomic<bool>* cancel) {
