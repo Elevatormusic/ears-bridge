@@ -5,12 +5,15 @@
 // clean, full, single-source sweep) and the metadata population.
 //
 // Tests (synthetic inputs, reusing a local Farina-ESS generator):
-//   - a full clean sweep (~25 s @ 48k, sane level)            -> ok
-//   - too short (15 s, the L-then-R sequence cannot fit)      -> reject (length)
+//   - a full clean sweep (~26 s @ 48k, sane level)            -> ok
+//   - a ~20 s clean sequence (auto-stop length is variable)   -> ok (was rejected pre-auto-stop)
+//   - a ~3 s blip (below the sanity floor)                    -> reject (length)
 //   - a clipping run inserted into a clean sweep              -> reject (clip/level)
 //   - the sweep scaled to ~-40 dBFS (too quiet)              -> reject (level)
 //   - sweep + a loud steady tone (two sources)               -> reject via self-test
 //   - metadata: rate/length + a stable content hash + version field
+//   - end-of-sweep auto-stop: sweepSequenceEnded + SweepEndDetector (arm-then-
+//     trailing-silence; the inter-sweep gap does NOT end; no-activity never ends)
 
 #include <catch2/catch_test_macros.hpp>
 #include <atomic>
@@ -83,10 +86,27 @@ TEST_CASE("validateReferenceCapture ACCEPTS a full clean sweep at a sane level")
 }
 
 // ---------------------------------------------------------------------------
-// REJECT — too short (the L-then-R sequence cannot fit in 15 s)
+// ACCEPT — a legitimately-SHORTER but complete sequence (auto-stop makes the
+// captured length variable). A ~20 s clean sequence used to be REJECTED by the old
+// fixed ~25 s length bound; with the new sanity-floor minimum it now VALIDATES.
 // ---------------------------------------------------------------------------
-TEST_CASE("validateReferenceCapture REJECTS a capture that is too short") {
-    auto x = makeFullReference (15.0, 0.5f);        // only 15 s -> missing the full sequence
+TEST_CASE("validateReferenceCapture ACCEPTS a ~20 s clean sequence (auto-stop length is variable)") {
+    auto x = makeFullReference (20.0, 0.5f);        // 20 s, clean, sane level
+    INFO ("peak=" << peakOf (x));
+    auto r = eb::validateReferenceCapture (x.data(), (int) x.size(), kFs);
+    INFO ("reason=" << r.reason);
+    CHECK (r.ok);
+    CHECK (r.reason.isEmpty());
+}
+
+// ---------------------------------------------------------------------------
+// REJECT — a too-short blip (a stray short event below the sanity floor). With
+// auto-stop a ~3 s armed-then-trailing-stopped transient could produce a short
+// capture; the ~8 s sanity floor still refuses it (the self-test would too, but the
+// length floor is the first gate). The old test used 15 s; the floor is now ~8 s.
+// ---------------------------------------------------------------------------
+TEST_CASE("validateReferenceCapture REJECTS a too-short blip") {
+    auto x = makeFullReference (3.0, 0.5f);         // only 3 s -> below the sanity floor
     auto r = eb::validateReferenceCapture (x.data(), (int) x.size(), kFs);
     INFO ("reason=" << r.reason);
     CHECK_FALSE (r.ok);
@@ -197,6 +217,63 @@ TEST_CASE("diracDeviceTypeIsWindowsAudio recognises WASAPI shared, rejects ASIO/
     CHECK_FALSE (eb::diracDeviceTypeIsWindowsAudio ("ASIO"));            // loopback is silent in ASIO
     CHECK_FALSE (eb::diracDeviceTypeIsWindowsAudio ("ASIO4ALL v2"));
     CHECK_FALSE (eb::diracDeviceTypeIsWindowsAudio (""));               // unknown -> NOT confirmed (cautious)
+}
+
+// ---------------------------------------------------------------------------
+// END-OF-SWEEP AUTO-STOP — the pure decision + the state machine that drives the
+// capture loop. The live WASAPI capture is on-device, but the STOP decision is
+// factored out (sweepSequenceEnded + SweepEndDetector) so it's unit-testable.
+// ---------------------------------------------------------------------------
+TEST_CASE("sweepSequenceEnded: activity then trailing silence past the threshold -> ENDED") {
+    // Armed, and quiet for >= the ~3 s threshold -> the sequence is done (stop).
+    CHECK (eb::sweepSequenceEnded (/*activitySeen*/ true, /*trailingSilence*/ 3.0, /*threshold*/ 3.0));
+    CHECK (eb::sweepSequenceEnded (true, 4.0, 3.0));
+}
+
+TEST_CASE("sweepSequenceEnded: activity then a SHORT gap (< threshold) -> NOT ended") {
+    // The ~2 s inter-sweep gap between L and R is shorter than the ~3 s threshold,
+    // so we must NOT stop in it — keep capturing the whole L-then-R sequence.
+    CHECK_FALSE (eb::sweepSequenceEnded (true, 2.0, 3.0));   // the inter-sweep gap
+    CHECK_FALSE (eb::sweepSequenceEnded (true, 0.0, 3.0));
+}
+
+TEST_CASE("sweepSequenceEnded: no activity yet -> NEVER ends early (runs to the cap)") {
+    // Before any sustained activity (the quiet BEFORE Dirac starts), silence must
+    // not end the capture — even a long quiet stretch runs out to the time cap.
+    CHECK_FALSE (eb::sweepSequenceEnded (/*activitySeen*/ false, 10.0, 3.0));
+    CHECK_FALSE (eb::sweepSequenceEnded (false, 100.0, 3.0));
+}
+
+TEST_CASE("SweepEndDetector: arms on sustained activity, then ends on trailing silence") {
+    eb::SweepEndDetector d;
+    // Pre-Dirac quiet: silence before any activity must NOT end (not armed yet).
+    for (int i = 0; i < 50; ++i) CHECK_FALSE (d.update (0.0f, 0.2));   // 10 s of leading quiet
+    CHECK_FALSE (d.armed);
+
+    // Dirac starts playing: sustained loud signal arms the detector (no early end).
+    for (int i = 0; i < 10; ++i) CHECK_FALSE (d.update (0.5f, 0.2));   // 2 s of activity
+    CHECK (d.armed);
+
+    // The ~2 s inter-sweep gap (L then R): quiet but UNDER the 3 s threshold -> keep going.
+    CHECK_FALSE (d.update (0.0f, 1.0));
+    CHECK_FALSE (d.update (0.0f, 1.0));                                // 2 s quiet so far, < 3 s
+    // R sweep resumes -> resets the trailing-silence accumulator.
+    for (int i = 0; i < 10; ++i) CHECK_FALSE (d.update (0.5f, 0.2));   // more activity
+
+    // Real trailing silence after the sequence: quiet past 3 s -> ENDED (stop).
+    CHECK_FALSE (d.update (0.0f, 1.0));                                // 1 s
+    CHECK_FALSE (d.update (0.0f, 1.0));                                // 2 s
+    CHECK      (d.update (0.0f, 1.0));                                 // 3 s -> ended
+}
+
+TEST_CASE("SweepEndDetector: a single short transient does not arm + trailing-stop") {
+    eb::SweepEndDetector d;
+    // One brief blip BELOW the arm-duration (< kArmSeconds of activity) doesn't arm.
+    CHECK_FALSE (d.update (0.5f, 0.05));    // 50 ms of signal -> not enough to arm
+    CHECK_FALSE (d.armed);
+    // Subsequent long silence still doesn't end early (never armed) -> runs to the cap.
+    CHECK_FALSE (d.update (0.0f, 10.0));
+    CHECK_FALSE (d.armed);
 }
 
 // ---------------------------------------------------------------------------
