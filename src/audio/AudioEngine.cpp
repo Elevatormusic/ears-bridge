@@ -41,6 +41,9 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
         // sustained blocks, so a clip during the brief pre-arm ramp is intentionally inside the dropped
         // pre-sweep region; a clip on the block that COMPLETES the arm still latches.
         const float pk = eb::HealthMonitor::blockPeak (l, r, numSamples);
+        // Diagnostic getter (Task 2): publish the live input block peak (single writer, audio thread,
+        // relaxed; the *Milli_ fixed-point idiom). lastInputBlockPeak() reads it lock-free GUI-side.
+        e.lastInputPeakMilli_.store ((int) std::lround (pk * 1000.0f), std::memory_order_relaxed);
         e.session_.observeBlockPeak (pk);
         if (e.session_.consumeSweepStarted())
             e.hm.resetMeasurementLatches();
@@ -419,6 +422,20 @@ int   AudioEngine::refMonState()   const noexcept { return hm.refMonState(); }
 float AudioEngine::refIrSnrDb()     const noexcept { return hm.refIrSnrDb(); }
 float AudioEngine::refThdPercent()  const noexcept { return hm.refThdPercent(); }
 
+// ---- Diagnostic getters (Task 2): the *Milli_ fixed-point idiom, lock-free reads ----
+// lastInputBlockPeak() converts the audio-thread store back to float (relaxed; the GUI only needs the
+// latest value, not ordering against other state). lastMatchCoherence() returns 0 until Task 4's poll
+// calls setLastMatchCoherence().
+float AudioEngine::lastInputBlockPeak() const noexcept {
+    return lastInputPeakMilli_.load (std::memory_order_relaxed) / 1000.0f;
+}
+float AudioEngine::lastMatchCoherence() const noexcept {
+    return lastMatchCoherMilli_.load (std::memory_order_relaxed) / 1000.0f;
+}
+void AudioEngine::setLastMatchCoherence (float coherence) noexcept {
+    lastMatchCoherMilli_.store ((int) std::lround (coherence * 1000.0f), std::memory_order_relaxed);
+}
+
 bool AudioEngine::consumeDeviceDied()      noexcept      { return deviceDied_.exchange (false); }
 int  AudioEngine::grantedOutputBitDepth()  const noexcept { return devices.grantedOutputBitDepth(); }
 RawRailState AudioEngine::rawRail()        const noexcept { return rawRail_; }
@@ -623,6 +640,9 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
     // Mirror the capture-callback ordering: feed the session this block's peak, re-scope on the sweep
     // onset, analyze, then latch Invalid if an invalidating flag fired in-measurement.
     const float pk = eb::HealthMonitor::blockPeak (inL, inR, numSamples);
+    // Diagnostic getter (Task 2): mirror the capture-callback store of the live input block peak (single
+    // writer, relaxed; the *Milli_ idiom) so the headless seam reflects the same getter as a real run.
+    lastInputPeakMilli_.store ((int) std::lround (pk * 1000.0f), std::memory_order_relaxed);
     session_.observeBlockPeak (pk);
     if (session_.consumeSweepStarted()) hm.resetMeasurementLatches();
     bridge.setSweepActive (session_.sweepActive());                  // D6: mirror the capture-callback freeze sync
