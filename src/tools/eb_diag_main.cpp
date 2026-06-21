@@ -2,10 +2,15 @@
 // then opens an EARS/EARS-Pro input + a virtual sink and runs a ~5 s passthrough.
 // Usage:  eb_diag                 -> list only
 //         eb_diag run "<outName>" -> list + 5 s passthrough into the named output
+//         eb_diag loopcap "<renderName>" [seconds] -> WASAPI loopback-capture a render endpoint
+//                 (intercept Dirac's PLAYED sweep; saves loopcap.wav; OK-vs-SILENT verdict)
 #include <juce_audio_devices/juce_audio_devices.h>
 #include "audio/AudioEngine.h"
 #include "audio/ModelDetect.h"
 #include <iostream>
+#include <vector>
+#include <cstdio>
+#include <cmath>
 
 #if JUCE_WINDOWS
  #include <mmdeviceapi.h>
@@ -127,6 +132,198 @@ static int probeFormats (const juce::String& filter) {
     if (coll) coll->Release(); en->Release(); CoUninitialize();
     return 0;
 }
+
+// Minimal RIFF/WAVE writer for the captured loopback samples. Writes a self-describing header
+// matching the device mix format (float or PCM, channel count, rate, bit depth) followed by the
+// raw interleaved bytes so the user can open the file in any editor. Returns true on success.
+static bool writeWav (const juce::String& path, const std::vector<unsigned char>& pcm,
+                      DWORD rate, WORD channels, WORD bits, bool isFloat) {
+    FILE* f = nullptr;
+   #if defined(_MSC_VER)
+    _wfopen_s (&f, path.toWideCharPointer(), L"wb");
+   #else
+    f = fopen (path.toRawUTF8(), "wb");
+   #endif
+    if (! f) return false;
+    const WORD  blockAlign = (WORD) (channels * bits / 8);
+    const DWORD byteRate   = rate * blockAlign;
+    const DWORD dataBytes  = (DWORD) pcm.size();
+    const WORD  fmtTag     = isFloat ? 3 /*WAVE_FORMAT_IEEE_FLOAT*/ : 1 /*WAVE_FORMAT_PCM*/;
+    const DWORD riffSize   = 36 + dataBytes;
+    auto w32 = [&] (DWORD v) { fwrite (&v, 4, 1, f); };
+    auto w16 = [&] (WORD  v) { fwrite (&v, 2, 1, f); };
+    fwrite ("RIFF", 1, 4, f); w32 (riffSize); fwrite ("WAVE", 1, 4, f);
+    fwrite ("fmt ", 1, 4, f); w32 (16); w16 (fmtTag); w16 (channels);
+    w32 (rate); w32 (byteRate); w16 (blockAlign); w16 (bits);
+    fwrite ("data", 1, 4, f); w32 (dataBytes);
+    if (dataBytes) fwrite (pcm.data(), 1, dataBytes, f);
+    fclose (f);
+    return true;
+}
+
+// Convert one captured loopback packet into a peak |sample| reading, honouring the mix format:
+// IEEE float (32-bit) vs signed PCM 16/24/32. Returns the peak as a normalised [0,1] float.
+static float packetPeak (const unsigned char* data, UINT32 frames, WORD channels, WORD bits, bool isFloat) {
+    float peak = 0.0f;
+    const size_t samples = (size_t) frames * channels;
+    if (isFloat && bits == 32) {
+        auto* s = reinterpret_cast<const float*> (data);
+        for (size_t i = 0; i < samples; ++i) peak = juce::jmax (peak, std::abs (s[i]));
+    } else if (bits == 16) {
+        auto* s = reinterpret_cast<const short*> (data);
+        for (size_t i = 0; i < samples; ++i) peak = juce::jmax (peak, std::abs ((float) s[i]) / 32768.0f);
+    } else if (bits == 24) {
+        for (size_t i = 0; i < samples; ++i) {
+            const unsigned char* p = data + i * 3;
+            int v = (p[0]) | (p[1] << 8) | (p[2] << 16);
+            if (v & 0x800000) v |= ~0xFFFFFF;   // sign-extend 24->32
+            peak = juce::jmax (peak, std::abs ((float) v) / 8388608.0f);
+        }
+    } else if (bits == 32) {  // 32-bit signed PCM
+        auto* s = reinterpret_cast<const int*> (data);
+        for (size_t i = 0; i < samples; ++i) peak = juce::jmax (peak, std::abs ((float) s[i]) / 2147483648.0f);
+    }
+    return peak;
+}
+
+// loopcap "<render-name filter>" [seconds]: WASAPI LOOPBACK capture of a RENDER (eRender) endpoint.
+// Opens the matching playback device in SHARED mode with AUDCLNT_STREAMFLAGS_LOOPBACK, which makes
+// the IAudioCaptureClient deliver whatever is being PLAYED to that endpoint -- i.e. Dirac Live's
+// digital sweep. Saves the clean reference to loopcap.wav next to the exe and reports OK-vs-SILENT.
+// This de-risks the reference-based measurement plan: it proves we can intercept Dirac's played sweep.
+static int loopCapture (const juce::String& filter, int seconds) {
+    if (FAILED (CoInitializeEx (nullptr, COINIT_MULTITHREADED))) { std::cout << "CoInitialize failed\n"; return 40; }
+    IMMDeviceEnumerator* en = nullptr;
+    if (FAILED (CoCreateInstance (__uuidof (MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                  __uuidof (IMMDeviceEnumerator), (void**) &en))) { std::cout << "no enumerator\n"; CoUninitialize(); return 41; }
+    IMMDeviceCollection* coll = nullptr;
+    en->EnumAudioEndpoints (eRender, DEVICE_STATE_ACTIVE, &coll);
+    UINT count = 0; if (coll) coll->GetCount (&count);
+
+    // Find the first eRender endpoint whose FriendlyName contains the (case-insensitive) substring.
+    IMMDevice* match = nullptr; juce::String matchName;
+    for (UINT i = 0; i < count; ++i) {
+        IMMDevice* dev = nullptr; coll->Item (i, &dev);
+        IPropertyStore* ps = nullptr; dev->OpenPropertyStore (STGM_READ, &ps);
+        PROPVARIANT nm; PropVariantInit (&nm); ps->GetValue (PKEY_Device_FriendlyName, &nm);
+        juce::String name = (nm.vt == VT_LPWSTR && nm.pwszVal) ? juce::String (nm.pwszVal) : juce::String();
+        PropVariantClear (&nm); ps->Release();
+        if (match == nullptr && name.containsIgnoreCase (filter)) { match = dev; matchName = name; }
+        else dev->Release();
+    }
+    if (match == nullptr) {
+        std::cout << "No RENDER endpoint matched \"" << filter << "\". Available render endpoints:\n";
+        for (UINT i = 0; i < count; ++i) {
+            IMMDevice* dev = nullptr; coll->Item (i, &dev);
+            IPropertyStore* ps = nullptr; dev->OpenPropertyStore (STGM_READ, &ps);
+            PROPVARIANT nm; PropVariantInit (&nm); ps->GetValue (PKEY_Device_FriendlyName, &nm);
+            juce::String name = (nm.vt == VT_LPWSTR && nm.pwszVal) ? juce::String (nm.pwszVal) : juce::String();
+            std::cout << "  - " << name << "\n";
+            PropVariantClear (&nm); ps->Release(); dev->Release();
+        }
+        if (coll) coll->Release(); en->Release(); CoUninitialize();
+        return 42;
+    }
+    if (coll) coll->Release();
+    std::cout << "Matched RENDER endpoint: " << matchName << "\n";
+
+    IAudioClient* ac = nullptr;
+    if (FAILED (match->Activate (__uuidof (IAudioClient), CLSCTX_ALL, nullptr, (void**) &ac)) || ac == nullptr) {
+        std::cout << "Activate IAudioClient FAILED\n"; match->Release(); en->Release(); CoUninitialize(); return 43;
+    }
+    WAVEFORMATEX* mix = nullptr;
+    if (FAILED (ac->GetMixFormat (&mix)) || mix == nullptr) {
+        std::cout << "GetMixFormat FAILED\n"; ac->Release(); match->Release(); en->Release(); CoUninitialize(); return 44;
+    }
+    // Decode the mix format (handle WAVEFORMATEXTENSIBLE so float-vs-PCM is correct for the WAV + peak).
+    const DWORD rate     = mix->nSamplesPerSec;
+    const WORD  channels = mix->nChannels;
+    const WORD  bits     = mix->wBitsPerSample;
+    bool isFloat = (mix->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
+    if (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix->cbSize >= 22) {
+        auto* wx = reinterpret_cast<WAVEFORMATEXTENSIBLE*> (mix);
+        isFloat = (wx->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+    }
+    std::cout << "  mixFormat: " << rate << " Hz / " << channels << "ch / " << bits << "-bit "
+              << (isFloat ? "float" : "PCM") << "\n";
+
+    // Initialise the LOOPBACK capture: SHARED mode + AUDCLNT_STREAMFLAGS_LOOPBACK on the RENDER
+    // endpoint, using its own mix format. 1 s buffer (hns = 100-ns units). No event/playback needed.
+    const REFERENCE_TIME hnsBuffer = 10000000;  // 1 second
+    HRESULT hr = ac->Initialize (AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+                                 hnsBuffer, 0, mix, nullptr);
+    if (FAILED (hr)) {
+        std::cout << "Initialize(LOOPBACK) FAILED hr=0x" << std::hex << (unsigned) hr << std::dec << "\n";
+        std::cout << "=> loopback not available on this endpoint (exclusive-mode hold, or unsupported).\n";
+        CoTaskMemFree (mix); ac->Release(); match->Release(); en->Release(); CoUninitialize(); return 45;
+    }
+    IAudioCaptureClient* cap = nullptr;
+    if (FAILED (ac->GetService (__uuidof (IAudioCaptureClient), (void**) &cap)) || cap == nullptr) {
+        std::cout << "GetService(IAudioCaptureClient) FAILED\n";
+        CoTaskMemFree (mix); ac->Release(); match->Release(); en->Release(); CoUninitialize(); return 46;
+    }
+
+    std::cout << "Capturing loopback for " << seconds << " s ... (RUN A DIRAC SWEEP NOW)\n";
+    if (FAILED (ac->Start())) {
+        std::cout << "IAudioClient::Start FAILED\n";
+        cap->Release(); CoTaskMemFree (mix); ac->Release(); match->Release(); en->Release(); CoUninitialize(); return 47;
+    }
+
+    std::vector<unsigned char> pcm;
+    const WORD frameBytes = (WORD) (channels * bits / 8);
+    pcm.reserve ((size_t) rate * frameBytes * (size_t) juce::jmax (1, seconds));
+    float overallPeak = 0.0f;
+    long long nonSilentPackets = 0, totalPackets = 0, totalFrames = 0;
+
+    const juce::int64 endMs = juce::Time::currentTimeMillis() + (juce::int64) seconds * 1000;
+    while (juce::Time::currentTimeMillis() < endMs) {
+        UINT32 packetFrames = 0;
+        if (FAILED (cap->GetNextPacketSize (&packetFrames))) break;
+        if (packetFrames == 0) { juce::Thread::sleep (5); continue; }   // poll loop: no data yet
+        BYTE* data = nullptr; UINT32 got = 0; DWORD flags = 0;
+        if (FAILED (cap->GetBuffer (&data, &got, &flags, nullptr, nullptr))) break;
+        const size_t bytes = (size_t) got * frameBytes;
+        ++totalPackets; totalFrames += got;
+        if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
+            // Loopback delivers SILENT packets when nothing is playing -> write zeros, don't peak.
+            pcm.insert (pcm.end(), bytes, 0);
+        } else {
+            const float pk = packetPeak (data, got, channels, bits, isFloat);
+            if (pk > 0.0001f) ++nonSilentPackets;
+            overallPeak = juce::jmax (overallPeak, pk);
+            pcm.insert (pcm.end(), data, data + bytes);
+        }
+        cap->ReleaseBuffer (got);
+    }
+    ac->Stop();
+
+    // Write the captured reference next to the running exe.
+    juce::File exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+    juce::File wav = exe.getSiblingFile ("loopcap.wav");
+    const bool wrote = writeWav (wav.getFullPathName(), pcm, rate, channels, bits, isFloat);
+
+    const double durSec = totalFrames > 0 ? (double) totalFrames / (double) rate : 0.0;
+    const float  peakDb = overallPeak > 0.0f ? 20.0f * std::log10 (overallPeak) : -144.0f;
+
+    std::cout << "\n==== LOOPCAP RESULT ====\n";
+    std::cout << "device      : " << matchName << "\n";
+    std::cout << "format      : " << rate << " Hz / " << channels << "ch / " << bits << "-bit "
+              << (isFloat ? "float" : "PCM") << "\n";
+    std::cout << "duration    : " << juce::String (durSec, 2) << " s  (" << totalFrames << " frames)\n";
+    std::cout << "packets     : " << totalPackets << " total, " << nonSilentPackets << " non-silent\n";
+    std::cout << "peak        : " << overallPeak << "  (" << juce::String (peakDb, 1) << " dBFS)\n";
+    std::cout << "wav         : " << (wrote ? wav.getFullPathName() : juce::String ("WRITE FAILED")) << "\n";
+    // Verdict: a real sweep peaks well above the noise floor; silence/exclusive-hold stays ~0.
+    if (nonSilentPackets > 0 && overallPeak > 0.0005f)   // ~ -66 dBFS threshold
+        std::cout << "VERDICT     : LOOPBACK OK - captured the playback stream (peak "
+                  << juce::String (peakDb, 1) << " dBFS)\n";
+    else
+        std::cout << "VERDICT     : SILENT - no audio captured (wrong device, nothing playing, "
+                     "or loopback blocked / exclusive-mode)\n";
+
+    cap->Release(); CoTaskMemFree (mix); ac->Release(); match->Release(); en->Release(); CoUninitialize();
+    return (nonSilentPackets > 0 && overallPeak > 0.0005f) ? 0 : 48;
+}
 #endif
 
 static const char* modelName (eb::EarsModel m) {
@@ -143,6 +340,12 @@ int main (int argc, char** argv) {
         return probeFormats (juce::String (argv[2]));
     if (argc >= 3 && juce::String (argv[1]) == "sessions")
         return probeSessions (juce::String (argv[2]));
+    // loopcap "<render-name>" [seconds]: WASAPI loopback-capture a render endpoint (Dirac's played
+    // sweep). Raw WASAPI, so run BEFORE ScopedJuceInitialiser_GUI claims the COM apartment.
+    if (argc >= 3 && juce::String (argv[1]) == "loopcap") {
+        const int secs = (argc >= 4) ? juce::jlimit (1, 600, juce::String (argv[3]).getIntValue()) : 12;
+        return loopCapture (juce::String (argv[2]), secs);
+    }
    #endif
 
     juce::ScopedJuceInitialiser_GUI juceInit;   // needed for device subsystem on some OSes
