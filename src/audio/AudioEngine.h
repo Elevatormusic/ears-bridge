@@ -110,6 +110,34 @@ public:
     // "capturing Left/Right" indicator; only meaningful while running in AutoPerEar with signal.
     int autoActiveEar() const noexcept;
 
+    // ---- Reference-Based Measurement Monitor (Plan 5) ----
+    // The GUI sets this true once a validated loopback reference is learned/loaded (and false when it is
+    // cleared). It gates the per-sweep grading: the engine only flags a measurement as graded/mismatched
+    // when a reference is actually present — with NO reference the workflow state is NotGraded and the GUI
+    // shows the honest "not graded - learn a reference" copy (NEVER green). Atomic so the audio thread
+    // reads it lock-free at the completed-sweep edge. Message-thread write only.
+    void setReferenceLoaded (bool loaded) noexcept;
+    bool referenceLoaded() const noexcept;
+
+    // Drained (read-and-cleared) by the GUI worker each poll: true when a sweep COMPLETED with a reference
+    // loaded, i.e. there is a measurement to grade OFF the audio thread. The audio thread only sets this
+    // one atomic at the edge (no deconvolution on the audio thread); the worker runs gradeMeasurement and
+    // calls publishReferenceGrade. NOTE: the per-segment mic-response CAPTURE that feeds gradeMeasurement
+    // is the on-device half of this loop (it needs the live ASIO measurement) — see the report.
+    bool consumePendingGrade() noexcept;
+
+    // Publish a reference-grade verdict (message/worker thread, OFFLINE). Snapshots the workflow state +
+    // IR-SNR + THD TOGETHER (the SNR lesson) and raises the matching GUIDANCE flag (RefMismatch when the
+    // match-gate failed, RefLowQuality when matched-but-suspect) — neither invalidates the capture.
+    void publishReferenceGrade (int refMonState, float irSnrDb, float thdPercent,
+                                bool mismatch, bool lowQuality) noexcept;
+
+    // The published reference-grade snapshot (lock-free; the int-milli idiom). refMonState() is
+    // RefMonState's underlying int (0 == NotLearned). 0 / 0.0 until a grade is published.
+    int   refMonState()   const noexcept;
+    float refIrSnrDb()    const noexcept;
+    float refThdPercent() const noexcept;
+
     // Device-loss handling. A capture/render device that the OS removes mid-run (unplug, sleep,
     // gain-DIP re-enumerate) calls audioDeviceStopped(); we latch deviceDied_ there (never tear down
     // from inside that callback -- re-entrant with JUCE's close()). The GUI drains consumeDeviceDied()
@@ -198,6 +226,13 @@ private:
 
     std::atomic<int>  engineStatus { (int) EngineStatus::Stopped };
     std::atomic<bool> deviceDied_  { false };   // set on the AUDIO-DEVICE thread from audioDeviceStopped()
+
+    // Plan 5 (Reference Monitor): referenceLoaded_ gates per-sweep grading (message-thread write, audio-
+    // thread read). pendingGrade_ is set at the completed-sweep edge when a reference is loaded and drained
+    // by the GUI worker (which runs the OFFLINE deconvolution + gradeMeasurement). The audio thread does NO
+    // deconvolution — it only stores these two atomics at the edge.
+    std::atomic<bool> referenceLoaded_ { false };
+    std::atomic<bool> pendingGrade_    { false };
 
     // Calibration generation lifecycle. The three ids are atomic so the GUI gate reads them lock-free
     // (the audio thread never reads them); appliedGen_ is written on the message thread only.

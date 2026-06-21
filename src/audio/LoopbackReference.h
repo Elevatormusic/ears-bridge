@@ -63,6 +63,21 @@ ReferenceMetadata makeReferenceMetadata (const float* samples, int n, double rat
 // non-Windows platform. Windows-only read, guarded.
 juce::String readDiracVersion();
 
+// READ-ONLY detection of the Dirac Processor's output deviceType from the same
+// settings file (a plain XML attribute). Used to inform — not enforce — during a
+// LEARN: the loopback reference can only be captured while Dirac plays through
+// "Windows Audio" (WASAPI shared); in ASIO/exclusive the loopback is silent. We
+// NEVER edit the file (auto-switch is deferred to v2); we only surface what we read.
+// Returns the raw deviceType string (e.g. "Windows Audio", "ASIO") or "" when the
+// file is absent/unparseable or on a non-Windows platform.
+juce::String readDiracDeviceType();
+
+// True iff readDiracDeviceType() looks like a Windows-Audio / WASAPI shared mode
+// (the only mode in which a learn capture succeeds). A pure string classifier so it
+// is testable without the file; "" (unknown) returns false (we can't confirm it's
+// Windows Audio, so the GUI gives the cautionary hint rather than a false all-clear).
+[[nodiscard]] bool diracDeviceTypeIsWindowsAudio (const juce::String& deviceType);
+
 // ---- The WASAPI loopback capture (Windows-only; stub elsewhere) ----------
 struct LoopbackCaptureResult {
     bool               ok = false;

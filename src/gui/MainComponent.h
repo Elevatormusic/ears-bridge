@@ -108,6 +108,11 @@ private:
     int          lowSnrTicks_ = 0;                    // consecutive ticks with the LowSnr flag set (debounce)
     static constexpr int kLowSnrHoldTicks = 6;        // ~0.2 s: steady the per-sweep verdict without lag
     juce::String statusErrorMsg_;                     // specific Error-state message (survives re-renders)
+    // Reference-Based Measurement Monitor (Plan 5): drives the GUI worker that grades a completed sweep
+    // OFFLINE against the learned reference, then surfaces the verdict in the status ladder.
+    void onLearnReference();         // Advanced affordance: capture + validate + store a loopback reference (on-device)
+    void pollReferenceGrade();       // timer: drain engine.consumePendingGrade(), run gradeMeasurement off-thread, publish
+    juce::String referenceStatePath_;                 // stored reference file (empty until learned this session)
     // Transport.
     juce::TextButton startStop { "Start" };
     juce::Label statusLine;
@@ -127,6 +132,9 @@ private:
     juce::TextButton verifyButton { "Check L/R wiring" };
     juce::Label      verifyResultLabel;
     int verifyTicks = 0;        // GUI-tick timeout counter while a verify is running (0 = idle)
+    // Reference-Based Measurement Monitor (Plan 5): learn the loopback reference (Dirac in Windows Audio).
+    juce::TextButton learnRefButton { "Learn reference (Windows Audio)" };
+    juce::Label      learnRefResultLabel;
 
     // FIR-length combo item id for the "Auto (scales with rate)" choice. Distinct from every
     // real tap count (4096/8192/16384/32768) so it never collides with an explicit override.

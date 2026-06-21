@@ -183,3 +183,16 @@ TEST_CASE("makeReferenceMetadata populates rate, length, and a stable content ha
     CHECK (m.contentHash != m3.contentHash);
     // diracVersion is best-effort (empty when Dirac isn't installed) — just a string.
 }
+
+// ---------------------------------------------------------------------------
+// Dirac deviceType classifier (Task 4) — pure, read-only mode detection
+// ---------------------------------------------------------------------------
+TEST_CASE("diracDeviceTypeIsWindowsAudio recognises WASAPI shared, rejects ASIO/unknown") {
+    CHECK (eb::diracDeviceTypeIsWindowsAudio ("Windows Audio"));
+    CHECK (eb::diracDeviceTypeIsWindowsAudio ("windows audio"));        // case-insensitive
+    CHECK (eb::diracDeviceTypeIsWindowsAudio ("Windows Audio (Shared)"));
+    CHECK (eb::diracDeviceTypeIsWindowsAudio ("WASAPI"));
+    CHECK_FALSE (eb::diracDeviceTypeIsWindowsAudio ("ASIO"));            // loopback is silent in ASIO
+    CHECK_FALSE (eb::diracDeviceTypeIsWindowsAudio ("ASIO4ALL v2"));
+    CHECK_FALSE (eb::diracDeviceTypeIsWindowsAudio (""));               // unknown -> NOT confirmed (cautious)
+}

@@ -1,5 +1,6 @@
 #include "audio/AudioEngine.h"
 #include "gui/SnrStatus.h"   // SNR: pure evaluateSnr verdict (RT-safe; snrNote/String is GUI-side only)
+#include "audio/RefMonitor.h"   // Plan 5: RefMonState (the published-state enum; gradeMeasurement is GUI-worker-side)
 #include <cmath>
 namespace eb {
 
@@ -72,6 +73,15 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
             // the clip-run / validity / drift latches are untouched.
             e.hm.publishCompletedSnrDb (v.snrDbMin);
             e.hm.resetSweepPeaks();
+
+            // Reference-Based Measurement Monitor (Plan 5): the completed-sweep edge is where measurement
+            // grading hooks. KEEP IT LIGHTWEIGHT — NO deconvolution on the audio thread. If a reference is
+            // loaded, flag that there is a measurement to grade so the GUI worker can run gradeMeasurement
+            // OFFLINE; with NO reference, publish the honest NotGraded state (RefMonState::NotGraded == 5)
+            // so the GUI shows "not graded - learn a reference" and never green. Both are single atomic
+            // stores — RT-safe. (The per-segment mic-response capture that the worker grades is on-device.)
+            if (e.referenceLoaded_.load()) e.pendingGrade_.store (true);
+            else e.hm.publishRefGrade ((int) RefMonState::NotGraded, 0.0f, 0.0f);
         }
         // In-measurement only: an invalidating flag (clip/NaN/dropout/drift) latches the session Invalid
         // so the GUI's phase-gated wording matches cleanCapture(). Single-writer: the capture thread is
@@ -290,6 +300,23 @@ float AudioEngine::completedSweepSnrDb()   const noexcept {
     return hm.completedSnrDb();
 }
 int  AudioEngine::autoActiveEar()          const noexcept { return graph.activeEar(); }
+
+// ---- Reference-Based Measurement Monitor (Plan 5) ----
+void AudioEngine::setReferenceLoaded (bool loaded) noexcept { referenceLoaded_.store (loaded); }
+bool AudioEngine::referenceLoaded()        const noexcept { return referenceLoaded_.load(); }
+bool AudioEngine::consumePendingGrade()    noexcept      { return pendingGrade_.exchange (false); }
+void AudioEngine::publishReferenceGrade (int refMonState, float irSnrDb, float thdPercent,
+                                         bool mismatch, bool lowQuality) noexcept {
+    // OFFLINE (message/worker thread). Snapshot the trio TOGETHER first so the displayed numbers always
+    // match the flag, THEN raise the matching GUIDANCE flag (neither invalidates cleanCapture).
+    hm.publishRefGrade (refMonState, irSnrDb, thdPercent);
+    if (mismatch)   hm.raiseRefMismatch();
+    if (lowQuality) hm.raiseRefLowQuality();
+}
+int   AudioEngine::refMonState()   const noexcept { return hm.refMonState(); }
+float AudioEngine::refIrSnrDb()     const noexcept { return hm.refIrSnrDb(); }
+float AudioEngine::refThdPercent()  const noexcept { return hm.refThdPercent(); }
+
 bool AudioEngine::consumeDeviceDied()      noexcept      { return deviceDied_.exchange (false); }
 int  AudioEngine::grantedOutputBitDepth()  const noexcept { return devices.grantedOutputBitDepth(); }
 RawRailState AudioEngine::rawRail()        const noexcept { return rawRail_; }
@@ -509,6 +536,10 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
         if (v.lowSnr) hm.raiseLowSnr();
         hm.publishCompletedSnrDb (v.snrDbMin);
         hm.resetSweepPeaks();
+        // Plan 5: mirror the capture-callback reference-grade trigger (see CaptureCallback). Lightweight:
+        // set pendingGrade_ if a reference is loaded, else publish NotGraded. No deconvolution here.
+        if (referenceLoaded_.load()) pendingGrade_.store (true);
+        else hm.publishRefGrade ((int) RefMonState::NotGraded, 0.0f, 0.0f);
     }
     if (session_.inMeasurement() && ! hm.cleanCapture()) session_.markInvalid();
     if (graph.process (inL, inR, outMono, numSamples)) hm.reportNonFinite();

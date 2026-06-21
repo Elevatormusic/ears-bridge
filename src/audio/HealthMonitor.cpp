@@ -41,6 +41,7 @@ void HealthMonitor::reset() {
     reachedGood_.store (false);         // a fresh run has not yet reached a healthy capture level
     maxSweepPeakLMilli_.store (0); maxSweepPeakRMilli_.store (0);   // SNR numerator: 0 until a sweep runs
     completedSnrDbMilli_.store (0);   // SNR review fix: published verdict dB cleared on a fresh run
+    refMonState_.store (0); refIrSnrDbMilli_.store (0); refThdPctMilli_.store (0);   // Plan 5: ref-grade snapshot
     railRunL_ = railRunR_ = longestRun_ = 0;
     prevL_ = prevR_ = 0.0f;
     railSamplesL_.store (0); railSamplesR_.store (0); longestRunA_.store (0);
