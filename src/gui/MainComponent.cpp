@@ -280,8 +280,9 @@ MainComponent::MainComponent() {
     inputClipHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     inputClipHint.setJustificationType (juce::Justification::topLeft);
     inputClipHint.setColour (juce::Label::textColourId, Theme::danger());
-    inputClipHint.setText ("Input near full scale - if the meter hits the top, lower the EARS gain "
-                           "switch a step and/or Dirac's playback level, then re-measure.",
+    inputClipHint.setText ("EARS mic input near full scale - lower the EARS gain switch a step and/or "
+                           "Dirac's playback level, then re-measure. Dirac won't flag this: the clip is "
+                           "at the mic, before Dirac records.",
                            juce::dontSendNotification);
     addChildComponent (inputClipHint);   // hidden until a raw-input clip is seen
 
@@ -1032,8 +1033,8 @@ void MainComponent::onLearnReference() {
     const juce::String deviceType = eb::readDiracDeviceType();
     if (deviceType.isNotEmpty() && ! eb::diracDeviceTypeIsWindowsAudio (deviceType)) {
         learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
-        learnRefResultLabel.setText ("Dirac is in \"" + deviceType + "\" - switch it to Windows Audio first, "
-                                     "then learn.", juce::dontSendNotification);
+        learnRefResultLabel.setText ("Dirac is in \"" + deviceType + "\" - set it to Windows Audio AND turn off "
+                                     "exclusive mode on your output device, then learn.", juce::dontSendNotification);
         return;
     }
 
@@ -1079,7 +1080,8 @@ void MainComponent::onLearnReference() {
             const auto v = eb::validateReferenceCapture (cap.samples.data(), (int) cap.samples.size(), cap.rate);
             if (! v.ok) { resultMsg = "Rejected: " + v.reason; }
             else        { ok = true; samples = std::move (cap.samples); capRate = cap.rate;
-                          resultMsg = "Reference learned (" + juce::String (samples.size() / capRate, 1) + " s)."; }
+                          resultMsg = "Reference learned (" + juce::String (samples.size() / capRate, 1)
+                                      + " s) - see tip to resume listening."; }
         }
         juce::MessageManager::callAsync ([safe, ok, cancelled, resultMsg, samples = std::move (samples), capRate]() mutable {
             auto* mc = safe.getComponent();
@@ -1094,6 +1096,9 @@ void MainComponent::onLearnReference() {
                                                cancelled ? Theme::textDim() : (ok ? Theme::ok() : Theme::warn()));
             mc->learnRefResultLabel.setText (resultMsg, juce::dontSendNotification);
             if (ok) {
+                // The short rail label can't hold the full round-trip reminder, so park it in a tooltip.
+                mc->learnRefResultLabel.setTooltip ("Re-enable exclusive mode on your output device and set "
+                                                    "Dirac back to ASIO to resume normal listening.");
                 // Store the reference + metadata on disk and mark it loaded so the engine grades against it.
                 auto md  = eb::makeReferenceMetadata (samples.data(), (int) samples.size(), capRate);
                 auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
@@ -1493,7 +1498,7 @@ void MainComponent::resized() {
 
         if (inputClipHint.isVisible()) {
             pp.removeFromTop (8);
-            inputClipHint.setBounds (pp.removeFromTop (34));
+            inputClipHint.setBounds (pp.removeFromTop (50));
         }
     }
 }
