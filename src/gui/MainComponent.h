@@ -59,9 +59,27 @@ private:
     void applyTitleBarTheme();       // match the OS title bar to the active mode (Windows)
     double activeRate() const;
 
+    // Lays out every left-rail child inside railContent's local coordinates (a single
+    // top-down removeFromTop pass over `width` reduced by the 16px gutter), and returns the
+    // TOTAL content height consumed. resized() calls this to size railContent so the Viewport
+    // can scroll the whole stack — including the tall expanded Advanced section. Pure layout:
+    // it never calls resized(), so it can't trigger a resized() recursion through the Viewport.
+    int layoutRail (int width);
+
     Theme theme;
     AudioEngine engine;
     Settings settings;
+
+    // Left configuration rail, wrapped in a Viewport so the (growing) Advanced section is always
+    // reachable by scrolling at any window size — including the default 900x700. railContent holds
+    // every rail child and is sized to the FULL content height by layoutRail(); the Viewport scrolls
+    // it. railContent paints the graphite rail backdrop + the right divider so the rail looks the
+    // same as the old fixed rect (the Viewport itself is transparent and scrolls with the content).
+    struct RailContent : juce::Component {
+        void paint (juce::Graphics&) override;
+    };
+    juce::Viewport railViewport;
+    RailContent    railContent;
 
     // Title bar brand.
     juce::Label brandLabel;
