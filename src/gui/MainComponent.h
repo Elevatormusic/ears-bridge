@@ -46,6 +46,7 @@ private:
     void updateStatusLine();
     void updateActiveEarIndicator (bool silent);   // AutoPerEar "capturing Left/Right" caption + meter accent
     void updateStartGate();          // enable Start only when a valid calibration generation is applied
+    void updateDiracMicGainHint();   // refresh the "add ~+N dB on Dirac's Mic gain" caption from the live headroom
     void updateCalProblems();        // surface a rejected swap/serial/type loudly ON the offending cal card
     void updateControlsEnabled();    // freeze config (cals/rate/mode/FIR) while capturing; re-enable when stopped
     // Returns true when the selected input is a detected EARS / EARS Pro (the Dirac path).
@@ -88,7 +89,8 @@ private:
     // Right-pane section eyebrows.
     juce::Label calEyebrow;
     juce::Label levelsEyebrow;
-    juce::Label levelsHint;              // inline caption: aim the amp at the meter target band
+    juce::Label levelsHint;              // inline caption: aim Dirac's Master output at the meter target band
+    juce::Label diracMicGainHint;        // "add ~+N dB on Dirac's Mic gain" - N = engine.headroomAttenuationDb()
     juce::Rectangle<int> levelsBounds;   // Levels card backdrop (drawn in paint)
 
     // Input row.

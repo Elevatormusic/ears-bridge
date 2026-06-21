@@ -187,6 +187,20 @@ TEST_CASE("ProcessingGraph auto headroom bounds the output and preserves L/R bal
     CHECK_THAT (outL / outR, WithinAbs (gL / gR, 1e-2f));
 }
 
+TEST_CASE("ProcessingGraph::headroomAttenuationDb reports the makeup attenuation the GUI surfaces") {
+    eb::ProcessingGraph g; g.prepare (48000.0, 64);
+    // recomputeHeadroom runs SYNCHRONOUSLY inside setFir (no async convolution wait needed -- the peak is
+    // measured + headroomGain stored before setFir returns), so the accessor is exact immediately.
+    g.setFir (0, unitImpulse (8)); g.setFir (1, unitImpulse (8));        // unity FIRs -> headroom 1.0
+    CHECK_THAT (g.headroomAttenuationDb(), WithinAbs (0.0f, 1e-3f));     // no attenuation -> 0 dB
+
+    g.setFir (0, scaledImpulse (8, 2.0f)); g.setFir (1, unitImpulse (8));// louder ear peaks at 2.0 (+6 dB)
+    CHECK_THAT (g.headroomAttenuationDb(), WithinAbs (6.0206f, 1e-2f));  // -20*log10(1/2) = +6.02 dB
+
+    g.setFir (0, scaledImpulse (8, 0.5f)); g.setFir (1, scaledImpulse (8, 0.5f)); // a CUT cal (peak < 1)
+    CHECK_THAT (g.headroomAttenuationDb(), WithinAbs (0.0f, 1e-3f));     // headroom only ever cuts -> 0 dB
+}
+
 TEST_CASE("ProcessingGraph clamps the mono output so it can never exceed full scale") {
     const int N = 64;
     eb::ProcessingGraph g; g.prepare (48000.0, N);

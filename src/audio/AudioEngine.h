@@ -110,6 +110,11 @@ public:
     // "capturing Left/Right" indicator; only meaningful while running in AutoPerEar with signal.
     int autoActiveEar() const noexcept;
 
+    // How much (>= 0 dB) the graph's auto makeup-headroom is currently attenuating the output. The GUI
+    // shows this as "add about +N dB on Dirac's Mic gain" so the user compensates for the attenuation
+    // EARS Bridge applies for headroom. Updates when a cal loads. Forwards to ProcessingGraph; lock-free.
+    float headroomAttenuationDb() const noexcept;
+
     // ---- Reference-Based Measurement Monitor (Plan 5) ----
     // The GUI sets this true once a validated loopback reference is learned/loaded (and false when it is
     // cleared). It gates the per-sweep grading: the engine only flags a measurement as graded/mismatched
