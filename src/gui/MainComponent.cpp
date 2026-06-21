@@ -8,6 +8,7 @@
 #include "audio/CalibrationGeneration.h"    // eb::CalibrationGeneration (generation lifecycle)
 #include "audio/RefMonitor.h"               // eb::RefMonState / gradeMeasurement / refMonBlocksGreen (Plan 5)
 #include "audio/LoopbackReference.h"        // eb::captureLoopback / validateReferenceCapture / readDiracDeviceType (Plan 5)
+#include "platform/EndpointFormat.h"        // eb::endpointMixSampleRateForName (the WASAPI mix-format rate)
 #include <algorithm>
 #include <cmath>
 
@@ -31,6 +32,27 @@ static void styleEyebrow (juce::Label& l, const juce::String& t) {
     l.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")).withExtraKerningFactor (0.07f));
 }
 
+// Human-readable name for a RefMonState int (the engine publishes the enum's underlying int). Used only
+// for the diagnostic log so a transition reads "GradedClean" rather than a bare number.
+static const char* refMonStateName (int s) {
+    switch ((eb::RefMonState) s) {
+        case eb::RefMonState::NotLearned:     return "NotLearned";
+        case eb::RefMonState::Learned:        return "Learned";
+        case eb::RefMonState::ReferenceStale: return "ReferenceStale";
+        case eb::RefMonState::GradedClean:    return "GradedClean";
+        case eb::RefMonState::GradedSuspect:  return "GradedSuspect";
+        case eb::RefMonState::NotGraded:      return "NotGraded";
+    }
+    return "?";
+}
+
+// Linear amplitude -> dBFS string for a log line (clamped at a -120 dB floor so a silent block reads
+// "-inf"-free). Pure formatting helper for the diagnostic log.
+static juce::String linToDbStr (float lin) {
+    if (lin <= 1.0e-6f) return "<-120";
+    return juce::String (juce::Decibels::gainToDecibels (lin, -120.0f), 1);
+}
+
 // Symmetric dB range that comfortably contains a cal curve (snapped to a 6 dB multiple).
 static float fitTopDb (const eb::CalFile& c) {
     float lo = 0.0f, hi = 0.0f;
@@ -42,6 +64,23 @@ static float fitTopDb (const eb::CalFile& c) {
 MainComponent::MainComponent() {
     setLookAndFeel (&theme);
     firPool = std::make_unique<juce::ThreadPool> (1);
+
+    // --- Diagnostic log: open it FIRST so the whole ctor (and every later handler) can write to it ---
+    // %TEMP%/EarsBridge/logs, rotating + size-capped (see DiagnosticLog). Logging is message-thread only.
+    log_ = std::make_unique<eb::DiagnosticLog> (
+        juce::File::getSpecialLocation (juce::File::tempDirectory)
+            .getChildFile ("EarsBridge").getChildFile ("logs"));
+    // Launch banner: app version, build flavour, and the OS. The serial backstop is already armed
+    // (loggedSerial_ is empty until a cal loads, so redactSerial is a no-op here).
+   #ifdef NDEBUG
+    const char* buildFlavour = "Release";
+   #else
+    const char* buildFlavour = "Debug";
+   #endif
+    logLine (eb::DiagnosticLog::Level::Info,
+             juce::String ("==== EARS Bridge launch ==== v") + EB_VERSION_STRING
+           + " build=" + buildFlavour
+           + " os=" + juce::SystemStats::getOperatingSystemName());
 
     // --- Title bar brand ---
     brandLabel.setText ("EARS Bridge", juce::dontSendNotification);
@@ -251,6 +290,47 @@ MainComponent::MainComponent() {
     learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
     railContent.addChildComponent (learnRefResultLabel);
 
+    // Diagnostic-log export (Task 3). "Open log folder" reveals %TEMP%/EarsBridge/logs; "Export log..."
+    // zips the whole logs dir to a user-chosen path. Both are message-thread-only affordances.
+    openLogButton.onClick = [this] {
+        if (log_) {
+            logLine (eb::DiagnosticLog::Level::Info, "User opened the log folder.");
+            log_->directory().revealToUser();
+        }
+    };
+    railContent.addChildComponent (openLogButton);
+    exportLogButton.onClick = [this] {
+        if (log_ == nullptr) return;
+        logLine (eb::DiagnosticLog::Level::Info, "User requested a log export.");
+        auto suggested = juce::File::getSpecialLocation (juce::File::userDesktopDirectory)
+                             .getChildFile ("EarsBridge-logs.zip");
+        logChooser = std::make_unique<juce::FileChooser> ("Export EARS Bridge logs", suggested, "*.zip");
+        const auto dir = log_->directory();
+        logChooser->launchAsync (juce::FileBrowserComponent::saveMode
+                                 | juce::FileBrowserComponent::canSelectFiles,
+            [this, dir] (const juce::FileChooser& fc) {
+                auto target = fc.getResult();
+                if (target == juce::File()) return;   // user cancelled
+                if (target.getFileExtension().isEmpty()) target = target.withFileExtension ("zip");
+                // Zip every file currently in the logs dir (eb.log + any rotated backups).
+                juce::ZipFile::Builder builder;
+                for (auto& f : dir.findChildFiles (juce::File::findFiles, false))
+                    builder.addFile (f, 9 /*compression*/, f.getFileName());
+                target.deleteFile();
+                if (auto stream = target.createOutputStream()) {
+                    const bool ok = builder.writeToStream (*stream, nullptr);
+                    stream.reset();   // flush + close before we log the outcome
+                    logLine (ok ? eb::DiagnosticLog::Level::Info : eb::DiagnosticLog::Level::Warn,
+                             ok ? ("Log exported to \"" + target.getFullPathName() + "\"")
+                                : ("Log export FAILED writing \"" + target.getFullPathName() + "\""));
+                } else {
+                    logLine (eb::DiagnosticLog::Level::Warn,
+                             "Log export FAILED to open \"" + target.getFullPathName() + "\"");
+                }
+            });
+    };
+    railContent.addChildComponent (exportLogButton);
+
     // --- Right pane: cal cards + Levels ---
     styleEyebrow (calEyebrow, "CALIBRATION");
     addAndMakeVisible (calEyebrow);
@@ -258,8 +338,8 @@ MainComponent::MainComponent() {
     rightCal.onCalLoaded = [this] (const juce::File& f) { onRightCalLoaded (f); updateStartGate(); syncPlotScales(); };
     // Removing a slot resets that ear to unity AND bumps a fresh (now-incomplete) generation, so the
     // Start gate (calibrationApplied()) closes instead of staying satisfied by the prior valid build.
-    leftCal.onCalCleared  = [this] { settings.setLeftCalPath  ({}); engine.clearLeftCalFir();  rebuildFirsAsync(); updateStartGate(); syncPlotScales(); };
-    rightCal.onCalCleared = [this] { settings.setRightCalPath ({}); engine.clearRightCalFir(); rebuildFirsAsync(); updateStartGate(); syncPlotScales(); };
+    leftCal.onCalCleared  = [this] { settings.setLeftCalPath  ({}); engine.clearLeftCalFir();  logLine (eb::DiagnosticLog::Level::Info, "Cal cleared: LEFT");  rebuildFirsAsync(); updateStartGate(); syncPlotScales(); };
+    rightCal.onCalCleared = [this] { settings.setRightCalPath ({}); engine.clearRightCalFir(); logLine (eb::DiagnosticLog::Level::Info, "Cal cleared: RIGHT"); rebuildFirsAsync(); updateStartGate(); syncPlotScales(); };
     addAndMakeVisible (leftCal);
     addAndMakeVisible (rightCal);
     styleEyebrow (levelsEyebrow, "LEVELS");
@@ -321,6 +401,7 @@ MainComponent::MainComponent() {
             updateDiracCableHint();
         }
         updateStartGate();
+        logDeviceSnapshot ("devices changed (hot-plug)");
     };
 
     refreshDeviceLists();
@@ -347,6 +428,14 @@ MainComponent::MainComponent() {
         rightCal.loadFromFile (juce::File (settings.rightCalPath()));
 
     loadStoredReference();   // reload a previously-learned reference so it survives a restart
+
+    // Initial device + Dirac snapshot for the log (after the saved devices/cals are restored).
+    logDeviceSnapshot ("launch");
+    logDiracSnapshot  ("launch");
+    if (! loadedReference_.empty())
+        logLine (eb::DiagnosticLog::Level::Info,
+                 "Reference: reloaded a stored loopback reference ("
+               + juce::String (loadedReference_.size() / loadedReferenceRate_, 1) + " s)");
 
     updateStartGate();
     syncPlotScales();
@@ -378,6 +467,72 @@ MainComponent::~MainComponent() {
 }
 
 double MainComponent::activeRate() const { return settings.sampleRate(); }
+
+// ---- Diagnostic log (Task 3) ----------------------------------------------------------
+void MainComponent::logLine (eb::DiagnosticLog::Level level, const juce::String& msg) {
+    // The backstop: every message is scrubbed of the loaded serial (in both its dashed and dash-less
+    // forms) before it can land on disk, so the EARS serial can NEVER leak even if a call site forgets.
+    // Call sites already avoid the value; this is defense in depth. MESSAGE-THREAD ONLY.
+    if (log_ == nullptr) return;
+    log_->write (level, eb::DiagnosticLog::redactSerial (msg, loggedSerial_));
+}
+
+void MainComponent::logDeviceSnapshot (const juce::String& reason) {
+    // Selected input/output name + endpoint format + virtual-sink classification + the live raw-rail
+    // (OS-SRC) state, pulled entirely from the EXISTING device-layer reads — no new probing. Granted
+    // rate/depth come from the engine's last open; the WASAPI mix-format rate from EndpointFormat.
+    const auto in  = inputPicker.selectedDevice();
+    const auto out = outputPicker.selectedDevice();
+    juce::String m = "Devices (" + reason + "): ";
+    if (in) {
+        const double mix = eb::endpointMixSampleRateForName (in->name, /*isInput*/ true);
+        m << "input=\"" << in->name << "\" key=" << in->key()
+          << " requestedRate=" << juce::String (settings.sampleRate(), 0)
+          << " mixRate=" << juce::String (mix, 0);
+    } else {
+        m << "input=<none>";
+    }
+    m << "; ";
+    if (out) {
+        const auto kind = eb::DeviceManager::classifyVirtualSink (out->name);
+        const char* kindStr = kind == eb::DeviceManager::VirtualSinkKind::StdVbCable  ? "StdVbCable"
+                            : kind == eb::DeviceManager::VirtualSinkKind::HiFiCable    ? "HiFiCable"
+                            : kind == eb::DeviceManager::VirtualSinkKind::OtherVirtual ? "OtherVirtual"
+                                                                                       : "NotVirtual";
+        m << "output=\"" << out->name << "\" key=" << out->key()
+          << " virtualSink=" << (out->isVirtualSink ? "yes" : "no")
+          << " sinkKind=" << kindStr
+          << " preferredDepth=" << juce::String (settings.outputBitDepth()) << "-bit";
+    } else {
+        m << "output=<none>";
+    }
+    // Live format facts when running: the GRANTED rate/depth (WASAPI shared mode can override the
+    // request) + the raw-rail (was the input OS-resampled?) + the sticky FormatChanged flag.
+    if (engine.status() == EngineStatus::Running) {
+        const auto rr = engine.rawRail();
+        const auto fl = engine.health().flags;
+        m << "; granted: rate=" << juce::String (engine.grantedSampleRate(), 0)
+          << " depth=" << juce::String (engine.grantedOutputBitDepth()) << "-bit (shared/float)"
+          << " rawRailVerified=" << (rr.verified ? "yes" : "no")
+          << " osResampled=" << (any (fl & HealthFlag::OsResampled) ? "yes" : "no")
+          << " formatChanged=" << (any (fl & HealthFlag::FormatChanged) ? "yes" : "no");
+    }
+    logLine (eb::DiagnosticLog::Level::Info, m);
+}
+
+void MainComponent::logDiracSnapshot (const juce::String& reason) {
+    // Read-only Dirac config: version, the Processor's output deviceType (must be Windows Audio for a
+    // learn to capture the loopback), the device Dirac plays the sweep TO, and the active device rate.
+    // Every read is best-effort and returns "" off-Windows / when the settings file is absent.
+    const juce::String ver  = eb::readDiracVersion();
+    const juce::String type = eb::readDiracDeviceType();
+    const juce::String outDev = eb::readDiracOutputDeviceName();
+    juce::String m = "Dirac (" + reason + "): version=" + (ver.isNotEmpty() ? ver : juce::String ("unknown"))
+        + " deviceType=" + (type.isNotEmpty() ? type : juce::String ("unknown"))
+        + " outputDevice=" + (outDev.isNotEmpty() ? ("\"" + outDev + "\"") : juce::String ("unknown"))
+        + " deviceRate=" + juce::String (activeRate(), 0);
+    logLine (eb::DiagnosticLog::Level::Info, m);
+}
 
 bool MainComponent::isRealEarsInput() const noexcept {
     const auto in = inputPicker.selectedDevice();
@@ -434,6 +589,7 @@ void MainComponent::onInputChosen (const DeviceId& d) {
     rebuildBitDepthMenu();
     rebuildFirsAsync();
     updateStartGate();   // input now selected -> may enable Start
+    logDeviceSnapshot ("input changed");
 }
 
 void MainComponent::onOutputChosen (const DeviceId& d) {
@@ -447,6 +603,7 @@ void MainComponent::onOutputChosen (const DeviceId& d) {
     rebuildBitDepthMenu();
     updateDiracCableHint();
     updateStartGate();   // output now selected -> may enable Start
+    logDeviceSnapshot ("output changed");
 }
 
 void MainComponent::updateDiracCableHint() {
@@ -545,6 +702,9 @@ void MainComponent::onRateChosen() {
                       juce::dontSendNotification);
     rebuildFirsAsync();
     updateStatusLine();
+    logLine (eb::DiagnosticLog::Level::Info,
+             "Rate changed: " + juce::String (sr, 0) + " Hz"
+           + (rateModel[(size_t) idx].resampleWarning ? " (resample)" : ""));
 }
 
 void MainComponent::onBitDepthChosen() {
@@ -552,6 +712,8 @@ void MainComponent::onBitDepthChosen() {
     if (idx < 0 || idx >= (int) bitModel.size()) return;
     settings.setOutputBitDepth (bitModel[(size_t) idx]);
     engine.setOutputBitDepth (bitModel[(size_t) idx]);
+    logLine (eb::DiagnosticLog::Level::Info,
+             "Bit depth changed: preferred " + juce::String (bitModel[(size_t) idx]) + "-bit");
 }
 
 void MainComponent::onCombineChosen() {
@@ -585,10 +747,22 @@ void MainComponent::onCombineChosen() {
 
 void MainComponent::onLeftCalLoaded (const juce::File& f) {
     settings.setLeftCalPath (f.getFullPathName());
+    // Track the serial so logLine() can scrub it everywhere (the backstop). NEVER log the value itself —
+    // only that a serial is present and its length, per the brief.
+    juce::String serial;
+    if (auto c = leftCal.calFile()) serial = c->serial;
+    if (serial.isNotEmpty()) loggedSerial_ = serial;
+    logLine (eb::DiagnosticLog::Level::Info,
+             "Cal load: LEFT serial present (" + juce::String (serial.length()) + " chars)");
     rebuildFirsAsync();
 }
 void MainComponent::onRightCalLoaded (const juce::File& f) {
     settings.setRightCalPath (f.getFullPathName());
+    juce::String serial;
+    if (auto c = rightCal.calFile()) serial = c->serial;
+    if (serial.isNotEmpty()) loggedSerial_ = serial;
+    logLine (eb::DiagnosticLog::Level::Info,
+             "Cal load: RIGHT serial present (" + juce::String (serial.length()) + " chars)");
     rebuildFirsAsync();
 }
 
@@ -632,6 +806,7 @@ void MainComponent::onStartStop() {
     if (engine.status() == EngineStatus::Running) {
         engine.stop();
         startStop.setButtonText ("Start");
+        logLine (eb::DiagnosticLog::Level::Info, "Stop: measurement stopped by the user.");
     } else {
         if (verifyTicks > 0) {   // a pending L/R check holds the capture device; clear its GUI state
             verifyTicks = 0;
@@ -652,10 +827,15 @@ void MainComponent::onStartStop() {
             preflightLabel.setText (notes.warnings.joinIntoString (" "), juce::dontSendNotification);
             preflightInfo.setText (notes.info, juce::dontSendNotification);
             resized();   // the info line claims a row only when non-empty -> relayout the rail
+            logLine (eb::DiagnosticLog::Level::Info, "Start: measurement started.");
+            if (notes.warnings.size() > 0)
+                logLine (eb::DiagnosticLog::Level::Warn, "Start notes: " + notes.warnings.joinIntoString (" "));
+            logDeviceSnapshot ("start");   // capture the GRANTED rate/depth + raw-rail now the devices are open
         } else {
             preflightLabel.setText ("Start failed: " + err, juce::dontSendNotification);
             preflightInfo.setText ({}, juce::dontSendNotification);
             resized();
+            logLine (eb::DiagnosticLog::Level::Error, "Start FAILED: " + err);
         }
     }
     updateStartGate();
@@ -1051,8 +1231,12 @@ void MainComponent::onLearnReference() {
     if (engine.status() == EngineStatus::Running) {
         learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
         learnRefResultLabel.setText ("Stop the bridge before learning a reference.", juce::dontSendNotification);
+        logLine (eb::DiagnosticLog::Level::Warn, "Learn refused: bridge is running.");
         return;
     }
+
+    // Snapshot the Dirac config before every learn (the loopback can only capture in Windows Audio mode).
+    logDiracSnapshot ("before learn");
 
 #if JUCE_WINDOWS
     // Read-only Dirac-mode detection: inform if it's not in Windows Audio (the loopback will be silent).
@@ -1061,6 +1245,8 @@ void MainComponent::onLearnReference() {
         learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
         learnRefResultLabel.setText ("Dirac is in \"" + deviceType + "\" - set it to Windows Audio AND turn off "
                                      "exclusive mode on your output device, then learn.", juce::dontSendNotification);
+        logLine (eb::DiagnosticLog::Level::Warn,
+                 "Learn refused: Dirac deviceType is \"" + deviceType + "\" (not Windows Audio).");
         return;
     }
 
@@ -1078,6 +1264,9 @@ void MainComponent::onLearnReference() {
     // verify it's right (or cancel and fix it).
     const juce::String diracDevice = eb::readDiracOutputDeviceName();
     const juce::String renderTarget = diracDevice;   // "" -> default render endpoint inside captureLoopback
+    logLine (eb::DiagnosticLog::Level::Info,
+             "Learn start: loopback target=" + (diracDevice.isNotEmpty() ? ("\"" + diracDevice + "\"")
+                                                                          : juce::String ("default render endpoint")));
 
     learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
     learnRefResultLabel.setText (diracDevice.isNotEmpty()
@@ -1122,6 +1311,10 @@ void MainComponent::onLearnReference() {
             mc->learnRefResultLabel.setColour (juce::Label::textColourId,
                                                cancelled ? Theme::textDim() : (ok ? Theme::ok() : Theme::warn()));
             mc->learnRefResultLabel.setText (resultMsg, juce::dontSendNotification);
+            // Log the learn OUTCOME (the resultMsg is already user-facing + serial-free; backstopped anyway).
+            mc->logLine (cancelled ? eb::DiagnosticLog::Level::Info
+                                   : (ok ? eb::DiagnosticLog::Level::Info : eb::DiagnosticLog::Level::Warn),
+                         "Learn result: " + resultMsg);
             if (ok) {
                 // The short rail label can't hold the full round-trip reminder, so park it in a tooltip.
                 mc->learnRefResultLabel.setTooltip ("Re-enable exclusive mode on your output device and set "
@@ -1236,6 +1429,7 @@ void MainComponent::timerCallback() {
     // in a false "Running - clean" while the cable records silence.
     if (engine.status() == EngineStatus::Running && engine.consumeDeviceDied()) {
         statusErrorMsg_ = "EARS or audio cable disconnected - measurement stopped.";
+        logLine (eb::DiagnosticLog::Level::Error, "Device lost mid-run: " + statusErrorMsg_);
         engine.onDeviceLost();              // closes devices, flips status -> Error
         startStop.setButtonText ("Start");
         updateStartGate();                  // -> updateStatusLine() renders statusErrorMsg_ in the Error branch
@@ -1264,6 +1458,48 @@ void MainComponent::timerCallback() {
     updateActiveEarIndicator (blockSilent);   // AutoPerEar: highlight the earcup being captured now
     pollReferenceGrade();                      // Plan 5: drain a completed-sweep grade request (off-thread grading)
     if (engine.status() == EngineStatus::Running) updateStatusLine();
+
+    // ---- Diagnostic log: reference-monitor transitions ON CHANGE + a ~30 s heartbeat (Task 3) ----
+    // Log the detector internals only when a TRACKED value actually changes (state / referenceLoaded /
+    // a bucketed input-peak or coherence step / the guidance verdict), so a steady run doesn't flood the
+    // log at 30 Hz. The input peak + coherence are bucketed (1 dB / 0.05) so dither alone never logs.
+    {
+        const int   refState   = engine.refMonState();
+        const bool  refLoaded  = engine.referenceLoaded();
+        const float peak       = engine.lastInputBlockPeak();
+        const float coher      = engine.lastMatchCoherence();
+        const auto  fl         = engine.health().flags;
+        const bool  mismatch   = any (fl & HealthFlag::RefMismatch);
+        const bool  lowQuality = any (fl & HealthFlag::RefLowQuality);
+        const int   peakBucket  = (peak <= 1.0e-6f) ? -1000
+                                : juce::roundToInt (juce::Decibels::gainToDecibels (peak, -120.0f));
+        const int   coherBucket = juce::roundToInt (coher * 20.0f);   // 0.05 steps
+        if (refState != lastRefMonStateLogged_ || refLoaded != lastRefLoadedLogged_
+            || peakBucket != lastInputPeakBucketLogged_ || coherBucket != lastCoherBucketLogged_) {
+            logLine (eb::DiagnosticLog::Level::Info,
+                     juce::String ("RefMon change: state=") + refMonStateName (refState)
+                   + " referenceLoaded=" + (refLoaded ? "yes" : "no")
+                   + " inputPeak=" + linToDbStr (peak) + " dBFS"
+                   + " matchCoherence=" + juce::String (coher, 2)
+                   + " verdict=" + (mismatch ? "mismatch" : (lowQuality ? "lowQuality" : "ok")));
+            lastRefMonStateLogged_      = refState;
+            lastRefLoadedLogged_        = refLoaded;
+            lastInputPeakBucketLogged_  = peakBucket;
+            lastCoherBucketLogged_      = coherBucket;
+        }
+    }
+    // ~30 s heartbeat: one steady-state snapshot line so the rolling window reflects a long run without
+    // flooding (every kHeartbeatTicks ticks at 30 Hz). Keeps the ~30-minute window well inside the cap.
+    if (++heartbeatTick_ >= kHeartbeatTicks) {
+        heartbeatTick_ = 0;
+        const char* st = engine.status() == EngineStatus::Running ? "Running"
+                       : engine.status() == EngineStatus::Error   ? "Error" : "Stopped";
+        logLine (eb::DiagnosticLog::Level::Info,
+                 juce::String ("Heartbeat: status=") + st
+               + " refMon=" + refMonStateName (engine.refMonState())
+               + " referenceLoaded=" + (engine.referenceLoaded() ? "yes" : "no")
+               + " inputPeak=" + linToDbStr (engine.lastInputBlockPeak()) + " dBFS");
+    }
 
     // Raw-input (ADC) clipping warning. Re-arm from the edge-triggered, self-clearing recent-clip
     // signal (NOT the sticky ClipInput flag, which never clears mid-run and would pin the warning on
@@ -1420,6 +1656,7 @@ int MainComponent::layoutRail (int width) {
     trimLabel.setVisible (adv);   trimSlider.setVisible (adv);
     verifyButton.setVisible (adv); verifyResultLabel.setVisible (adv);
     learnRefButton.setVisible (adv); learnRefResultLabel.setVisible (adv);
+    openLogButton.setVisible (adv); exportLogButton.setVisible (adv);
     autoUpdateToggle.setVisible (adv);
     overrideToggle.setVisible (adv);   // #3: only reachable with Advanced expanded
     if (adv) {
@@ -1439,6 +1676,14 @@ int MainComponent::layoutRail (int width) {
         learnRefButton.setBounds (rr.removeFromTop (30));
         rr.removeFromTop (4);
         learnRefResultLabel.setBounds (rr.removeFromTop (16));
+        rr.removeFromTop (10);
+        // Diagnostic-log export: the two buttons sit side by side on one rail row.
+        {
+            auto logRow = rr.removeFromTop (30);
+            openLogButton.setBounds   (logRow.removeFromLeft (logRow.getWidth() / 2 - 4));
+            logRow.removeFromLeft (8);
+            exportLogButton.setBounds (logRow);
+        }
         rr.removeFromTop (10);
         autoUpdateToggle.setBounds (rr.removeFromTop (26));
         rr.removeFromTop (6);

@@ -9,6 +9,7 @@
 #include "gui/LevelMeter.h"
 #include "gui/RateMenu.h"
 #include "net/UpdateChecker.h"
+#include "diag/DiagnosticLog.h"     // eb::DiagnosticLog (Task 1 of the match-detection + diagnostic-logging build)
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -168,6 +169,11 @@ private:
     // Reference-Based Measurement Monitor (Plan 5): learn the loopback reference (Dirac in Windows Audio).
     juce::TextButton learnRefButton { "Learn reference (Windows Audio)" };
     juce::Label      learnRefResultLabel;
+    // Diagnostic-log export affordances (Task 3). "Open log folder" reveals %TEMP%/EarsBridge/logs in the
+    // OS file browser; "Export log..." zips the whole logs dir to a user-chosen path via ZipFile::Builder.
+    juce::TextButton openLogButton    { "Open log folder" };
+    juce::TextButton exportLogButton  { "Export log..." };
+    std::unique_ptr<juce::FileChooser> logChooser;   // kept alive across the async launchAsync
 
     // FIR-length combo item id for the "Auto (scales with rate)" choice. Distinct from every
     // real tap count (4096/8192/16384/32768) so it never collides with an explicit override.
@@ -184,6 +190,34 @@ private:
     // setRequestedGeneration(); together they form the stale-guard for the Start gate (P0-02).
     std::atomic<int> calGenCounter_ { 0 };
     int themeTick = 0;                          // throttles the live light/dark poll
+
+    // ---- Diagnostic log (Task 3) ----
+    // The GUI owns one rotating log under %TEMP%/EarsBridge/logs and writes the app lifecycle, the
+    // audio-device formats, the Dirac config, and the reference-monitor transitions through it across a
+    // measurement run, so a failed run leaves a readable trail. MESSAGE-THREAD ONLY (the timer + the event
+    // handlers) — the audio callback NEVER writes the log (DiagnosticLog does blocking file I/O).
+    std::unique_ptr<eb::DiagnosticLog> log_;
+    // The serial that logLine() scrubs out of EVERY message as a backstop, so the EARS serial can never
+    // leak even if a call site forgets. Set whenever a cal loads (the cal carries the serial), cleared on
+    // remove. Call sites already avoid the value; this is defense in depth.
+    juce::String loggedSerial_;
+    // Every log line goes through here: it runs the message through DiagnosticLog::redactSerial against
+    // loggedSerial_ first, then writes it. A no-op when log_ is null.
+    void logLine (eb::DiagnosticLog::Level level, const juce::String& msg);
+    // Snapshot the selected input/output device + endpoint format, and the Dirac config, into the log.
+    // Called at launch and whenever the device selection / format changes. Pure reads of the existing
+    // device-layer + Dirac reads (no new probing).
+    void logDeviceSnapshot (const juce::String& reason);
+    void logDiracSnapshot  (const juce::String& reason);
+    // Transition tracking for timerCallback: the last-logged reference-monitor snapshot, so we log the
+    // state/peak/coherence/verdict ON CHANGE (not every 30 Hz tick), plus a ~30 s heartbeat tick counter.
+    int    lastRefMonStateLogged_ = -1;          // RefMonState int; -1 = never logged
+    bool   lastRefLoadedLogged_   = false;
+    int    lastInputPeakBucketLogged_ = -1000;   // bucketed input peak (dB) so tiny jitter doesn't spam
+    int    lastCoherBucketLogged_     = -1000;   // bucketed match coherence (0.05 buckets)
+    juce::String lastDeviceKeyLogged_;           // input|output key pair last snapshotted (re-log on change)
+    int    heartbeatTick_ = 0;                    // 30 Hz tick counter; a heartbeat line every ~900 (~30 s)
+    static constexpr int kHeartbeatTicks = 900;   // ~30 s at the 30 Hz GUI timer
 
     // Hosts hover tooltips (e.g. the full 32-bit-float explanation on the neutral info line). A single
     // window owned by the component is enough for the whole app; declared last so it is destroyed
