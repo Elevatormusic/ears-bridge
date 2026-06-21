@@ -65,6 +65,11 @@ add_library(eb_engine STATIC
 target_sources(eb_engine PRIVATE src/audio/AsioFallback.cpp)
 target_sources(eb_engine PRIVATE src/audio/LrVerify.cpp)
 target_sources(eb_engine PRIVATE src/audio/MeasurementSession.cpp)
+# Task 3 (reference monitor): the loopback reference — pure validation + metadata
+# everywhere, plus the WASAPI loopback capture (Windows-only, guarded inside the .cpp
+# like EndpointFormat). Uses eb::referenceMatches (eb_core) for the single-sweep self-test
+# and juce::SHA256 (juce_cryptography) for the content hash.
+target_sources(eb_engine PRIVATE src/audio/LoopbackReference.cpp)
 target_include_directories(eb_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(eb_engine PUBLIC cxx_std_20)
 # DeviceManager.h / AudioEngine.h are PUBLIC headers that #include <juce_audio_devices/...> and
@@ -77,7 +82,10 @@ target_link_libraries(eb_engine
         juce::juce_audio_basics juce::juce_dsp juce::juce_core
         juce::juce_audio_devices
         juce::juce_recommended_config_flags
-        juce::juce_recommended_warning_flags)
+        juce::juce_recommended_warning_flags
+    PRIVATE
+        # juce::SHA256 (LoopbackReference content hash) — implementation-only, like eb_core's use.
+        juce::juce_cryptography)
 target_compile_definitions(eb_engine PUBLIC
     JUCE_STANDALONE_APPLICATION=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 
