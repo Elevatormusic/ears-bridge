@@ -271,6 +271,13 @@ bool       AudioEngine::cleanCapture() const noexcept    { return hm.cleanCaptur
 DipGainProfile AudioEngine::gainProfile() const noexcept { return hm.gainProfile(); }
 bool AudioEngine::consumeRecentInputClip() noexcept      { return hm.recentInputClip(); }
 bool AudioEngine::reachedGoodLevel()       const noexcept { return hm.reachedGoodLevel(); }
+float AudioEngine::completedSweepSnrDb()   const noexcept {
+    // Recompute the just-completed sweep's verdict from the published atomics (the same inputs the
+    // capture-thread edge used to raise LowSnr) so the GUI can name the dB. Pure read; no new state.
+    return eb::evaluateSnr (session_.armNoiseFloor(),
+                            hm.maxSweepPeakL(), hm.maxSweepPeakR(),
+                            session_.completedFloorStable()).snrDbMin;
+}
 int  AudioEngine::autoActiveEar()          const noexcept { return graph.activeEar(); }
 bool AudioEngine::consumeDeviceDied()      noexcept      { return deviceDied_.exchange (false); }
 int  AudioEngine::grantedOutputBitDepth()  const noexcept { return devices.grantedOutputBitDepth(); }

@@ -105,6 +105,8 @@ private:
     static constexpr int kSilentHoldTicks = 60;       // ~2 s of sustained silence before "no input signal"
     int          lowLevelTicks_ = 0;                  // consecutive present-but-too-quiet ticks (debounce)
     static constexpr int kLowLevelHoldTicks = 45;     // ~1.5 s below a healthy capture level before warning
+    int          lowSnrTicks_ = 0;                    // consecutive ticks with the LowSnr flag set (debounce)
+    static constexpr int kLowSnrHoldTicks = 6;        // ~0.2 s: steady the per-sweep verdict without lag
     juce::String statusErrorMsg_;                     // specific Error-state message (survives re-renders)
     // Transport.
     juce::TextButton startStop { "Start" };
