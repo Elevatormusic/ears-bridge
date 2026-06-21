@@ -16,7 +16,7 @@ namespace eb {
 // during the learn/measure campaign (carried in the plan's on-device-ratification
 // list alongside the IR-quality thresholds).
 static constexpr float kMatchCoherenceMin = 0.5f;   // min cross-correlation peak prominence
-static constexpr float kMainLobeMin       = 0.5f;   // min fraction of IR energy in the main lobe
+static constexpr float kMainLobeMin       = 0.5f;   // min fraction of cross-correlation energy in the main lobe
 
 // ---- Cross-correlation alignment -----------------------------------------
 struct AlignResult {
