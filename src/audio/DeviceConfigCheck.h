@@ -20,8 +20,13 @@
 // HONESTY: the gate is ABSOLUTE (mixRateHz == 48000), NOT the relative "request ==
 // mix" — a uniform-44.1k chain must NOT pass. An endpoint that couldn't be read
 // (valid == false) is "unknown", which is NOT a pass: all48k stays false and the
-// summary says "couldn't read X". The RATE is the only gate; bits/channels are read
-// and logged but INFO-only in v1 (do NOT gate on them).
+// summary says "couldn't read X". The RATE is the only GATE / green-veto.
+//
+// Channels + bit-depth are SECONDARY and ADVISORY ONLY — they NEVER veto green and
+// NEVER gate Start. They populate `advisory` (a calm one-line INFO note shown only
+// when the rate is fine): a mono INPUT is the one advisory WARN ("both earcups can't
+// be measured"); a 16-bit INTEGER endpoint is an INFO note (24-bit+ recommended);
+// a non-2ch cable/output is INFO. Only readable (valid) endpoints are spoken about.
 namespace eb {
 
 // The three endpoint reads that make up the chain (each from readEndpointFormat).
@@ -39,6 +44,15 @@ struct ConfigVerdict {
     bool diracOk  = false;  // diracOutput.valid && rate == 48000
     juce::String summary;   // short ONE-LINE title-bar warning naming the wrong/unreadable endpoint(s);
                             // "" iff all48k (or nothing was checked)
+
+    // --- SECONDARY advisory (channels + bit-depth). These NEVER gate, NEVER veto green, NEVER gate Start.
+    // RATE (above) is the sole hard gate. These are surfaced only as a calm INFO/advisory note when the
+    // rate is fine. Computed only from READABLE (valid) endpoints — we never assert about one we couldn't read.
+    bool inputChannelsLow = false;  // input.valid && channels < 2 — the EARS has L+R earcup mics, so a mono
+                                    // input can't capture both ears. The one advisory WARN (still no green-veto).
+    juce::String advisory;          // short ONE-LINE secondary note, assembled (most-important-first) from:
+                                    // the input-channels warn, then any 16-bit-integer endpoint(s), then a
+                                    // non-2ch cable/output (info). "" when there is nothing to note.
 };
 
 // True iff this endpoint was read AND its OS mix rate is within 1 Hz of 48 kHz.
@@ -59,8 +73,40 @@ struct ConfigVerdict {
     v.diracOk = endpointIs48k (c.diracOutput);
     v.all48k  = v.inputOk && v.cableOk && v.diracOk;
 
+    // --- SECONDARY advisory: channels + bit-depth. Computed independently of the RATE gate (it must be
+    // available even when all48k is true, so a clean-rate chain can still show a calm 16-bit/mono note).
+    // Only ever speaks about READABLE endpoints. Never touches all48k / summary / the *Ok flags.
+    // An INTEGER 16-bit endpoint is lower resolution; float (isFloat) or >=24-bit is transparent -> no note.
+    auto is16BitInt = [] (const eb::EndpointFormat& f) {
+        return f.valid && ! f.isFloat && f.bits > 0 && f.bits <= 16;
+    };
+    v.inputChannelsLow = c.input.valid && c.input.channels < 2;   // the one advisory WARN
+
+    juce::StringArray adv;
+    // 1) The input-channels WARN comes FIRST (it's the most important — both earcups can't be measured).
+    if (v.inputChannelsLow)
+        adv.add ("input is mono - both earcups can't be measured");
+    // 2) Any 16-bit-integer endpoint(s): one compact note naming which side(s). INFO, never a gate.
+    {
+        juce::StringArray sixteen;
+        if (is16BitInt (c.input))       sixteen.add ("input");
+        if (is16BitInt (c.cable))       sixteen.add ("cable");
+        if (is16BitInt (c.diracOutput)) sixteen.add ("Dirac output");
+        if (! sixteen.isEmpty())
+            adv.add (sixteen.joinIntoString (", ") + " 16-bit - 24-bit+ recommended for the cleanest measurement");
+    }
+    // 3) A non-2ch cable / Dirac output: INFO only (the input's channel count is handled by the WARN above).
+    {
+        juce::StringArray nonStereo;
+        if (c.cable.valid       && c.cable.channels != 2)       nonStereo.add ("cable");
+        if (c.diracOutput.valid && c.diracOutput.channels != 2) nonStereo.add ("Dirac output");
+        if (! nonStereo.isEmpty())
+            adv.add (nonStereo.joinIntoString (", ") + " not 2-channel");
+    }
+    v.advisory = adv.joinIntoString ("; ");
+
     if (! v.checked || v.all48k)
-        return v;   // nothing to judge, or every endpoint is a clean 48k -> no warning
+        return v;   // nothing to judge, or every endpoint is a clean 48k -> no RATE warning (advisory may still be set)
 
     // Compact a rate to a human label: 44100 -> "44.1k", 48000 -> "48k", 96000 -> "96k".
     auto rateLabel = [] (double hz) -> juce::String {

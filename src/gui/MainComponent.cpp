@@ -1265,6 +1265,25 @@ void MainComponent::updateStatusLine() {
         statusLine.setText ("Load both ear calibrations to start", juce::dontSendNotification);
         statusLine.setColour (juce::Label::textColourId, Theme::textDim());
     }
+
+    // SECONDARY chain-config advisory (input-channels warn / 16-bit / non-2ch). Append it as a calm INFO
+    // tail ONLY when the RATE is fine (all48k) and nothing higher-precedence is showing — i.e. the branch
+    // above landed on a CALM state (ok-green or dim, never the red error or an amber warn). This must NOT
+    // override a hard error or the rate warn, and must NOT veto green: a verified line still shows, with the
+    // advisory hanging off it as a quiet note. The rate veto (above) already wins when the chain isn't 48k,
+    // so we never double-stack it. We read the colour the branch just set to decide whether appending is safe.
+    if (chainVerdict_.checked && chainVerdict_.all48k && chainVerdict_.advisory.isNotEmpty()) {
+        const auto curCol = statusLine.findColour (juce::Label::textColourId);
+        const bool calm   = (curCol == Theme::ok()) || (curCol == Theme::textDim());
+        if (calm) {
+            const auto cur = statusLine.getText();
+            statusLine.setText (cur.isNotEmpty() ? (cur + " - " + chainVerdict_.advisory)
+                                                 : chainVerdict_.advisory,
+                                juce::dontSendNotification);
+            // Keep the line's existing calm colour: a green "verified" tail stays green, a dim/idle line
+            // stays dim. The advisory is INFO, never a veto -> we never recolour to warn/danger here.
+        }
+    }
 }
 
 // ---- Reference-Based Measurement Monitor (Plan 5): learn + grade ----------------------
@@ -1595,11 +1614,13 @@ void MainComponent::pollChainConfig() {
 
     chainVerdict_ = eb::checkChainConfig (cfg);
 
-    // Log ON CHANGE only (the summary text is the change key; "all-48k" / "unchecked" both summarise as ""),
-    // and include each endpoint's rate/channels/bits so the failing format is in the log, not just the verdict.
-    const juce::String key = chainVerdict_.checked
+    // Log ON CHANGE only. The change key folds in the RATE summary AND the secondary advisory (channels +
+    // bit-depth), so an advisory-only change (e.g. Dirac output flips to 16-bit while the rate stays 48k)
+    // still logs + refreshes the idle status line. "all-48k" / "unchecked" both summarise as "" for the rate
+    // part. Include each endpoint's rate/channels/bits so the failing format is in the log, not just the verdict.
+    const juce::String key = (chainVerdict_.checked
         ? (chainVerdict_.all48k ? juce::String ("ok") : chainVerdict_.summary)
-        : juce::String ("unchecked");
+        : juce::String ("unchecked")) + "|adv=" + chainVerdict_.advisory;
     if (key != lastChainSummaryLogged_) {
         auto fmtStr = [] (const eb::EndpointFormat& f) -> juce::String {
             if (! f.valid) return "<unreadable>";
@@ -1612,6 +1633,7 @@ void MainComponent::pollChainConfig() {
                  juce::String ("Chain config (48k gate): ")
                + (chainVerdict_.checked ? (chainVerdict_.all48k ? "all 48k" : ("WARN " + chainVerdict_.summary))
                                         : "unchecked (no endpoint read)")
+               + (chainVerdict_.advisory.isNotEmpty() ? (" | advisory: " + chainVerdict_.advisory) : juce::String())
                + " | input=" + fmtStr (cfg.input)
                + " cable=" + fmtStr (cfg.cable)
                + " diracOutput=" + fmtStr (cfg.diracOutput));
