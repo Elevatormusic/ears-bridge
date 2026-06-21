@@ -31,7 +31,8 @@ add_executable(eb_tests
     test_measurementsession.cpp
     test_combinegate.cpp
     test_startgate.cpp
-    test_startnotes.cpp)
+    test_startnotes.cpp
+    test_diagnosticlog.cpp)
 # Link the JUCE modules the test sources include directly, plus the recommended config flags,
 # so eb_tests compiles regardless of eb_core's link visibility.
 target_link_libraries(eb_tests PRIVATE

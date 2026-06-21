@@ -70,6 +70,9 @@ target_sources(eb_engine PRIVATE src/audio/MeasurementSession.cpp)
 # like EndpointFormat). Uses eb::referenceMatches (eb_core) for the single-sweep self-test
 # and juce::SHA256 (juce_cryptography) for the content hash.
 target_sources(eb_engine PRIVATE src/audio/LoopbackReference.cpp)
+# Match-detection + diagnostic-logging build, Task 1: the rotating message-thread
+# diagnostic logger. A leaf utility — juce_core only (no GUI/audio deps).
+target_sources(eb_engine PRIVATE src/diag/DiagnosticLog.cpp)
 target_include_directories(eb_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(eb_engine PUBLIC cxx_std_20)
 # DeviceManager.h / AudioEngine.h are PUBLIC headers that #include <juce_audio_devices/...> and
