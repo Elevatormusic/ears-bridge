@@ -1493,19 +1493,34 @@ void MainComponent::onLearnReference() {
         } else if (! cap.ok) {
             resultMsg = "Capture failed: " + cap.reason;
         } else {
-            // Validate each channel on its own — each must contain a sweep. Name the failing ear precisely.
-            const auto vL = eb::validateReferenceCapture (cap.samplesL.data(), (int) cap.samplesL.size(), cap.rate);
-            const auto vR = eb::validateReferenceCapture (cap.samplesR.data(), (int) cap.samplesR.size(), cap.rate);
-            if (! vL.ok)      { resultMsg = "Rejected (Left ear): " + vL.reason; }
-            else if (! vR.ok) { resultMsg = "Rejected (Right ear): " + vR.reason; }
+            // Dirac HARD-PANS its sweeps, so each captured channel is [its own sweep ~10 s][silence ~11 s]
+            // (the silent half is where the OTHER ear sweeps on the other channel). Grading deconvolves
+            // against the FULL reference, so that silent half divides by ~zero and amplifies noise, dragging
+            // IR-SNR strongly negative even on a clean capture. TRIM each channel to JUST its own sweep span
+            // BEFORE validating + storing, so the stored reference holds only the ~10 s sweep. A channel with
+            // no sweep (all-silent) or an implausibly short span fails the learn, NAMING which ear.
+            const auto spanL = eb::findActiveSpan (cap.samplesL.data(), (int) cap.samplesL.size(), cap.rate);
+            const auto spanR = eb::findActiveSpan (cap.samplesR.data(), (int) cap.samplesR.size(), cap.rate);
+            if (! spanL.valid)      { resultMsg = "Rejected (Left ear): no sweep found"; }
+            else if (! spanR.valid) { resultMsg = "Rejected (Right ear): no sweep found"; }
             else {
-                ok = true;
-                samplesL = std::move (cap.samplesL);
-                samplesR = std::move (cap.samplesR);
-                capRate  = cap.rate;
-                resultMsg = "Reference learned - both ears captured (L "
-                            + juce::String (samplesL.size() / capRate, 1) + " s, R "
-                            + juce::String (samplesR.size() / capRate, 1) + " s) - see tip to resume listening.";
+                std::vector<float> trimL (cap.samplesL.begin() + spanL.first, cap.samplesL.begin() + spanL.last);
+                std::vector<float> trimR (cap.samplesR.begin() + spanR.first, cap.samplesR.begin() + spanR.last);
+                // Validate each TRIMMED channel on its own — each must contain a clean single sweep. Name the
+                // failing ear precisely.
+                const auto vL = eb::validateReferenceCapture (trimL.data(), (int) trimL.size(), cap.rate);
+                const auto vR = eb::validateReferenceCapture (trimR.data(), (int) trimR.size(), cap.rate);
+                if (! vL.ok)      { resultMsg = "Rejected (Left ear): " + vL.reason; }
+                else if (! vR.ok) { resultMsg = "Rejected (Right ear): " + vR.reason; }
+                else {
+                    ok = true;
+                    samplesL = std::move (trimL);
+                    samplesR = std::move (trimR);
+                    capRate  = cap.rate;
+                    resultMsg = "Reference learned - both ears captured (L "
+                                + juce::String (samplesL.size() / capRate, 1) + " s, R "
+                                + juce::String (samplesR.size() / capRate, 1) + " s) - see tip to resume listening.";
+                }
             }
         }
         juce::MessageManager::callAsync ([safe, ok, cancelled, resultMsg,
