@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_core/juce_core.h>
 #include "audio/EngineTypes.h"
+#include "audio/NoiseFloorTracker.h"
 #include <atomic>
 #include <cmath>   // std::isfinite / std::abs for the header-inline blockPeak()
 
@@ -122,6 +123,15 @@ public:
     // reset. Lets the GUI separate a present-but-too-quiet capture (the low-SNR "tin-can" failure,
     // which sits ABOVE the -50 dBFS no-signal floor and so reads as "clean" today) from a good one.
     bool reachedGoodLevel() const noexcept { return reachedGood_.load(); }
+
+    // ---- Measured noise floor (replaces the fixed armFloor SNR denominator once valid) ----
+    void prepareNoiseFloor (double sampleRate, int maxBlock) noexcept { floor_.prepare (sampleRate, maxBlock); }
+    // Fed every capture block with the per-ear block PEAK (the engine already computes spkL/spkR). The
+    // tracker self-gates on quiet windows, so this is called unconditionally. RT-safe.
+    void observeFloorBlock (float pkL, float pkR, double blockSeconds) noexcept { floor_.observeBlock (pkL, pkR, blockSeconds); }
+    float measuredFloorLinear (int ch) const noexcept { return floor_.floorLinear (ch); }
+    float measuredFloorDbAveraged() const noexcept { return floor_.floorDbAveraged(); }
+    bool  floorValid() const noexcept { return floor_.valid(); }
 
     // ---- SNR addition: per-ear in-sweep peak latch (the SNR numerator) ----
     // The engine calls this ONCE per capture block ONLY while the Dirac sweep is active
@@ -253,6 +263,9 @@ private:
     std::atomic<int> preparedRateHz_   { 0 };    // rate rounded to nearest Hz, 0 = sentinel "not set"
     std::atomic<int> preparedBitDepth_ { 0 };
     std::atomic<int> preparedChannels_ { 0 };
+
+    // Noise-floor primitive: measured per-channel ambient floor, fed the per-ear block peak each block.
+    NoiseFloorTracker floor_;
 };
 
 } // namespace eb

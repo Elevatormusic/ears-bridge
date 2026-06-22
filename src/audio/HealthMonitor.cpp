@@ -39,6 +39,7 @@ void HealthMonitor::reset() {
     flagBits.store (0);                 // Plan 4: clear the sticky flags on a fresh run
     recentClip_.store (false);
     reachedGood_.store (false);         // a fresh run has not yet reached a healthy capture level
+    floor_.reset();                     // re-baseline the measured noise floor each run
     maxSweepPeakLMilli_.store (0); maxSweepPeakRMilli_.store (0);   // SNR numerator: 0 until a sweep runs
     completedSnrDbMilli_.store (0);   // SNR review fix: published verdict dB cleared on a fresh run
     refMonState_.store (0); refIrSnrDbMilli_.store (0); refThdPctMilli_.store (0);   // Plan 5: ref-grade snapshot
