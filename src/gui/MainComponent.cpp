@@ -2043,6 +2043,24 @@ void MainComponent::timerCallback() {
     pollChainConfig();                         // 48k-everywhere chain-config check (warn + veto green; pre-Start too)
     if (engine.status() == EngineStatus::Running) updateStatusLine();
 
+    // ---- TEMP phase-precision probe (remove once the clock-bridge fix lands) ----------------------------
+    // The min-phase->linear-phase cal FIR A/B did NOT clear Dirac's "imprecise (phase)" verdict, so the cause
+    // is the Windows ClockBridge ASRC, not the FIR. Before touching the real-time bridge, MEASURE the actual
+    // drift on a real Dirac measurement: log the trimmed resample ratio (7 dp -> ppm-level drift visible), the
+    // FIFO fill, whether the D6 freeze is ENGAGED (the open question -- the level-arm is meant to be 'dead' on a
+    // gradual sweep), and any under/overruns, throttled to ~3 Hz while Running. Correlate the ratio creep + the
+    // frozen flag with the L/R sweeps to size the fix (hold-one-ratio vs. a deeper change).
+    if (engine.status() == EngineStatus::Running && ++clockProbeTick_ >= 10) {
+        clockProbeTick_ = 0;
+        logLine (eb::DiagnosticLog::Level::Info,
+                 juce::String ("CLOCKBRIDGE ratio=") + juce::String (engine.bridgeRatio(), 7)
+               + " fifoFill=" + juce::String (engine.bridgeFifoFill(), 3)
+               + " frozen="   + (engine.bridgeSweepFrozen() ? "yes" : "no")
+               + " underruns=" + juce::String (engine.bridgeUnderruns())
+               + " overruns="  + juce::String (engine.bridgeOverruns())
+               + " inputPeak=" + linToDbStr (engine.lastInputBlockPeak()) + " dBFS");
+    }
+
     // ---- Diagnostic log: reference-monitor transitions ON CHANGE + a ~30 s heartbeat (Task 3) ----
     // Log the detector internals only when a TRACKED value actually changes (state / referenceLoaded / a
     // bucketed coherence step / the guidance verdict), so a steady run doesn't flood the log at 30 Hz. The
