@@ -306,10 +306,10 @@ MainComponent::MainComponent() {
     // mode; we detect that read-only and inform. Only meaningful while Stopped (the loopback can't run
     // alongside the live ASIO measurement).
     learnRefButton.onClick = [this] { onLearnReference(); };
-    railContent.addChildComponent (learnRefButton);
+    railContent.addAndMakeVisible (learnRefButton);   // REQUIRED measurement step -> main flow, not under Advanced
     learnRefResultLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    railContent.addChildComponent (learnRefResultLabel);
+    railContent.addAndMakeVisible (learnRefResultLabel);
 
     // Diagnostic-log export (Task 3). "Open log folder" reveals %TEMP%/EarsBridge/logs; "Export log..."
     // zips the whole logs dir to a user-chosen path. Both are message-thread-only affordances.
@@ -2242,13 +2242,19 @@ int MainComponent::layoutRail (int width) {
     rateWarn.setBounds (rr.removeFromTop (14));
     rr.removeFromTop (8);
 
+    // Reference learn: a REQUIRED measurement step (it enables the per-ear quality grade), so it sits in the main
+    // config flow above Advanced, not hidden inside it.
+    learnRefButton.setBounds (rr.removeFromTop (30));
+    rr.removeFromTop (4);
+    learnRefResultLabel.setBounds (rr.removeFromTop (16));
+    rr.removeFromTop (10);
+
     advancedToggle.setBounds (rr.removeFromTop (26));
     const bool adv = advancedToggle.getToggleState();
     complexPhaseToggle.setVisible (adv);
     firLenLabel.setVisible (adv); firLenBox.setVisible (adv);
     trimLabel.setVisible (adv);   trimSlider.setVisible (adv);
     verifyButton.setVisible (adv); verifyResultLabel.setVisible (adv);
-    learnRefButton.setVisible (adv); learnRefResultLabel.setVisible (adv);
     openLogButton.setVisible (adv); exportLogButton.setVisible (adv);
     autoUpdateToggle.setVisible (adv);
     overrideToggle.setVisible (adv);   // #3: only reachable with Advanced expanded
@@ -2265,10 +2271,6 @@ int MainComponent::layoutRail (int width) {
         verifyButton.setBounds (rr.removeFromTop (30));
         rr.removeFromTop (4);
         verifyResultLabel.setBounds (rr.removeFromTop (16));
-        rr.removeFromTop (10);
-        learnRefButton.setBounds (rr.removeFromTop (30));
-        rr.removeFromTop (4);
-        learnRefResultLabel.setBounds (rr.removeFromTop (16));
         rr.removeFromTop (10);
         // Diagnostic-log export: the two buttons sit side by side on one rail row.
         {
