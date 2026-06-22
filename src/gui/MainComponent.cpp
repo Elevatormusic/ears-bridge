@@ -839,6 +839,11 @@ void MainComponent::onStartStop() {
         // Task 4: re-arm BOTH per-ear grade pollers on Stop so a stale match from this run can't carry into
         // the next (each ear again needs two consecutive matched polls before its first grade).
         gradePollTick_ = 0; gradePollerL_.reset(); gradePollerR_.reset();
+        // Reset the live in-sweep readout state too, so a held level / sweep-active hold / live text from this
+        // run can't bleed into the idle line after Stop (matches the Start-path reset).
+        liveHeldLDb_ = liveHeldRDb_ = -120.0f;
+        sweepActiveTicks_ = 0; sweepActiveReleaseTicks_ = 0; liveTextTick_ = 0;
+        liveHeldPrimary_.clear(); liveHeldSecond_.clear();
         logLine (eb::DiagnosticLog::Level::Info, "Stop: measurement stopped by the user.");
     } else {
         logLine (eb::DiagnosticLog::Level::Debug, "Button: Start clicked");
@@ -851,9 +856,12 @@ void MainComponent::onStartStop() {
         if (engine.start (err)) {
             startStop.setButtonText ("Stop");
             inputClipHold_ = 0; silentTicks_ = 0; lowLevelTicks_ = 0; lowSnrTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
-            // Live in-sweep readout: start a fresh run at the silent floor with the sweep-active debounce
-            // and text cadence reset, so a prior run's held level / sweep-active state can't bleed in.
-            liveHeldLDb_ = liveHeldRDb_ = -120.0f; sweepActiveTicks_ = 0; liveTextTick_ = 0;
+            // Live in-sweep readout: start a fresh run at the silent floor with the sweep-active attack/release
+            // debounce, the text cadence, and the held live-line text reset, so a prior run's held level /
+            // sweep-active state / live text can't bleed in.
+            liveHeldLDb_ = liveHeldRDb_ = -120.0f;
+            sweepActiveTicks_ = 0; sweepActiveReleaseTicks_ = 0; liveTextTick_ = 0;
+            liveHeldPrimary_.clear(); liveHeldSecond_.clear();
             // Task 4 match-poll debounce: a fresh run starts un-matched and un-graded, so the first sustained
             // match (two consecutive matched polls) grades exactly once.
             gradePollTick_ = 0; gradePollerL_.reset(); gradePollerR_.reset(); lastListenTextLogged_.clear();
@@ -1065,86 +1073,174 @@ MainComponent::LiveReadout MainComponent::updateLiveInputReadout() {
     liveHeldLDb_ = holdDecay (liveHeldLDb_, liveL);
     liveHeldRDb_ = holdDecay (liveHeldRDb_, liveR);
 
-    // Sweep-active debounce off the LIVE (not held) peak: peakMax must hold above the gate ~0.3 s before the
-    // live line takes over, so a momentary blip doesn't flip the status to-and-fro.
+    // Sweep-active debounce off the LIVE (not held) peak with an ATTACK and a RELEASE (Bug B-2):
+    //   attack  - peakMax must hold above the gate ~0.3 s (kSweepActiveHoldTicks) before the live line engages,
+    //             so a momentary blip can't flip the status on;
+    //   release - once engaged it STAYS engaged for ~1.5 s (kSweepActiveReleaseTicks) after the level last
+    //             cleared the gate. The release countdown bleeds down instead of snapping to 0, so the quiet
+    //             L<->R inter-sweep gap and brief sub-gate dips don't flip the live readout off and back.
     const float livePeakMax = juce::jmax (liveL, liveR);
-    sweepActiveTicks_ = (livePeakMax > kLiveActiveGateDb) ? (sweepActiveTicks_ + 1) : 0;
-    out.owns = sweepActiveTicks_ >= kSweepActiveHoldTicks;
+    const bool  aboveGate    = livePeakMax > kLiveActiveGateDb;
+    sweepActiveTicks_        = aboveGate ? (sweepActiveTicks_ + 1) : 0;          // attack counter (consecutive above)
+    const bool attacked      = sweepActiveTicks_ >= kSweepActiveHoldTicks;       // attack satisfied this tick
+    // Re-arm the release hold once attacked-or-still-above; otherwise let it bleed down (pure step, unit-tested).
+    sweepActiveReleaseTicks_ = eb::sweepActiveRelease (sweepActiveReleaseTicks_,
+                                                       attacked || (aboveGate && sweepActiveReleaseTicks_ > 0),
+                                                       kSweepActiveReleaseTicks);
+    out.owns = attacked || sweepActiveReleaseTicks_ > 0;   // engaged while attacking-above OR within the hold
 
     if (! out.owns) {
         // Idle: hand the status back to the per-ear verdicts and render the live line immediately on the next
         // engage (don't wait out the text cadence). Let the held values keep decaying toward the floor.
         liveTextTick_ = 0;
+        liveHeldPrimary_.clear(); liveHeldSecond_.clear();
         return out;
     }
 
-    // Sweep-active: build the readout from the HELD (steady) values, throttled to ~7 Hz so the digits read
-    // steady. render==true on the first engaged tick (liveTextTick_ resets to 0 when idle above) and every
-    // kLiveTextEveryTicks after; the caller re-uses the prior label text on the in-between ticks.
-    out.render = (liveTextTick_ == 0);
-    if (out.render) {
+    // Sweep-active: rebuild the readout text from the HELD (steady) values only on the ~7 Hz cadence tick, but
+    // CARRY the last-rendered text/colour out on EVERY engaged tick (Bug B-1). render==true on the first
+    // engaged tick (liveTextTick_ resets to 0 when idle above) and every kLiveTextEveryTicks after; on the
+    // in-between ticks we re-emit liveHeldPrimary_/liveHeldSecond_/liveHeldColour_ so the live line and its
+    // reseat hint persist through the set-if-changed commit instead of blinking.
+    if (liveTextTick_ == 0) {
         const auto s = eb::liveInputStatus (liveHeldLDb_, liveHeldRDb_, true);
         // Map the colour-free severity to a Theme role (semantic colours only; no hardcoded hex). Clip uses
         // the strongest warn/error role; the WORDS ("CLIPPING" + the dB) carry the meaning without colour.
-        out.colour = (s.severity == eb::LiveInputSeverity::Clip)   ? Theme::danger()
-                   : (s.severity == eb::LiveInputSeverity::Warn)   ? Theme::warn()
-                                                                   : Theme::text();
+        liveHeldColour_ = (s.severity == eb::LiveInputSeverity::Clip)   ? Theme::danger()
+                        : (s.severity == eb::LiveInputSeverity::Warn)   ? Theme::warn()
+                                                                        : Theme::text();
         // The helper puts the optional reseat hint on a second line (after a '\n'); split it so the live
         // readout sits on statusLine and the hint on statusLineR (the existing second status line).
         const int nl = s.text.indexOfChar ('\n');
-        out.primary = nl < 0 ? s.text : s.text.substring (0, nl);
-        out.second  = nl < 0 ? juce::String() : s.text.substring (nl + 1);
+        liveHeldPrimary_ = nl < 0 ? s.text : s.text.substring (0, nl);
+        liveHeldSecond_  = nl < 0 ? juce::String() : s.text.substring (nl + 1);
     }
+    out.render  = (liveTextTick_ == 0);
+    out.primary = liveHeldPrimary_;   // carried EVERY engaged tick so the line persists (no blink)
+    out.second  = liveHeldSecond_;
+    out.colour  = liveHeldColour_;
     if (++liveTextTick_ >= kLiveTextEveryTicks) liveTextTick_ = 0;
     return out;
 }
 
+// Commit a status label only when its text OR colour changed (Bug B: nothing is cleared-then-reset, so the
+// line is persistent and never flickers between render ticks). Compares getText()/findColour first. Tooltip
+// is handled separately (setTooltipIfChanged) because most branches leave it empty.
+bool MainComponent::setLabelIfChanged (juce::Label& label, const juce::String& text, juce::Colour colour) {
+    const bool textChanged   = label.getText() != text;
+    const bool colourChanged = label.findColour (juce::Label::textColourId) != colour;
+    if (! textChanged && ! colourChanged) return false;
+    label.setText (text, juce::dontSendNotification);
+    label.setColour (juce::Label::textColourId, colour);
+    return true;
+}
+
+// Tooltip set-if-changed companion (only the low-SNR / per-ear-warn branches carry one; everything else is "").
+static void setTooltipIfChanged (juce::Label& label, const juce::String& tip) {
+    if (label.getTooltip() != tip) label.setTooltip (tip);
+}
+
 void MainComponent::updateStatusLine() {
     const auto st = engine.status();
-    statusLine.setTooltip ({});   // only the low-SNR branch sets a tooltip; clear it on every other path
-    // Per-Ear Per-Channel Grading (Task 5): the SECOND (RIGHT-ear) line is blank by default. Every
-    // global/hard branch below leaves it blank — a device error, the 48k veto, the Stopped/gate states,
-    // learning, or no per-ear reference all show ONE message on statusLine with NO stale per-ear grade
-    // beneath it. ONLY renderPerEarStatusLines() (Running + a per-ear reference loaded) populates it.
-    statusLineR.setText ({}, juce::dontSendNotification);
-    statusLineR.setTooltip ({});
+    // Set-if-changed model (Bug B): every branch computes the FINAL (text, colour, tooltip) for statusLine and
+    // statusLineR, then commits once through setLabelIfChanged / setTooltipIfChanged. We DON'T pre-clear the
+    // lines here — clearing-then-conditionally-resetting is what made the notes blink. Defaults below are the
+    // "blank second line / no tooltip" most branches want; a branch overrides them, and the single commit at
+    // the end writes only what actually changed.
+    juce::String sText, s2Text, sTip, s2Tip;
+    juce::Colour sCol = Theme::textDim(), s2Col = Theme::warn();
+    // When a branch drives the per-ear lines directly (renderPerEarStatusLines), it commits both labels itself
+    // and sets perEarDriven=true so the generic commit at the end skips statusLine/statusLineR.
+    bool perEarDriven = false;
     if (st == EngineStatus::Running) {
         const auto h = engine.health();
         // The 48k-everywhere config VETO is a hard error: a wrong-rate chain silently invalidates the
         // measurement, so it must take precedence over the live readout below (you cannot trust a level
         // shown over a mis-rated chain). Evaluated here so the live branch can defer to it.
         const bool rateVeto = chainVerdict_.checked && ! chainVerdict_.all48k;
-        // Advance the live-readout state (peak-hold/decay + the sweep-active debounce) EVERY tick, even if a
-        // hard error will win this render, so the held level + debounce stay continuous. It writes NO labels
-        // itself; live.owns says whether the live line should take over (true only when sweep-active).
+        // Advance the live-readout state (peak-hold/decay + the attack/release sweep-active debounce) EVERY
+        // tick, even if a hard error will win this render, so the held level + debounce stay continuous. It
+        // writes NO labels itself; live.owns says whether the live line should take over (sweep-active+held).
         const LiveReadout live = updateLiveInputReadout();
+        // Bug A inputs: a captured grade (any ear GradedClean/GradedSuspect/ReferenceStale, with a per-ear
+        // reference loaded) must DEFER the pre-sweep "waiting" text and show a persistent "captured" instead.
+        // The hard warns below (output-clip / low-SNR) still take precedence so we never say "safe to run the
+        // next" over a clipped or noisy sweep.
+        auto isGraded = [this] (int ear) {
+            const auto s = (eb::RefMonState) engine.refMonState (ear);
+            return s == eb::RefMonState::GradedClean
+                || s == eb::RefMonState::GradedSuspect
+                || s == eb::RefMonState::ReferenceStale;
+        };
+        const bool hasGrade = engine.referenceLoaded() && (isGraded (0) || isGraded (1));
         // An invalidating condition is reported the instant it latches, regardless of phase.
         if (! h.cleanCapture) {
-            statusLine.setText (eb::invalidMeasurementMessage (h.flags), juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::danger());
+            sText = eb::invalidMeasurementMessage (h.flags);
+            sCol  = Theme::danger();
         } else if (! rateVeto && live.owns) {
-            // LIVE in-sweep readout: while Dirac is actually sweeping (debounced sweep-active), show the live
-            // per-channel input level / clip / L/R-imbalance, OVERRIDING the stale per-ear verdicts and the
-            // "waiting for the sweep" text below — the user needs to see the level move, catch a clip live,
-            // and spot a quiet earcup AS IT HAPPENS, not only after the grade. The two hard errors above
-            // (invalid capture, the 48k veto) still win (they short-circuit before this branch). On the
-            // in-between (non-render) ticks the labels keep their prior live text, so the digits read steady.
-            if (live.render) {
-                statusLine.setText (live.primary, juce::dontSendNotification);
-                statusLine.setColour (juce::Label::textColourId, live.colour);
-                statusLine.setTooltip ({});
-                statusLineR.setText (live.second, juce::dontSendNotification);
-                statusLineR.setColour (juce::Label::textColourId, Theme::warn());   // the reseat hint is a warn
-                statusLineR.setTooltip ({});
-            }
+            // LIVE in-sweep readout: while Dirac is actually sweeping (debounced+release-held sweep-active),
+            // show the live per-channel input level / clip / L/R-imbalance, OVERRIDING the stale per-ear
+            // verdicts and the "waiting"/"captured" text below — the user needs to see the level move, catch a
+            // clip live, and spot a quiet earcup AS IT HAPPENS. The two hard errors above (invalid capture, the
+            // 48k veto) still win (they short-circuit before this branch). The held live text persists between
+            // the ~7 Hz render ticks (live.primary/second carry the last rendered text every tick now), so the
+            // line and its reseat hint don't blink (Bug B-1).
+            sText = live.primary;
+            sCol  = live.colour;
+            s2Text = live.second;
+            s2Col  = Theme::warn();   // the reseat hint is a warn
+        } else if (any (h.flags & HealthFlag::ClipOutput)) {
+            // The output hit full scale (e.g. Sum's uncompensated +6 dB drove past the clamp). The clamp stops
+            // a cable over, but it distorts the sweep -- flag it, don't pass it as "clean". HOISTED above the
+            // captured/waiting branches (Bug A): a CLIPPED captured sweep must read the clip warning, never
+            // "safe to run the next" and never the pre-sweep "waiting".
+            sText = "Output clipping - lower the level or avoid Sum";
+            sCol  = Theme::warn();
+        } else if (lowSnrTicks_ >= kLowSnrHoldTicks) {
+            // SNR guidance, BEFORE the captured/waiting branches so a noisy sweep never reads as "clean" or
+            // "safe to run the next" (clean = no dropouts/clipping, which a low-SNR sweep can still pass). The
+            // engine raised LowSnr at the sweep's edge off a TRUSTED floor only (honest silence otherwise). The
+            // status line shares the title bar and is narrow, so keep the inline text SHORT and complete (no
+            // clipping); the full guidance lives in the tooltip. snrNote's long form is the wording of record.
+            const int snrDb = juce::roundToInt (engine.completedSweepSnrDb());
+            sText = "Low SNR: sweep only " + juce::String (snrDb)
+                  + " dB over the room noise - re-measure";
+            sCol  = Theme::warn();
+            sTip  = "The Dirac sweep was only " + juce::String (snrDb)
+                  + " dB above the room-noise floor. Quieten the room (close windows, "
+                    "stop fans/AC) or raise the level, then re-measure for a cleaner "
+                    "correction.";
+        } else if (rateVeto) {
+            // 48k-everywhere VETO. ABOVE the captured/waiting + reference-monitor branches so a wrong-rate (or
+            // unreadable) chain can NEVER read "verified"/"safe to run the next" — the reference monitor
+            // REQUIRES 48k on all three endpoints, and a 44.1k Dirac output silently invalidates the
+            // measurement. The hard errors above (invalid capture / output-clip / low-SNR) still win — those
+            // are signal failures the user must see first; this is the config layer. chainVerdict_.summary is a
+            // single short title-bar line naming the off-48k / unreadable endpoint(s).
+            sText = chainVerdict_.summary;
+            sCol  = Theme::warn();
+        } else if (hasGrade) {
+            // Bug A: a grade exists this run and the sweep isn't sounding (clip / low-SNR / 48k veto already
+            // short-circuited above) -> show a PERSISTENT success confirmation that does NOT revert to
+            // "waiting".
+            //   statusLine  = the headline "Sweep captured - safe to run the next sweep" (ok colour).
+            //   statusLineR = the per-ear DETAIL via renderEarStatusLine (keeps the INFO/unratified gate +
+            //                 tooltip), so the actionable verdict (IR-SNR/THD, re-learn, peak) stays on the
+            //                 lines. Both persist (set-if-changed) and never flip back to "waiting".
+            // We set statusLine here and let renderEarStatusLine commit statusLineR, so perEarDriven=true keeps
+            // the generic end-of-function commit from clobbering either line.
+            setLabelIfChanged (statusLine, "Sweep captured - safe to run the next sweep", Theme::ok());
+            setTooltipIfChanged (statusLine, {});
+            renderEarStatusLine (1, "R", statusLineR);        // R-ear per-ear detail on the second line
+            perEarDriven = true;
         } else if (h.session == SessionPhase::Idle || h.session == SessionPhase::Preflight) {
-            // Before the sweep arms: validity isn't scoped to anything yet, so don't claim "clean" and
-            // suppress the in-sweep warnings below (output-clip / silent / low-level), which are only
-            // meaningful once Dirac is actually driving the sweep. With a reference loaded the grade no
-            // longer depends on the (level-blind) arm — the engine listens via the rolling ring + the
-            // off-thread reference MATCH (Task 4) — so show the cosmetic activity state: "Sweep in
-            // progress..." while signal is present, "Listening..." while quiet. Non-adopters (no reference
-            // learned, no verdict yet) keep the unchanged wording.
+            // Before the sweep arms: validity isn't scoped to anything yet, so don't claim "clean". With a
+            // reference loaded the grade no longer depends on the (level-blind) arm — the engine listens via
+            // the rolling ring + the off-thread reference MATCH (Task 4) — so show the cosmetic activity state:
+            // "Sweep in progress..." while signal is present, "Listening..." while quiet. Non-adopters (no
+            // reference learned, no verdict yet) keep the unchanged wording.
+            // hasGrade above already intercepted the graded case, so by here NO ear has graded this run (the
+            // genuine pre-first-sweep wait) — only the cosmetic Listening<->Sweep-in-progress activity remains.
             const bool refEngaged = engine.referenceLoaded()
                                  && (eb::RefMonState) engine.refMonState() != eb::RefMonState::GradedClean
                                  && (eb::RefMonState) engine.refMonState() != eb::RefMonState::GradedSuspect
@@ -1157,39 +1253,8 @@ void MainComponent::updateStatusLine() {
                 logLine (eb::DiagnosticLog::Level::Info, "RefMon status: " + refText);
                 lastListenTextLogged_ = refText;
             }
-            statusLine.setText (refEngaged ? refText
-                                           : juce::String ("Running - waiting for the Dirac sweep..."),
-                                juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::textDim());
-        } else if (any (h.flags & HealthFlag::ClipOutput)) {
-            // The output hit full scale (e.g. Sum's uncompensated +6 dB drove past the clamp). The
-            // clamp stops a cable over, but it distorts the sweep -- flag it, don't pass it as "clean".
-            statusLine.setText ("Output clipping - lower the level or avoid Sum", juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::warn());
-        } else if (lowSnrTicks_ >= kLowSnrHoldTicks) {
-            // SNR guidance, BEFORE the green "Sweep captured" branch so a noisy sweep never reads as
-            // "clean" (clean = no dropouts/clipping, which a low-SNR sweep can still pass). The engine
-            // raised LowSnr at the sweep's edge off a TRUSTED floor only (honest silence otherwise).
-            // The status line shares the title bar and is narrow, so keep the inline text SHORT and
-            // complete (no clipping); the full guidance ("quieten the room or raise the level, then
-            // re-measure") lives in the tooltip. snrNote's long form is the wording source of record.
-            const int snrDb = juce::roundToInt (engine.completedSweepSnrDb());
-            statusLine.setText ("Low SNR: sweep only " + juce::String (snrDb)
-                                + " dB over the room noise - re-measure", juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::warn());
-            statusLine.setTooltip ("The Dirac sweep was only " + juce::String (snrDb)
-                                   + " dB above the room-noise floor. Quieten the room (close windows, "
-                                     "stop fans/AC) or raise the level, then re-measure for a cleaner "
-                                     "correction.");
-        } else if (chainVerdict_.checked && ! chainVerdict_.all48k) {
-            // 48k-everywhere VETO. Placed ABOVE the reference-monitor + green "Sweep captured + verified"
-            // branches so a wrong-rate (or unreadable) chain can NEVER read green "verified" — the reference
-            // monitor REQUIRES 48k on all three endpoints, and a 44.1k Dirac output silently invalidates the
-            // measurement. Hard errors above (invalid capture / output-clip / low-SNR) still win — those are
-            // signal failures the user must see first; this is the config layer. chainVerdict_.summary is a
-            // single short title-bar line naming the off-48k / unreadable endpoint(s).
-            statusLine.setText (chainVerdict_.summary, juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::warn());
+            sText = refEngaged ? refText : juce::String ("Running - waiting for the Dirac sweep...");
+            sCol  = Theme::textDim();
         } else if (engine.referenceLoaded()) {
             // Per-Ear Per-Channel Grading (Task 5): a per-ear reference IS loaded, so the verdict is PER
             // EARCUP. Dirac hard-pans its sweeps; each earcup is graded against the channel that drove it,
@@ -1200,7 +1265,10 @@ void MainComponent::updateStatusLine() {
             // combined low-SNR, the 48k veto) still has precedence and short-circuits before we get here,
             // leaving statusLineR blank under them. renderPerEarStatusLines mirrors the unratified-INFO gate
             // (kIrThresholdsRatified) so a clean ~13 dB ESS shows the numbers as INFO, never a false warn.
+            // (This branch is now reached only when referenceLoaded() but NO ear has graded yet — the graded
+            // case is intercepted by the hasGrade branch above.) It commits both lines via set-if-changed.
             renderPerEarStatusLines();
+            perEarDriven = true;
         } else if (h.session == SessionPhase::Complete) {
             // Sweep finished clean: an honest sweep-scoped all-clear (no dropouts / clipping seen during
             // the captured sweep), with the OS-resampled caveat when the input ran through OS SRC.
@@ -1224,35 +1292,34 @@ void MainComponent::updateStatusLine() {
                     + juce::String (thd) + "% (calibration pending)";
             }
             if (any (h.flags & HealthFlag::OsResampled)) msg += " (OS-resampled - approximate)";
-            statusLine.setText (msg, juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::ok());
+            sText = msg;
+            sCol  = Theme::ok();
         } else if (silentTicks_ >= kSilentHoldTicks) {
             // "clean" only means no dropouts -- a connected-but-silent EARS reads clean too. After ~2 s
             // of genuinely below-floor input (debounced in timerCallback so normal gaps don't flicker),
             // say so, since ambient room noise alone (~-30 dB) sits well above the -50 dB floor.
-            statusLine.setText ("Running - no input signal (check the EARS)", juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::warn());
+            sText = "Running - no input signal (check the EARS)";
+            sCol  = Theme::warn();
         } else if (lowLevelTicks_ >= kLowLevelHoldTicks) {
             // Signal present but the capture never reached a healthy level: a measurement this quiet has
             // poor SNR and reads "tin-can", yet without this it would show "clean" (clean = no dropouts).
             // Point the user at the meter target band, not an absolute dB they can't read.
-            statusLine.setText ("Running - level low: turn your amp up to the green band", juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::warn());
+            sText = "Running - level low: turn your amp up to the green band";
+            sCol  = Theme::warn();
         } else {
             // In-sweep (SweepActive), no warning latched: clean so far.
-            statusLine.setText ("Capturing the Dirac sweep - clean so far", juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::ok());
+            sText = "Capturing the Dirac sweep - clean so far";
+            sCol  = Theme::ok();
         }
     } else if (st == EngineStatus::Error) {
         // Render the specific reason (e.g. a device disconnect) so it survives a later re-render that
         // would otherwise clobber a directly-set label back to a bare "Error".
-        statusLine.setText (statusErrorMsg_.isNotEmpty() ? statusErrorMsg_ : juce::String ("Error"),
-                            juce::dontSendNotification);
-        statusLine.setColour (juce::Label::textColourId, Theme::danger());
+        sText = statusErrorMsg_.isNotEmpty() ? statusErrorMsg_ : juce::String ("Error");
+        sCol  = Theme::danger();
     } else if (! (inputPicker.selectedDevice().has_value()
                   && outputPicker.selectedDevice().has_value())) {
-        statusLine.setText ("Select an input and output device", juce::dontSendNotification);
-        statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+        sText = "Select an input and output device";
+        sCol  = Theme::textDim();
     } else if (isRealEarsInput()
                && outputPicker.selectedDevice().has_value()
                && ! outputPicker.selectedDevice()->isVirtualSink
@@ -1260,16 +1327,16 @@ void MainComponent::updateStatusLine() {
         // P1-09: a real EARS into a physical output can't reach Dirac. Start is disabled;
         // point the user at the virtual cable. Skipped when the advanced override is on:
         // the user has explicitly opted into a non-Dirac configuration.
-        statusLine.setText ("Select the virtual audio cable as the output to start", juce::dontSendNotification);
-        statusLine.setColour (juce::Label::textColourId, Theme::warn());
+        sText = "Select the virtual audio cable as the output to start";
+        sCol  = Theme::warn();
     } else if (isRealEarsWithCable()
                && settings.combineMode() != CombineMode::AutoPerEar
                && ! settings.advancedOverride()) {
         // D7 / R17: non-Auto combine mode selected with a real EARS + virtual cable.
         // Start is disabled; tell the user exactly why and what to change. Skipped when the
         // advanced override is on (the user has opted into a non-Dirac use).
-        statusLine.setText ("Set Combine Mode to Auto per-ear (Dirac) to start", juce::dontSendNotification);
-        statusLine.setColour (juce::Label::textColourId, Theme::warn());
+        sText = "Set Combine Mode to Auto per-ear (Dirac) to start";
+        sCol  = Theme::warn();
     } else if (engine.calibrationApplied()) {
         // Ready: a valid generation is applied. Normally no redundant label (the enabled Start button is
         // the affordance) -- BUT call out two advisory states (dim, never a Start block):
@@ -1288,21 +1355,20 @@ void MainComponent::updateStatusLine() {
             lCal.has_value()  && lCal->side  == eb::CalSide::Unknown
          && rCal.has_value() && rCal->side == eb::CalSide::Unknown;
         if (overrideRelaxing) {
-            statusLine.setText ("Advanced override on - not the standard Dirac path.",
-                                juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+            sText = "Advanced override on - not the standard Dirac path.";
+            sCol  = Theme::textDim();
         } else if (bothSideUnknown) {
-            statusLine.setText ("Couldn't confirm left/right from these files - double-check the slots.",
-                                juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+            sText = "Couldn't confirm left/right from these files - double-check the slots.";
+            sCol  = Theme::textDim();
         } else if (chainVerdict_.checked && ! chainVerdict_.all48k) {
             // 48k-everywhere warning surfaced PRE-START: devices + cals are ready and no higher-precedence
             // gate (device/mode/override/side) is pending, but the chain isn't all-48k. Warn now so the user
             // fixes the rate BEFORE running a sweep the reference monitor would have to invalidate.
-            statusLine.setText (chainVerdict_.summary, juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::warn());
+            sText = chainVerdict_.summary;
+            sCol  = Theme::warn();
         } else {
-            statusLine.setText ({}, juce::dontSendNotification);
+            sText = {};
+            sCol  = Theme::textDim();
         }
     } else if (leftCal.hasCal() && rightCal.hasCal()) {
         // Both files are loaded but no valid generation is applied yet: either the validator rejected the
@@ -1313,34 +1379,46 @@ void MainComponent::updateStatusLine() {
         const bool building = engine.requestedGeneration() != engine.builtGeneration();
         const auto diag     = engine.calibrationDiagnostic();
         if (! building && diag.isNotEmpty()) {
-            statusLine.setText (diag, juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::warn());
+            sText = diag;
+            sCol  = Theme::warn();
         } else {
-            statusLine.setText ("Preparing calibration...", juce::dontSendNotification);
-            statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+            sText = "Preparing calibration...";
+            sCol  = Theme::textDim();
         }
     } else {
-        statusLine.setText ("Load both ear calibrations to start", juce::dontSendNotification);
-        statusLine.setColour (juce::Label::textColourId, Theme::textDim());
+        sText = "Load both ear calibrations to start";
+        sCol  = Theme::textDim();
     }
 
     // SECONDARY chain-config advisory (input-channels warn / 16-bit / non-2ch). Append it as a calm INFO
-    // tail ONLY when the RATE is fine (all48k) and nothing higher-precedence is showing — i.e. the branch
-    // above landed on a CALM state (ok-green or dim, never the red error or an amber warn). This must NOT
-    // override a hard error or the rate warn, and must NOT veto green: a verified line still shows, with the
-    // advisory hanging off it as a quiet note. The rate veto (above) already wins when the chain isn't 48k,
-    // so we never double-stack it. We read the colour the branch just set to decide whether appending is safe.
-    if (chainVerdict_.checked && chainVerdict_.all48k && chainVerdict_.advisory.isNotEmpty()) {
+    // tail ONLY when the RATE is fine (all48k) and the chosen statusLine state is CALM (ok-green or dim, never
+    // the red error or an amber warn). This must NOT override a hard error or the rate warn, and must NOT veto
+    // green: a verified line still shows, with the advisory hanging off it as a quiet note. We fold it into the
+    // statusLine text BEFORE the single commit (set-if-changed), so the appended line is computed once and
+    // stays put — no clear-then-reset re-append every tick (Bug B). For perEarDriven branches the per-ear
+    // renderer owns statusLine; we apply the same idempotent append to whatever it committed, guarded so the
+    // advisory is never double-appended on a subsequent tick.
+    const bool wantAdvisory = chainVerdict_.checked && chainVerdict_.all48k
+                           && chainVerdict_.advisory.isNotEmpty();
+    if (! perEarDriven) {
+        if (wantAdvisory && ((sCol == Theme::ok()) || (sCol == Theme::textDim())))
+            sText = sText.isNotEmpty() ? (sText + " - " + chainVerdict_.advisory) : chainVerdict_.advisory;
+        // SINGLE COMMIT (Bug B: set-if-changed, no clear-then-reset). Each branch wrote the desired
+        // statusLine/statusLineR (text, colour, tooltip) into locals; commit once, writing each label only
+        // when it actually changed so the lines persist and the notes don't flicker.
+        setLabelIfChanged (statusLine,  sText,  sCol);
+        setTooltipIfChanged (statusLine,  sTip);
+        setLabelIfChanged (statusLineR, s2Text, s2Col);
+        setTooltipIfChanged (statusLineR, s2Tip);
+    } else if (wantAdvisory) {
+        // perEarDriven: the per-ear renderer already committed statusLine via set-if-changed. Append the
+        // advisory to it idempotently (only when calm and not already suffixed), again set-if-changed.
         const auto curCol = statusLine.findColour (juce::Label::textColourId);
         const bool calm   = (curCol == Theme::ok()) || (curCol == Theme::textDim());
-        if (calm) {
-            const auto cur = statusLine.getText();
-            statusLine.setText (cur.isNotEmpty() ? (cur + " - " + chainVerdict_.advisory)
-                                                 : chainVerdict_.advisory,
-                                juce::dontSendNotification);
-            // Keep the line's existing calm colour: a green "verified" tail stays green, a dim/idle line
-            // stays dim. The advisory is INFO, never a veto -> we never recolour to warn/danger here.
-        }
+        const auto cur    = statusLine.getText();
+        const auto tail   = " - " + chainVerdict_.advisory;
+        if (calm && ! cur.endsWith (tail))
+            setLabelIfChanged (statusLine, cur.isNotEmpty() ? (cur + tail) : chainVerdict_.advisory, curCol);
     }
 }
 
@@ -1453,9 +1531,10 @@ void MainComponent::renderEarStatusLine (int ear, const char* prefix, juce::Labe
         }
     }
 
-    label.setText (text + snrTail + peakTail, juce::dontSendNotification);
-    label.setColour (juce::Label::textColourId, col);
-    label.setTooltip (tip);
+    // Commit via set-if-changed (Bug B): the per-ear verdict persists tick-to-tick and only repaints when the
+    // ear's state/metrics actually change, so it never flickers.
+    setLabelIfChanged (label, text + snrTail + peakTail, col);
+    setTooltipIfChanged (label, tip);
 }
 
 // ---- Reference-Based Measurement Monitor (Plan 5): learn + grade ----------------------
