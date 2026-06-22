@@ -31,9 +31,12 @@ limits SNR is exposed.
 ## Units (pure cores are the testable heart)
 
 1. **Pure helpers (`NoiseFloorMath` — header, fully unit-tested):**
-   - `bool isQuietBlock(float rms, float recentPeak, float marginDb)` — true iff `rms` is at least
-     `marginDb` (default ~20 dB) below `recentPeak`. Keys off the recent *peak*, not the floor →
-     no circular dependency, no dependence on AutoPerEar.
+   - `bool isQuietBlock(float level, float ceiling)` — true iff `level` is finite and below a **loose
+     absolute ceiling** (`kQuietCeilingLin` ≈ −24 dBFS = `kGoodLevelLinear`): a real sweep block sits
+     above it, the gap / pre-sweep silence well below. An absolute ceiling, not a recent-peak margin,
+     because the FIRST (pre-sweep) window has no prior loud peak to reference. The block "level" is the
+     per-ear **PEAK** the capture callback already computes (`blockPeakPerEar`) — same measure as the
+     peak-based SNR numerator `maxSweepPeak`.
    - `float robustLowFloor(const float* rms, int n)` — a **running median** (or ~10th–25th percentile)
      of the quiet-window block-RMS values; rejects transient bumps (cough/creak) that a mean would
      retain and that min-hold would over-chase. Median is the literature-endorsed robust choice for
@@ -44,8 +47,10 @@ limits SNR is exposed.
 
 2. **`NoiseFloorTracker` (RT-safe wrapper, atomics for cross-thread reads):**
    - `void prepare(double sampleRate, int maxBlock)` / `void reset()` — clear state, invalidate floor.
-   - `void observeBlock(float rmsL, float rmsR, double blockSeconds) noexcept` — per channel: update an
-     internal recent-peak envelope (fast attack, slow decay); if `isQuietBlock`, accumulate the block
+   - `void observeBlock(float levelL, float levelR, double blockSeconds) noexcept` — per channel: if
+     `isQuietBlock` (below the loose ceiling), accumulate the block into the quiet-window buffer and the
+     sustained-quiet timer; a non-quiet block resets the run. (Earlier "recent-peak envelope" idea
+     dropped — see `isQuietBlock`.) When the quiet run is long enough, fold it into the floor
      into the current quiet-window buffer; when a quiet window is long enough, fold it into the floor
      (`robustLowFloor` → `blendFloor`) and mark `valid`. The FIRST such window is the pre-sweep-silence
      **baseline** (require **≥500 ms**, per AES-2id's pre-sweep-silence recommendation); later windows
