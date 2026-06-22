@@ -263,6 +263,9 @@ TEST_CASE("ClockBridge: unfreezing resumes PI steering and recenters") {
     std::vector<float> blk (256, 0.1f), out (256, 0.0f);
     for (int i = 0; i < 8; ++i) { cb.pushCapture (blk.data(), 256); cb.pullRender (out.data(), 256); }
     cb.setSweepActive (true);
+    // The freeze snapshots on the FIRST frozen pull (from the slow ratio AVERAGE ~= the true clock ratio, not
+    // the instantaneous PI value), so capture the held ratio AFTER that block, then assert it stays constant.
+    cb.pushCapture (blk.data(), 256); cb.pullRender (out.data(), 256);
     const double frozen = cb.currentRatio();
     for (int i = 0; i < 20; ++i) { cb.pushCapture (blk.data(), 256); cb.pullRender (out.data(), 256); }
     CHECK (cb.currentRatio() == frozen);
