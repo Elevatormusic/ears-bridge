@@ -18,11 +18,11 @@ TEST_CASE("liveInputStatus: an active sweep reports the PEAK (loudest earcup), n
     CHECK (s.text.toStdString() == "Sweep in progress - peak -2.0 dBFS");
 }
 
-TEST_CASE("liveInputStatus: a clip reads CLIPPING + the positive peak dB") {
+TEST_CASE("liveInputStatus: a clip reads CLIPPED + the positive peak dB") {
     const auto s = liveInputStatus (1.6f, -8.0f, /*sweepActive*/ true);
     CHECK (s.severity == LiveInputSeverity::Clip);
-    // The WORDS carry the meaning (HIG: never colour alone): "CLIPPING" + the explicit "+1.6".
-    CHECK (s.text.contains ("CLIPPING"));
+    // The WORDS carry the meaning (HIG: never colour alone): "CLIPPED" + the explicit "+1.6".
+    CHECK (s.text.contains ("CLIPPED"));
     CHECK (s.text.contains ("+1.6"));
     CHECK (s.text.contains ("lower the output"));
 }
@@ -30,8 +30,21 @@ TEST_CASE("liveInputStatus: a clip reads CLIPPING + the positive peak dB") {
 TEST_CASE("liveInputStatus: the clip uses whichever ear is hotter for the peak") {
     const auto s = liveInputStatus (-3.0f, 0.4f, /*sweepActive*/ true);   // R over full scale
     CHECK (s.severity == LiveInputSeverity::Clip);
-    CHECK (s.text.contains ("CLIPPING"));
+    CHECK (s.text.contains ("CLIPPED"));
     CHECK (s.text.contains ("+0.4"));
+}
+
+// Boundary: the clip gate is `>= 0.0f`, so EXACTLY full scale (0.0 dBFS) must read Clip, and just below it
+// must read Normal. Pins the not-X side of the gate (a future flip to `> 0.0f` would silently pass without this).
+TEST_CASE("liveInputStatus: peak exactly at 0.0 dBFS clips; just below does not") {
+    const auto at = liveInputStatus (0.0f, -30.0f, /*sweepActive*/ true);
+    CHECK (at.severity == LiveInputSeverity::Clip);
+    CHECK (at.text.contains ("CLIPPED"));
+
+    const auto below = liveInputStatus (-0.2f, -30.0f, /*sweepActive*/ true);
+    CHECK (below.severity == LiveInputSeverity::Normal);
+    CHECK_FALSE (below.text.contains ("CLIPPED"));
+    CHECK (below.text.contains ("peak"));
 }
 
 // Regression (the OPPOSITE-ear bug): Dirac sweeps the earcups SEQUENTIALLY, so a large live L/R gap is

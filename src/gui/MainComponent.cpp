@@ -843,7 +843,7 @@ void MainComponent::onStartStop() {
         // run can't bleed into the idle line after Stop (matches the Start-path reset).
         liveHeldLDb_ = liveHeldRDb_ = -120.0f;
         sweepActiveTicks_ = 0; sweepActiveReleaseTicks_ = 0; liveTextTick_ = 0; liveWasActive_ = false;
-        liveHeldPrimary_.clear(); liveHeldSecond_.clear();
+        liveHeldPrimary_.clear();
         logLine (eb::DiagnosticLog::Level::Info, "Stop: measurement stopped by the user.");
     } else {
         logLine (eb::DiagnosticLog::Level::Debug, "Button: Start clicked");
@@ -861,7 +861,7 @@ void MainComponent::onStartStop() {
             // sweep-active state / live text can't bleed in.
             liveHeldLDb_ = liveHeldRDb_ = -120.0f;
             sweepActiveTicks_ = 0; sweepActiveReleaseTicks_ = 0; liveTextTick_ = 0; liveWasActive_ = false;
-            liveHeldPrimary_.clear(); liveHeldSecond_.clear();
+            liveHeldPrimary_.clear();
             // Task 4 match-poll debounce: a fresh run starts un-matched and un-graded, so the first sustained
             // match (two consecutive matched polls) grades exactly once.
             gradePollTick_ = 0; gradePollerL_.reset(); gradePollerR_.reset(); lastListenTextLogged_.clear();
@@ -1095,9 +1095,9 @@ MainComponent::LiveReadout MainComponent::updateLiveInputReadout() {
 
     if (! out.owns) {
         // Idle: hand the status back to the per-ear verdicts and render the live line immediately on the next
-        // engage (don't wait out the text cadence). Let the held values keep decaying toward the floor.
+        // engage (don't wait out the text cadence). The running max is reset on the next idle->active edge.
         liveTextTick_ = 0;
-        liveHeldPrimary_.clear(); liveHeldSecond_.clear();
+        liveHeldPrimary_.clear();
         return out;
     }
 
@@ -1112,11 +1112,9 @@ MainComponent::LiveReadout MainComponent::updateLiveInputReadout() {
         // the danger role; the WORDS ("CLIPPING" + the dB) carry the meaning without colour.
         liveHeldColour_  = (s.severity == eb::LiveInputSeverity::Clip) ? Theme::danger() : Theme::text();
         liveHeldPrimary_ = s.text;     // single-line peak readout (the live line never owns statusLineR now)
-        liveHeldSecond_.clear();
     }
     out.render  = (liveTextTick_ == 0);
     out.primary = liveHeldPrimary_;   // carried EVERY engaged tick so the line persists (no blink)
-    out.second  = liveHeldSecond_;
     out.colour  = liveHeldColour_;
     if (++liveTextTick_ >= kLiveTextEveryTicks) liveTextTick_ = 0;
     return out;
@@ -1178,16 +1176,14 @@ void MainComponent::updateStatusLine() {
             sCol  = Theme::danger();
         } else if (! rateVeto && live.owns) {
             // LIVE in-sweep readout: while Dirac is actually sweeping (debounced+release-held sweep-active),
-            // show the live per-channel input level / clip / L/R-imbalance, OVERRIDING the stale per-ear
-            // verdicts and the "waiting"/"captured" text below — the user needs to see the level move, catch a
-            // clip live, and spot a quiet earcup AS IT HAPPENS. The two hard errors above (invalid capture, the
-            // 48k veto) still win (they short-circuit before this branch). The held live text persists between
-            // the ~7 Hz render ticks (live.primary/second carry the last rendered text every tick now), so the
-            // line and its reseat hint don't blink (Bug B-1).
+            // show the live sweep PEAK / clip, OVERRIDING the stale per-ear verdicts and the "waiting"/
+            // "captured" text below — the user needs to see the level and catch a clip AS IT HAPPENS. The two
+            // hard errors above (invalid capture, the 48k veto) still win (they short-circuit before this
+            // branch). The held live text persists between the ~7 Hz render ticks (live.primary carries the
+            // last rendered text every tick now) so the single line doesn't blink (Bug B-1). statusLineR is
+            // left at its empty default — the live readout is single-line.
             sText = live.primary;
             sCol  = live.colour;
-            s2Text = live.second;
-            s2Col  = Theme::warn();   // the reseat hint is a warn
         } else if (any (h.flags & HealthFlag::ClipOutput)) {
             // The output hit full scale (e.g. Sum's uncompensated +6 dB drove past the clamp). The clamp stops
             // a cable over, but it distorts the sweep -- flag it, don't pass it as "clean". HOISTED above the

@@ -4,21 +4,21 @@
 namespace eb {
 
 // Live, in-sweep input-level readout. While Dirac is driving the sweep the user needs to SEE, in real time,
-// (1) that the sweep is running, (2) the per-channel input level in dBFS, (3) a clip the instant it happens,
-// and (4) a gross L/R imbalance (one earcup seated much quieter than the other). This pure helper maps the
-// two per-channel peaks (already in dBFS, NOT clamped at 0 so a clipped float reads positive) + the debounced
-// sweep-active flag to the exact status TEXT and a colour-free SEVERITY. The caller maps the severity to a
-// Theme colour role; the helper never names a colour, so it is unit-testable without the GUI/JUCE LookAndFeel.
+// (1) that the sweep is running and (2) the sweep PEAK in dBFS, so they can set the output level and catch a
+// clip. Dirac sweeps the earcups SEQUENTIALLY (see below), so a live L-vs-R comparison is meaningless mid-
+// sweep — an imbalance is judged AFTER the grade, not here. This pure helper maps the two per-channel peaks
+// (already in dBFS, NOT clamped at 0 so a clipped float reads positive) + the debounced sweep-active flag to
+// the exact status TEXT and a colour-free SEVERITY. The caller maps the severity to a Theme colour role; the
+// helper never names a colour, so it is unit-testable without the GUI/JUCE LookAndFeel.
 //
-// HIG: the meaning is carried by the WORDS, never colour alone — "CLIPPING" + the explicit "+1.6 dBFS" reads
-// fully without any colour, and the dB number is ALWAYS shown. The decay/peak-hold (so the digits don't
+// HIG: the meaning is carried by the WORDS, never colour alone — "CLIPPED" + the explicit "+1.6 dBFS" reads
+// fully without any colour, and the dB number is ALWAYS shown. The running peak-hold (so the digits don't
 // jitter at 30 Hz) and the sweep-active debounce live in the GUI caller; this helper is a pure function of
 // the (held) values it is handed.
 
 enum class LiveInputSeverity {
     Normal,   // in-range live readout         -> Theme::text()
-    Warn,     // low / imbalance hint          -> Theme::warn()
-    Clip      // at/over full scale            -> Theme::warn() (the strongest warn/error role)
+    Clip      // sweep peak at/over full scale -> Theme::danger()
 };
 
 struct LiveInputStatus {
@@ -41,8 +41,8 @@ struct LiveInputStatus {
     // a clip. The L/R imbalance is judged AFTER the grade (both earcups measured), never live.
     const float peakMax = juce::jmax (peakLDb, peakRDb);
 
-    if (peakMax >= 0.0f) {   // CLIPPING (at/over full scale) on the loudest earcup
-        s.text     = "CLIPPING  +" + juce::String (peakMax, 1) + " dBFS - lower the output";
+    if (peakMax >= 0.0f) {   // the sweep PEAK hit/over full scale on the loudest earcup (held, so past-tense)
+        s.text     = "CLIPPED  +" + juce::String (peakMax, 1) + " dBFS - lower the output";
         s.severity = LiveInputSeverity::Clip;
         return s;
     }
