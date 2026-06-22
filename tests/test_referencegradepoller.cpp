@@ -110,6 +110,27 @@ static void makeOffsetMeasurement (int sweepLen, double fs, int offset, int winL
     }
 }
 
+// Build a (reference, response) pair where the response is the reference sweep convolved with a SPREAD
+// (multi-tap, realistic-headphone-shaped) room IR — a main tap plus a few decaying early reflections — so the
+// cross-correlation main lobe is SPREAD (mainLobe ~0.2-0.3), exercising the SAME gate (coherence>=0.95,
+// mainLobe>=0.08) a real convolved earcup response clears, not a synthetic delta. Both buffers are the full
+// linear-convolution length so the sweep sits in the window with its compact-but-spread lobe.
+static void makeSpreadIrMeasurement (int sweepLen, double fs,
+                                     std::vector<float>& refOut, std::vector<float>& respOut) {
+    auto ref = makeEss (sweepLen, fs);
+    std::vector<float> roomIr ((size_t) 256, 0.0f);
+    // A main arrival plus a short cluster of decaying reflections (spreads the correlation lobe like a real earcup).
+    roomIr[50]  = 1.00f;
+    roomIr[57]  = 0.55f;
+    roomIr[66]  = 0.40f;
+    roomIr[78]  = 0.28f;
+    roomIr[95]  = 0.18f;
+    roomIr[120] = 0.10f;
+    respOut = convolve (ref, roomIr);              // length sweepLen + 255
+    refOut.assign (respOut.size(), 0.0f);
+    std::copy (ref.begin(), ref.end(), refOut.begin());
+}
+
 using eb::RefMonState;
 
 // ==================================================================================================
@@ -525,4 +546,72 @@ TEST_CASE("ReferenceGradePoller::computeSweepSnr falls back to trailing silence 
     eb::ReferenceGradePoller::computeSweepSnr (window.data(), winLen, /*alignOffset*/ 0, respLen, g);
     CHECK (g.sweepSnrValid);                            // the trailing-silence fallback supplied a floor
     CHECK (g.sweepSnrDb > eb::kMinSweepSnrDb);          // loud sweep over faint trailing noise -> high SNR
+}
+
+// ==================================================================================================
+// PER-EAR INDEPENDENCE (Per-Ear Per-Channel Grading, Task 4): the two earcups are graded by TWO independent
+// pollers, each against its OWN reference channel. This mirrors MainComponent::gradeOneEar driving gradePollerL_
+// (ringL vs ref_L) and gradePollerR_ (ringR vs ref_R) on the same tick:
+//   - Ear L: a real sweep CONVOLVED with a SPREAD IR (mainLobe ~0.2-0.3) graded vs ref_L -> matches + grades with
+//     a FINITE IR-SNR (proves the gate passes a realistically-shaped convolved earcup response, not just a delta).
+//   - Ear R: SILENCE graded vs ref_R -> NEVER matches -> NEVER grades, no sweep-SNR (the silent-ear honesty gate).
+// The point: one ear publishing a clean verdict must NOT make the other ear (silent) read graded — the verdicts
+// are fully independent, and a silent ear can never read as verified.
+// ==================================================================================================
+TEST_CASE("ReferenceGradePoller: per-ear independence — L grades a convolved sweep, R-silence does NOT [PER-EAR]") {
+    const int    sweepLen = 1 << 15;
+    const double fs = 48000.0;
+
+    // ---- Ear L: a real convolved (spread-IR) sweep vs its own reference channel ref_L. ----
+    std::vector<float> refL, respL;
+    makeSpreadIrMeasurement (sweepLen, fs, refL, respL);
+    scaleToPeak (respL, 0.3f);                          // a healthy sweep level
+    addNoise (respL, 0.001f, 13u);                      // a touch of room noise
+
+    // ---- Ear R: SILENCE (the right channel carried no sweep this run) vs its own reference ref_R. ----
+    std::vector<float> refR, ignoreR;
+    makeSpreadIrMeasurement (sweepLen, fs, refR, ignoreR);   // ref_R exists (a learned reference for the right ear)
+    std::vector<float> respR ((size_t) respL.size(), 0.0f);  // but the RIGHT mic ring is pure silence
+
+    // TWO independent pollers (the gradePollerL_ / gradePollerR_ split). Drive the SAME two polls on each so each
+    // ear's two-consecutive-matched debounce is exercised in lockstep, exactly as one GUI tick would.
+    eb::ReferenceGradePoller pL, pR;
+
+    // Poll 1 (arm): L matches but only one matched poll -> no grade yet; R never matches.
+    auto l1 = pL.poll (respL.data(), (int) respL.size(), refL.data(), (int) refL.size(), fs);
+    auto r1 = pR.poll (respR.data(), (int) respR.size(), refR.data(), (int) refR.size(), fs);
+    CHECK (l1.matched);                                 // the LEFT convolved sweep matches its own reference...
+    CHECK (l1.mainLobe >= 0.08f);                       // ...with the spread-IR lobe clearing the production gate
+                                                        // (surfaced on the decide/arm poll; the grade poll packs
+                                                        //  only the quality fields). Proves a realistically-shaped
+                                                        //  convolved response passes the gate, not just a delta.
+    CHECK_FALSE (r1.matched);                           // ...the silent RIGHT ring never does (the honesty gate)
+    CHECK_FALSE (r1.didGrade);
+
+    // Poll 2 (grade): L grades on the second consecutive matched poll; R still does not grade.
+    auto l2 = pL.poll (respL.data(), (int) respL.size(), refL.data(), (int) refL.size(), fs);
+    auto r2 = pR.poll (respR.data(), (int) respR.size(), refR.data(), (int) refR.size(), fs);
+
+    INFO ("L coher=" << l2.coherence << " mainLobe=" << l2.mainLobe
+          << " IR-SNR=" << l2.irSnrDb << "; R matched=" << r2.matched << " didGrade=" << r2.didGrade);
+
+    // LEFT published a real verdict from a CONVOLVED (spread-IR) sweep: graded, not stale, finite IR-SNR.
+    CHECK (l2.didGrade);
+    CHECK (l2.state != RefMonState::ReferenceStale);
+    CHECK ((l2.state == RefMonState::GradedClean || l2.state == RefMonState::GradedSuspect));
+    CHECK_FALSE (l2.mismatch);
+    CHECK (std::isfinite (l2.irSnrDb));                 // a sane (finite) IR-SNR number was produced
+
+    // RIGHT (silent) NEVER graded and NEVER produced a sweep-SNR flag — fully independent of L's clean verdict.
+    CHECK_FALSE (r2.didGrade);                          // silence never grades...
+    CHECK_FALSE (r2.matched);                           // ...because it never matches the reference...
+    CHECK_FALSE (r2.sweepSnrValid);                     // ...and produces NO sweep-SNR (no false LowSnr for R)
+
+    // Drive several MORE polls on the silent right ear to be certain it never sneaks a clean grade.
+    bool rEverGraded = false;
+    for (int i = 0; i < 4; ++i) {
+        auto r = pR.poll (respR.data(), (int) respR.size(), refR.data(), (int) refR.size(), fs);
+        rEverGraded = rEverGraded || r.didGrade;
+    }
+    CHECK_FALSE (rEverGraded);                          // the silent ear stays ungraded across the whole run
 }

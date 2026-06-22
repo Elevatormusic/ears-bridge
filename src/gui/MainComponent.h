@@ -136,19 +136,25 @@ private:
     // OFFLINE against the learned reference, then surfaces the verdict in the status ladder.
     void onLearnReference();         // Advanced affordance: capture + validate + store a loopback reference (on-device)
     void loadStoredReference();      // startup: reload a previously-learned reference.f32 so it survives a restart
-    void pollReferenceGrade();       // timer (~2 s): snapshot the ring, referenceMatches it (detector), grade off-thread, publish
+    void pollReferenceGrade();       // timer (~2 s): runs BOTH per-ear pollers (L vs ref_L, R vs ref_R), grades off-thread, publishes two verdicts
+    // Grade ONE earcup (ear 0 = LEFT, 1 = RIGHT) against ITS OWN reference channel: snapshot that ear's ring,
+    // rate-guard, decide() (match-gate), and on the stable-match edge dispatch the off-thread deconvolve+grade
+    // that publishes that ear's verdict via publishReferenceGrade(ear,...). Returns true iff it posted an
+    // off-thread grade this tick (so the caller can serialize the two ears under one in-flight guard). A silent
+    // ring fails the match-gate inside decide() -> no grade, no publish, no LowSnr for that ear (the honesty gate).
+    bool gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
+                      const std::vector<float>& reference, double referenceRate);
     juce::String referenceStatePath_;                 // stored reference file (empty until learned this session)
     // Reference-Based Measurement Monitor (Plan 5): the learned reference held IN MEMORY for grading. The
     // GUI worker (pollReferenceGrade) needs both halves — this reference and the engine's response buffer —
     // to run gradeMeasurement OFFLINE. Populated on a successful learn; the rate drives the Farina offsets.
-    std::vector<float> loadedReference_;              // the learned ESS reference samples (empty until learned)
+    std::vector<float> loadedReference_;              // LEFT-ear alias (kept ONLY for the startup duration log; NOT the grade path)
     double             loadedReferenceRate_ = 48000.0;
-    // Per-Ear Per-Channel Grading (Task 2): the learned reference is now PER CHANNEL — ref_L = Dirac's
-    // hard-panned LEFT sweep (render ch0), ref_R = the RIGHT sweep (render ch1). They are stored separately
-    // (reference_L.f32 / reference_R.f32) so each earcup can be deconvolved against the channel that drove
-    // it (Task 4). TRANSITIONAL: loadedReference_ above is aliased to loadedReferenceL_ at the end of every
-    // learn/load so the existing single-ring grade path (pollReferenceGrade) keeps compiling and grading on
-    // ref_L until Task 4 switches it to the two per-ear pollers. Do NOT add a separate grade path here yet.
+    // Per-Ear Per-Channel Grading: the learned reference is PER CHANNEL — ref_L = Dirac's hard-panned LEFT
+    // sweep (render ch0), ref_R = the RIGHT sweep (render ch1). They are stored separately (reference_L.f32 /
+    // reference_R.f32) so each earcup is deconvolved against the channel that drove it. Task 4's grade path
+    // (pollReferenceGrade -> gradeOneEar) uses THESE two refs exclusively; loadedReference_ above is only a
+    // LEFT alias the startup diagnostic logs (the grade no longer reads it).
     std::vector<float> loadedReferenceL_, loadedReferenceR_;  // per-channel learned reference samples (empty until learned)
     double             loadedReferenceRateL_ = 0.0, loadedReferenceRateR_ = 0.0;
     std::atomic<bool>  gradeInFlight_ { false };      // guards against re-posting while a grade job runs
@@ -164,7 +170,11 @@ private:
     // grade logic can be self-tested without the GUI/hardware (the "grade never fires" regression lived here).
     // The GUI keeps the throttle (above), the off-thread firPool dispatch, and the publish; the poller owns
     // only the two-consecutive-matched-polls debounce + the grade — see decide()/gradeWindow().
-    eb::ReferenceGradePoller gradePoller_;
+    // Per-Ear Per-Channel Grading (Task 4): ONE poller PER EAR. Dirac hard-pans its sweeps, so the LEFT mic
+    // ring is graded vs ref_L (gradePollerL_) and the RIGHT mic ring vs ref_R (gradePollerR_), each with its
+    // OWN two-poll debounce. Both are reset() on Start/Stop. The two ears are fully independent: one can grade
+    // GradedClean while the other (silent ring / no sweep) never matches and stays Learned.
+    eb::ReferenceGradePoller gradePollerL_, gradePollerR_;
     // Cancellable + restartable learn: the button doubles as Learn / Cancel. learnCancelRequested_ is the
     // message-thread -> firPool hand-off (set on a cancel click, polled inside captureLoopback). learning_ is
     // message-thread-only state guarding against a double-start during the brief cancel window.
