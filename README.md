@@ -128,14 +128,18 @@ Open the standalone **Dirac Live** app:
 
 ### 4. Learn the reference
 
-EARS Bridge needs to hear Dirac's own sweep once so it can grade every later measurement against it. In EARS Bridge click **Learn reference**, set Dirac Live's **output level to −12.5 dB**, and let Dirac play its sweep — EARS Bridge captures it through Windows' loopback. (That loopback is why Dirac's output must be plain **Windows Audio**, not exclusive; EARS Bridge tells you if it's in the wrong mode.) Do this with the bridge **stopped** — it can't learn while it's running.
+EARS Bridge needs to hear Dirac's own sweep once so it can grade your measurements against it. Do this with the bridge **stopped**:
+
+1. In Dirac Live, set the **output level to −12.5 dB**.
+2. Click **Learn reference** in EARS Bridge, then **immediately** click **Measure selected position** in Dirac. Dirac plays its sweep and EARS Bridge captures it through Windows' loopback. (That loopback is why Dirac's output must be plain **Windows Audio**, not exclusive — EARS Bridge tells you if it's in the wrong mode.)
+3. Wait for EARS Bridge to report the reference **learned**. That Dirac pass itself doesn't matter — the bridge is stopped, so it's only there to play the sweep.
 
 ### 5. Measure
 
-1. **Press Start** in EARS Bridge, then run Dirac's measurement.
-2. **Check the level on the first real sweep.** EARS Bridge's **L and R meters** should sit in the **green band**, matched and not clipping. If it flags **clipping**, turn Dirac's output **down** from −12.5 dB; if it's too quiet, raise it. The absolute loudness doesn't matter — clipping or too-quiet is what hurts (see [Setting the level](#setting-the-level-gain-staging)).
-3. **The sweeps.** Dirac's measurement is one routine that sweeps left, then right — no separate per-earcup step. EARS Bridge follows automatically; a live indicator shows which ear is being captured.
-4. **Reposition between positions.** When Dirac asks for several measurement positions, **gently scoot the headphones around on the jig between each one** — up, down, forward, back — to capture the slight seating differences you'd get every time you put the headphones on, so the correction is robust to how they sit. (For speakers you move the mic around the room; for headphones you move the headphones around the jig.)
+1. **Press Start** in EARS Bridge.
+2. In Dirac, click **Re-measure selected position** — *this* is the real, graded measurement. It's one routine that sweeps left, then right; EARS Bridge follows automatically and a live indicator shows which earcup is being captured.
+3. **Check the level.** EARS Bridge's **L and R meters** should sit in the **green band**, matched and not clipping. If it flags **clipping**, turn Dirac's output **down** from −12.5 dB and re-measure; if it's too quiet, raise it. The absolute loudness doesn't matter — clipping or too-quiet is what hurts (see [Setting the level](#setting-the-level-gain-staging)).
+4. **Reposition between positions.** When Dirac moves to the next measurement position, **gently scoot the headphones around on the jig** — up, down, forward, back — to capture the slight seating differences you'd get every time you put the headphones on, so the correction is robust to how they sit. (For speakers you move the mic around the room; for headphones you move the headphones around the jig.)
 5. **Keep the health line clean.** Clipping, dropouts, a too-quiet level, or a wrong sample rate are flagged so a bad capture never passes as good (see [Health indicators](#health-indicators)). Redo any position that isn't clean.
 
 ### 6. Build the filter
