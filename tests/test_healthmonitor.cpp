@@ -622,3 +622,13 @@ TEST_CASE("HealthMonitor: FormatChanged co-occurs with other flags correctly") {
     CHECK(eb::any(h.flags() & eb::HealthFlag::Dropout));
     CHECK_FALSE(h.cleanCapture());
 }
+
+// ---- Noise-floor primitive (Task 3): HealthMonitor owns + exposes the measured floor ----
+TEST_CASE("HealthMonitor: exposes the measured noise floor once a quiet window is captured") {
+    eb::HealthMonitor hm; hm.prepareNoiseFloor (48000.0, 480);
+    CHECK_FALSE (hm.floorValid());
+    for (int i = 0; i < 60; ++i) hm.observeFloorBlock (0.004f, 0.004f, 0.010);  // >500 ms quiet
+    CHECK (hm.floorValid());
+    CHECK_THAT (hm.measuredFloorLinear (0), Catch::Matchers::WithinAbs (0.004f, 5e-4));
+    CHECK_THAT (hm.measuredFloorDbAveraged(), Catch::Matchers::WithinAbs (-48.0f, 1.0));
+}
