@@ -119,6 +119,15 @@ public:
     void publishCompletedSweepSnrDb (float snrDbMin) noexcept { publishCompletedSweepSnrDb (0, snrDbMin); }
     void raiseLowSnr() noexcept;
 
+    // Gain-staging readout: the RAW input SAMPLE PEAK of that ear's last graded sweep, in dBFS. The grade window
+    // carries RAW pre-processing capture, so this is how hot the EARS mic float ran — NOT clamped at 0 dB, so a
+    // float that overshot full-scale reads as a POSITIVE dBFS (e.g. +1.6) and the GUI can say "clipped, lower the
+    // output". Per-ear (one earcup can be hotter than the other). The worker publishes it on the graded edge;
+    // the status line derives the clip-correction guidance from referenceSweepPeakDb(ear). Message/worker-thread
+    // write, lock-free milli store. -120 (the silent floor) until that ear grades. GUIDANCE only (non-invalidating).
+    void  publishCompletedSweepPeakDb (int ear, float peakDb) noexcept;
+    float referenceSweepPeakDb (int ear) const noexcept;
+
     // AutoPerEar: which earcup is currently being fed to Dirac (0 = left, 1 = right). Drives the GUI
     // "capturing Left/Right" indicator; only meaningful while running in AutoPerEar with signal.
     int autoActiveEar() const noexcept;
@@ -344,6 +353,10 @@ private:
     std::atomic<int>  refIrSnrDbMilliPerEar_[2] { { 0 }, { 0 } };
     std::atomic<int>  refThdPctMilliPerEar_[2]  { { 0 }, { 0 } };
     std::atomic<int>  refSweepSnrMilliPerEar_[2]{ { 0 }, { 0 } };
+    // Per-ear RAW input sweep PEAK (gain-staging readout), the *Milli_ idiom (peakDb*1000 in an atomic<int>).
+    // Initialised to the silent floor (-120 dB -> -120000 milli) so an ear that never graded reads "no peak",
+    // never a false clip. The worker stores THIS ear's value on the graded edge; the status line reads it lock-free.
+    std::atomic<int>  refSweepPeakMilliPerEar_[2]{ { -120000 }, { -120000 } };
 
     // Live grading buffers (reference-match detection). TWO independent rings — gradeRingL_ (left mic) and
     // gradeRingR_ (right mic) — each with its own snapshot buffer + ready flag. ALL are PRE-ALLOCATED in

@@ -137,6 +137,26 @@ void ReferenceGradePoller::computeSweepSnr (const float* window, int winLen, int
     out.sweepSnrValid = std::isfinite (out.sweepSnrDb);
 }
 
+float ReferenceGradePoller::sweepPeakDb (const float* window, int winLen, int alignOffset, int refLen) noexcept {
+    // The RAW input sample peak over the aligned sweep region. We deliberately do NOT clamp at 0 dBFS — an
+    // EARS-mic float that overshot full-scale (|sample| > 1.0) must read as a POSITIVE dBFS so the GUI can
+    // quantify the clip ("+1.6 dBFS, lower the output"). Floor at -120 dB for a silent / empty span.
+    constexpr float kFloorDb = -120.0f;
+    if (window == nullptr || winLen <= 0 || refLen <= 0) return kFloorDb;
+    const int first = std::min (std::max (alignOffset, 0), winLen);
+    const int last  = std::min (std::max (alignOffset + refLen, 0), winLen);   // [first, last) clamped to window
+    float maxAbs = 0.0f;
+    for (int i = first; i < last; ++i) {
+        const float v = window[i];
+        if (! std::isfinite (v)) continue;     // skip non-finite (the ring carries RAW pre-sanitization capture)
+        const float a = std::fabs (v);
+        if (a > maxAbs) maxAbs = a;
+    }
+    if (! (maxAbs > 0.0f)) return kFloorDb;     // silent / all-non-finite span -> floor (no -inf)
+    const float db = 20.0f * std::log10 (maxAbs);
+    return std::isfinite (db) ? std::max (db, kFloorDb) : kFloorDb;
+}
+
 GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winLen,
                                                    const float* reference, int refLen, double rate) {
     GradePollResult r;
@@ -158,6 +178,7 @@ GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winL
         alignOffset = clampSweepStart (a.delaySamples, refLen, winLen);
     }
     computeSweepSnr (window, winLen, alignOffset, refLen, g);
+    g.sweepPeakDb = sweepPeakDb (window, winLen, alignOffset, refLen);   // raw input peak over the SAME sweep region
     return g;
 }
 
@@ -174,6 +195,7 @@ GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winL
     GradePollResult g = packGrade (gradeMeasurementWindowAt (reference, refLen, window, winLen, alignOffset, rate));
     // Sweep-to-noise SNR from the SAME aligned window, reusing decide()'s alignOffset (no second xcorr). GUIDANCE.
     computeSweepSnr (window, winLen, alignOffset, refLen, g);
+    g.sweepPeakDb = sweepPeakDb (window, winLen, alignOffset, refLen);   // raw input peak over the SAME sweep region
     return g;
 }
 
