@@ -324,7 +324,6 @@ private:
     juce::String lastHeartbeatContent_;           // last heartbeat line logged; identical beats are suppressed
     int    heartbeatsSuppressed_ = 0;             // consecutive suppressed identical beats (idle de-dup)
     static constexpr int kHeartbeatKeepalive = 20; // force a beat after this many suppressed (~10 min alive pulse)
-    int    clockProbeTick_ = 0;                   // TEMP phase-precision probe: throttles the CLOCKBRIDGE log (~3 Hz)
 
     // Hosts hover tooltips (e.g. the full 32-bit-float explanation on the neutral info line). A single
     // window owned by the component is enough for the whole app; declared last so it is destroyed
