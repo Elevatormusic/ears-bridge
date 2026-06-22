@@ -628,7 +628,7 @@ TEST_CASE("ReferenceGradePoller: poll() populates sweepPeakDb on a graded result
 // The point: one ear publishing a clean verdict must NOT make the other ear (silent) read graded — the verdicts
 // are fully independent, and a silent ear can never read as verified.
 // ==================================================================================================
-TEST_CASE("ReferenceGradePoller: per-ear independence — L grades a convolved sweep, R-silence does NOT [PER-EAR]") {
+TEST_CASE("ReferenceGradePoller: per-ear independence - L grades a convolved sweep, R-silence does NOT [PER-EAR]") {
     const int    sweepLen = 1 << 15;
     const double fs = 48000.0;
 
