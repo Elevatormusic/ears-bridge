@@ -56,6 +56,7 @@ public:
     int    overruns()  const;   // count of overrun EVENTS (one per FIFO-full pushCapture); diagnostic
     long long droppedCaptureFrames() const;  // cumulative producer FRAMES dropped on FIFO-full
     double currentRatio() const;   // current trimmed capture:render resample ratio
+    double avgRatioTrim() const noexcept { return avgRatioTrim_; }   // TEST: the running mean the freeze snapshots
 
 private:
     // FIFO of mono float samples.
@@ -71,9 +72,13 @@ private:
     // PI fill-control state (consumer thread only).
     double smoothedFill = 0.5;          // fraction
     double ratioTrim    = 1.0;          // multiplies nominal ratio
-    double avgRatioTrim_ = 1.0;         // slow EMA of ratioTrim ~= the TRUE clock ratio; the freeze snapshots THIS
-                                        // (not the instantaneous, possibly-off PI value) so the held ratio carries
-                                        // no sustained offset that would accumulate a HF timing error across a sweep
+    double avgRatioTrim_ = 1.0;         // running mean of ratioTrim ~= the TRUE clock ratio; the freeze snapshots
+                                        // THIS (not the instantaneous, possibly-off PI value) so the held ratio
+                                        // carries no sustained offset that would accumulate a HF timing error across
+                                        // a sweep. alpha = max(0.001, 1/n): a RUNNING MEAN early (converges in a
+                                        // second or two, so a sweep right after start() doesn't freeze a stale 1.0),
+                                        // settling to a slow ~10 s EMA once warm (to track slow crystal drift).
+    long   avgCount_     = 0;           // free-running blocks seen since reset -> drives the 1/n warmup alpha
     double integ        = 0.0;
 
     std::atomic<int>    underrunCount { 0 };
