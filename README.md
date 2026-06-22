@@ -62,7 +62,8 @@ This is alpha software, so the list will shift as we learn from real measurement
 - The per-ear factory calibration files for your unit (FRD text files, one per capsule).
 
 ### Software
-- **Dirac Live**, the software you are measuring headphones with.
+- **Dirac Live** (the standalone measurement app) — runs the calibration sweeps and builds the correction.
+- **Dirac Live Processor** — the piece that actually applies the finished correction to your audio when you listen. (Both come with a Dirac Live licence.)
 - A **virtual audio device** to carry EARS Bridge's output into Dirac: [VB-CABLE](https://vb-audio.com/Cable/) on Windows, or [BlackHole 2ch](https://existential.audio/blackhole/) on macOS.
 
 ## Install
@@ -83,18 +84,55 @@ Because the app is unsigned, Windows SmartScreen may warn about an unknown publi
    ```
 3. Install [BlackHole 2ch](https://existential.audio/blackhole/).
 
-## Usage
+## Usage — correct your headphones from scratch
 
-1. Connect the EARS and open EARS Bridge.
-2. Select the EARS as the input and your virtual cable as the output. EARS Bridge **auto-selects a connected EARS and a standard VB-CABLE** for you, so these are usually already chosen — just confirm them. (If the EARS doesn't appear at all, it isn't enumerating on USB — try a known-good **data** cable and a direct port; the app can only list devices Windows presents.)
-3. Load each ear's calibration into the matching **Left** and **Right** slot. Use the **HPN** files by default (see [Calibration files](#calibration-files)).
-4. Choose a combine mode. **Auto per-ear (Dirac)** is recommended — it records only the earcup Dirac is currently sweeping, so each side stays clean even on open-back headphones where sound leaks across to the other capsule (see [Combine modes](#combine-modes)).
-5. Set the sample rate and bit depth, then press **Start**.
-6. In Dirac Live, set the recording device to the virtual cable's capture side — for example, "CABLE Output (VB-Audio Virtual Cable)" or "BlackHole 2ch".
-7. **Set the level.** Play Dirac's level-check tone and turn your headphone amp up until the **L and R input meters sit in the green target band** — comfortably loud, matched, and not clipping. The exact loudness doesn't matter; *too quiet* is what produces a poor, "tin-can" result (see [Setting the level](#setting-the-level-gain-staging)).
-8. Run Dirac's measurement as usual — it is a single routine that sweeps both channels (left, then right); Dirac has no single-earcup mode. With **Auto per-ear**, EARS Bridge follows whichever earcup is sounding and feeds only that ear's mic, so that one routine corrects both ears.
+New to all of this? This is the whole process, start to finish. You'll use four things: **EARS Bridge** (this app), **VB-CABLE** (a free virtual audio cable), **Dirac Live** (measures and builds the correction), and the **Dirac Live Processor** (applies it when you listen). Install all four first — see [Install](#install).
 
-Watch the [health indicators](#health-indicators) while measuring. A clean capture is the prerequisite for a trustworthy result.
+### How the pieces fit together
+
+Dirac corrects sound using one microphone. The EARS jig is really two microphones — one mic sealed against each earcup — and Dirac only takes one. EARS Bridge sits in the middle: it captures both earcups, applies each one's factory calibration, and hands Dirac whichever earcup is being swept, through the virtual cable, as the single mic Dirac expects.
+
+```
+Headphone amp  ──►  Headphones on the EARS jig  ──►  EARS Bridge  ──►  VB-CABLE  ──►  Dirac Live
+  (plays the sweep)        (two earcup mics)        (per-ear cal)   (virtual mic)  (records + builds the filter)
+```
+
+**Everything in that chain must run at 48 kHz.** A single device left at 44.1 kHz silently resamples and quietly ruins the measurement — Windows gives no warning. EARS Bridge watches for it, but it's easiest to set every device to 48 kHz up front (Windows: Sound settings → each device → Properties → Advanced; macOS: Audio MIDI Setup).
+
+### 1. One-time setup
+
+1. Install EARS Bridge, VB-CABLE, Dirac Live, and the Dirac Live Processor (see [Install](#install)). Reboot if VB-CABLE asks.
+2. **Put the cable in shared mode.** Dirac opens its recording device in *exclusive* mode by default, which the standard VB-CABLE doesn't offer — so the first time you connect them, Dirac fails with error **600007**. EARS Bridge fixes this in one click: when it detects the standard cable it shows a **"Set Dirac to shared mode"** button. Click it, then fully quit and relaunch Dirac. (Manual alternatives are in [troubleshooting](#tips-and-troubleshooting).)
+
+### 2. Set up EARS Bridge
+
+1. Plug in the EARS jig and open EARS Bridge.
+2. It **auto-selects** a connected EARS as the input and a standard VB-CABLE as the output — just confirm both are chosen. (If the EARS isn't listed at all, it isn't enumerating on USB — try a known-good **data** cable and a direct port.)
+3. Load each ear's **HPN** calibration file into the matching **Left** and **Right** slot (see [Calibration files](#calibration-files)).
+4. Leave the combine mode on **Auto per-ear (Dirac)** — it's the only mode that works with a Dirac measurement (see [Combine modes](#combine-modes)).
+5. Set the sample rate to **48000** and press **Start**. Leave EARS Bridge running for the whole session.
+
+### 3. Point Dirac Live at the chain
+
+Open the standalone **Dirac Live** app:
+
+1. **Output device** → your **headphone amp or DAC** (whatever the headphones plug into). This is what plays the sweep. Confirm it's at **48 kHz**.
+2. **Recording device** (the microphone) → the cable's capture side, **"CABLE Output (VB-Audio Virtual Cable)"** (macOS: **BlackHole 2ch**). Also at **48 kHz**. This is EARS Bridge's feed standing in as the mic.
+
+### 4. Measure
+
+1. **Set the level.** At Dirac's volume/level step, turn your **headphone amp up** until EARS Bridge's **L and R input meters sit in the green band** — comfortably loud, matched, and not clipping. The absolute loudness doesn't matter; *too quiet* is what produces a thin, "tin-can" result (see [Setting the level](#setting-the-level-gain-staging)). Set it once and leave it for both ears.
+2. **Run the sweeps.** Start Dirac's measurement. It's one routine that sweeps the left channel, then the right — there's no separate per-earcup step. EARS Bridge follows automatically and feeds whichever earcup is sounding; a live indicator shows which ear is being captured.
+3. **Reposition between positions.** When Dirac asks for several measurement positions, **gently scoot the headphones around on the jig between each one** — shift them up, down, forward, back. The point is to capture the slight seating differences you'd get every time you actually put the headphones on, so the correction is robust to how they sit rather than perfect for one exact placement. (For speakers you move the mic around the room; for headphones you move the headphones around the jig.)
+4. **Keep the health line clean.** A capture has to read clean for the whole sweep. EARS Bridge flags clipping, dropouts, a too-quiet level, or a wrong sample rate instead of letting a bad capture pass as good (see [Health indicators](#health-indicators)). If a position isn't clean, redo it.
+
+### 5. Build the filter
+
+Back in Dirac Live, once both ears are measured across your positions, design the correction the way you normally would — choose or draw your target curve and let Dirac compute the filter — and **export** it so the Processor can load it.
+
+### 6. Apply it and listen
+
+Open the **Dirac Live Processor**, load the filter you just exported, and route your PC's audio through it to your headphones. That's the finished correction running live — your headphones EQ'd to your target. To redo it later (new headphones, a different target), repeat from step 2.
 
 ## Calibration files
 
