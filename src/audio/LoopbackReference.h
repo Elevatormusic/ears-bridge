@@ -41,6 +41,31 @@ void decodePacketPerChannel (const unsigned char* data, unsigned int frames, int
 
 } // namespace detail
 
+// ---- Active-sweep span (the testable core) --------------------------------
+// Dirac HARD-PANS its measurement sweeps, so each per-channel loopback reference is
+// [its own sweep ~10 s][silence ~11 s] (the silent half is where the OTHER ear sweeps on
+// the other channel — on-device the silent channel measured at the ~-120 dB floor). Grading
+// deconvolves the mic response against the FULL reference, so the silent half divides by
+// ~zero and amplifies noise, dragging IR-SNR strongly negative even on a clean capture
+// (on-device: a clean 1.64% THD Right ear still graded IR-SNR -11.3 dB — the silence
+// artifact, not measurement noise). The fix is to TRIM each captured channel to JUST its own
+// sweep before validating + storing, so the stored reference holds only the ~10 s sweep.
+//
+// findActiveSpan locates that sweep: block-RMS over ~20 ms blocks, threshold at the loudest
+// block's RMS minus 40 dB (a hard-panned silent half sits ~100 dB down, so this cleanly
+// separates sweep from silence and is robust to a flat-ish ESS envelope — the whole sweep is
+// above the threshold, the silence is far below), the span = FIRST..LAST above-threshold block
+// plus a ~50 ms margin each side clamped to [0, n). valid=false if NO block clears the threshold
+// (an all-silent channel) OR the span is implausibly short (< ~2 s of sweep). PURE / no platform
+// deps so the unit suite drives it; the caller fails the learn (per ear, by name) on valid=false.
+struct ActiveSpan {
+    int  first = 0;        // first sample of the trimmed span (inclusive)
+    int  last  = 0;        // one-past-the-last sample of the trimmed span (exclusive); length = last - first
+    bool valid = false;    // false iff all-silent or the span is implausibly short
+};
+
+[[nodiscard]] ActiveSpan findActiveSpan (const float* samples, int n, double rate);
+
 // ---- Pure validation (the testable core) ---------------------------------
 struct ReferenceValidation {
     bool         ok = false;

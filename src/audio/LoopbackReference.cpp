@@ -178,6 +178,79 @@ void decodePacketPerChannel (const unsigned char* data, unsigned int frames, int
 } // namespace detail
 
 // ---------------------------------------------------------------------------
+// PURE active-sweep span — trim a hard-panned per-channel reference to JUST its
+// own sweep, dropping the silent half (where the OTHER ear sweeps). Block-RMS over
+// ~20 ms blocks; threshold at the loudest block minus 40 dB; the span is the first
+// to the last above-threshold block plus a ~50 ms margin, clamped to [0, n).
+// ---------------------------------------------------------------------------
+ActiveSpan findActiveSpan (const float* samples, int n, double rate) {
+    ActiveSpan span;
+    if (samples == nullptr || n <= 0 || rate <= 0.0)
+        return span;   // valid=false (no data)
+
+    constexpr double kBlockSeconds   = 0.020;   // ~20 ms RMS blocks
+    constexpr double kThresholdDb     = -40.0;  // below the loudest block -> sweep vs the ~-100 dB silent half
+    constexpr double kMarginSeconds   = 0.050;  // ~50 ms guard each side of the detected span
+    constexpr double kMinSpanSeconds  = 2.0;    // a plausible sweep is at least this long
+    // An ABSOLUTE silence floor (~-80 dBFS): a channel whose LOUDEST block is below this carries no real
+    // sweep, only the loopback noise floor. The -40 dB threshold is RELATIVE, so without this an all-quiet
+    // channel (uniform low RMS) would clear its own minus-40 dB threshold everywhere and read as one long
+    // "active" span. The real sweep sits ~-14 dBFS, far above this; a hard-panned silent half ~-100 dBFS, below.
+    constexpr float  kSilenceFloor    = 1.0e-4f; // ~-80 dBFS
+
+    const int blockLen = juce::jmax (1, (int) std::llround (rate * kBlockSeconds));
+    const int numBlocks = (n + blockLen - 1) / blockLen;   // ceil; the last block may be partial
+
+    // Pass 1: per-block RMS, and the loudest block (the sweep level).
+    std::vector<float> blockRms ((size_t) numBlocks, 0.0f);
+    float maxRms = 0.0f;
+    for (int b = 0; b < numBlocks; ++b) {
+        const int start = b * blockLen;
+        const int end   = juce::jmin (n, start + blockLen);
+        double sumSq = 0.0;
+        for (int i = start; i < end; ++i) sumSq += (double) samples[i] * (double) samples[i];
+        const int count = end - start;
+        const float rms = count > 0 ? (float) std::sqrt (sumSq / (double) count) : 0.0f;
+        blockRms[(size_t) b] = rms;
+        if (rms > maxRms) maxRms = rms;
+    }
+    if (maxRms < kSilenceFloor)
+        return span;   // valid=false (all-silent channel — no block even reaches the absolute floor)
+
+    // Threshold 40 dB below the loudest block (linear): a hard-panned silent half (~100 dB down)
+    // sits far below this, while the whole ESS sweep — flat-ish envelope and all — stays above it.
+    const float threshold = maxRms * std::pow (10.0f, (float) (kThresholdDb / 20.0));
+
+    // Pass 2: first and last block whose RMS clears the threshold.
+    int firstBlock = -1, lastBlock = -1;
+    for (int b = 0; b < numBlocks; ++b) {
+        if (blockRms[(size_t) b] >= threshold) {
+            if (firstBlock < 0) firstBlock = b;
+            lastBlock = b;
+        }
+    }
+    if (firstBlock < 0)
+        return span;   // valid=false (no block cleared the threshold)
+
+    // Convert blocks -> samples, add the margin, clamp to [0, n).
+    const int margin = (int) std::llround (rate * kMarginSeconds);
+    int first = firstBlock * blockLen - margin;
+    int last  = juce::jmin (n, (lastBlock + 1) * blockLen) + margin;   // one-past-the-last sample
+    first = juce::jlimit (0, n, first);
+    last  = juce::jlimit (0, n, last);
+
+    // Reject an implausibly short span (a stray transient, not a real sweep).
+    const double spanSeconds = (double) (last - first) / rate;
+    if (last <= first || spanSeconds < kMinSpanSeconds)
+        return span;   // valid=false (too short)
+
+    span.first = first;
+    span.last  = last;
+    span.valid = true;
+    return span;
+}
+
+// ---------------------------------------------------------------------------
 // PURE validation
 // ---------------------------------------------------------------------------
 ReferenceValidation validateReferenceCapture (const float* samples, int n, double rate,
