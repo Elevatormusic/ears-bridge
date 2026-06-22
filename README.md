@@ -44,6 +44,8 @@ EARS Bridge is in active development. A look at recent and upcoming work:
 **Shipped**
 - Per-ear calibration combined into the single microphone Dirac expects, with an Auto per-ear mode that follows Dirac's sweep so each earcup is measured cleanly.
 - One-click Dirac shared-mode fix for the virtual cable.
+- Phase-stable measurements — the chain holds a steady timebase through the sweep, so Dirac no longer flags headphone captures as "imprecise" (excluded from phase correction).
+- Live measurement feedback — the input level and any clipping are shown during the sweep, and the earcup being captured is indicated, so you can fix the level on the next pass.
 - Measurement-integrity safeguards — clipping, dropouts, clock drift, and mid-run format changes are detected, so a corrupted capture is never reported as clean.
 - Calibration validation that checks your left/right files before a measurement starts.
 - Automated build + test on Windows and macOS; releases are gated on the test suite.
@@ -165,6 +167,8 @@ So there is really just one thing to set: **the level the meters show.**
 - **EARS Bridge Output trim** (under Advanced) — leave at 0 dB. It can only *attenuate*, so it cannot rescue a too-quiet measurement — that fix is upstream at the amp. Use it only to pull a hot or Sum-mode feed down.
 - **Exclusive vs shared mode** is a separate axis entirely — it decides whether devices *connect*, not how loud they are. Leave every device in **shared** mode (see [troubleshooting](#tips-and-troubleshooting)).
 
+**If the SNR stays only moderate even at a healthy level,** the limit is usually your **amp's own hiss** — tube amps especially — not your gain. Turning the mic gain up won't help: it lifts the hiss along with the signal. A quieter amp is the only real lever, and a moderate SNR still makes a perfectly usable correction — don't chase the number by driving the level into clipping.
+
 EARS Bridge watches this for you: if a run never reaches a healthy level it shows **"level low: turn your amp up to the green band"** instead of a misleading "clean."
 
 ## Tips and troubleshooting
@@ -189,6 +193,7 @@ While running, EARS Bridge watches for conditions that would invalidate a measur
 - **Dropped frames** counts samples lost at the bridge as a running trend.
 - **Capture-to-render ratio** shows the live, drift-corrected resample ratio.
 - **Input and output levels** are metered per channel. The L and R input meters carry a green **target band** (−18 to −12 dBFS) to set your amp against. A sustained input clip prompts you to lower the EARS gain switch and/or the Dirac level; output clipping (e.g. the +6 dB Sum mode) is flagged too.
+- **Live sweep level** — while a sweep is sounding, the status line shows the input **peak in dBFS** and calls out a clip (**"CLIPPED +x.x dBFS — lower the output"**) so you can correct the level before the next pass instead of finding out afterward.
 - **Level low** — a capture that is present but never reaches a healthy level (too quiet for good SNR — the cause of a thin, "tin-can" result) is flagged so it can't pass as "clean"; raise your amp until the meters reach the green band.
 - **Device disconnect** — if the EARS or the virtual cable drops out mid-run, the measurement stops with a clear message instead of recording silence as "clean".
 - **No input signal** — a connected-but-silent jig (muted, or the wrong input device) is called out rather than reading as clean.
