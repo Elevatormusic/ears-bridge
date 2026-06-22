@@ -28,7 +28,7 @@ flowchart LR
     C -->|recording device| D["Dirac Live<br/>one calibrated mic"]
 ```
 
-The capture device and the virtual output device run on independent clocks, so the path includes a lock-free, drift-correcting asynchronous sample-rate converter. The correction filters are minimum-phase FIRs derived from each ear's calibration file, rebuilt off-thread whenever you change a file or the sample rate.
+The capture device and the virtual output device run on independent clocks, so the path includes a lock-free, drift-correcting asynchronous sample-rate converter. During a measurement it holds a stable resample ratio across the sweep so the timebase stays consistent from sweep to sweep — that's what keeps Dirac from rejecting headphone captures as "imprecise." The correction filters are minimum-phase FIRs derived from each ear's calibration file, rebuilt off-thread whenever you change a file or the sample rate.
 
 ## Status
 
@@ -51,9 +51,10 @@ EARS Bridge is in active development. A look at recent and upcoming work:
 - Automated build + test on Windows and macOS; releases are gated on the test suite.
 
 **In progress**
-- Reference-based measurement quality verification — EARS Bridge captures Dirac's own sweep and deconvolves your measurement against it, grading the signal-to-noise and distortion of each capture so you know it's genuinely clean.
 - A signal-chain status panel — sample rate, channels, bit depth, and routing verified across the whole chain at a glance.
-- Sweep-to-noise SNR checks and smarter per-ear detection.
+- Reference-based measurement quality grading — EARS Bridge captures Dirac's own sweep and deconvolves each capture against it; the per-ear grade is in the app now as informational, with the clean-vs-noisy thresholds being validated against real measurements before it gates a result.
+- Per-room level calibration — measure your ambient and amp noise floor and recommend the gain settings, so the level setup is tuned to your rig.
+- macOS validation on real Apple hardware.
 
 This is alpha software, so the list will shift as we learn from real measurements.
 
@@ -189,9 +190,8 @@ EARS Bridge watches this for you: if a run never reaches a healthy level it show
 
 While running, EARS Bridge watches for conditions that would invalidate a measurement and warns you in the status line instead of letting a bad capture pass quietly:
 
-- **Clean capture** turns off if the path drops or overruns samples, or a device reports an xrun.
-- **Dropped frames** counts samples lost at the bridge as a running trend.
-- **Capture-to-render ratio** shows the live, drift-corrected resample ratio.
+- **Clean capture** turns off if the path drops or overruns samples, or a device reports an xrun — a dropped capture is never reported as clean.
+- **Clock-drift retiming** — the input and the cable run on independent clocks; if the timebase ever has to be force-corrected mid-sweep, that capture is marked invalid (the measurement-time ratio hold normally prevents this).
 - **Input and output levels** are metered per channel. The L and R input meters carry a green **target band** (−18 to −12 dBFS) to set your amp against. A sustained input clip prompts you to lower the EARS gain switch and/or the Dirac level; output clipping (e.g. the +6 dB Sum mode) is flagged too.
 - **Live sweep level** — while a sweep is sounding, the status line shows the input **peak in dBFS** and calls out a clip (**"CLIPPED +x.x dBFS — lower the output"**) so you can correct the level before the next pass instead of finding out afterward.
 - **Level low** — a capture that is present but never reaches a healthy level (too quiet for good SNR — the cause of a thin, "tin-can" result) is flagged so it can't pass as "clean"; raise your amp until the meters reach the green band.
