@@ -372,7 +372,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
     <div class="feat"><i class="ti ti-arrows-left-right ic" aria-hidden="true"></i><h3>Auto per-ear</h3><p>Dirac sweeps both channels in one routine; EARS Bridge follows the earcup it's sweeping and records only that ear's calibrated mic — both ears corrected in a single pass, no open-back crosstalk. A live indicator shows which side it's capturing.</p></div>
     <div class="feat"><i class="ti ti-ear ic" aria-hidden="true"></i><h3>Per-ear calibration</h3><p>Loads each capsule's FRD calibration as an inverse-correction FIR, so the EARS's own response is removed before Dirac ever sees it.</p></div>
     <div class="feat"><i class="ti ti-bolt ic" aria-hidden="true"></i><h3>One-click Dirac setup</h3><p>Detects the standard VB-CABLE and sets Dirac to shared mode in a click, so its exclusive-mode “recording device error 600007” never blocks you.</p></div>
-    <div class="feat"><i class="ti ti-wave-sine ic" aria-hidden="true"></i><h3>Drift-corrected audio</h3><p>A lock-free asynchronous sample-rate converter keeps the two independent clocks in step over a full sweep — no dropouts, no slip.</p></div>
+    <div class="feat"><i class="ti ti-wave-sine ic" aria-hidden="true"></i><h3>Phase-stable audio</h3><p>A lock-free asynchronous sample-rate converter holds a steady timebase across the sweep, keeping the two independent clocks in step — so Dirac accepts the measurement's phase, with no dropouts or slip.</p></div>
     <div class="feat"><i class="ti ti-activity-heartbeat ic" aria-hidden="true"></i><h3>Measurement health</h3><p>Live per-ear meters with a green target band, plus clear warnings — a too-low level, input clipping, a disconnected jig, a silent input, a resampled rate — so a bad measurement never passes for a good one.</p></div>
     <div class="feat"><i class="ti ti-gauge ic" aria-hidden="true"></i><h3>Gain staging, simplified</h3><p>The exact loudness doesn't matter — Dirac normalizes the measurement. Turn your amp up until the L and R meters reach the green band; a too-quiet capture is flagged instead of passing as “clean.”</p></div>
     <div class="feat"><i class="ti ti-device-speaker ic" aria-hidden="true"></i><h3>EARS and EARS Pro</h3><p>Original EARS (48&nbsp;kHz / 24-bit) and EARS Pro (44.1–192&nbsp;kHz, 16/24/32-bit). FIR taps scale with the rate.</p></div>
@@ -384,7 +384,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
 <section id="download"><div class="wrap">
   <p class="eyebrow">Download</p>
   <h2>Get started in a few minutes.</h2>
-  <p class="sub">You'll also need <a href="https://www.dirac.com/live/">Dirac Live</a> and a virtual audio device. Pick <b>Auto per-ear</b> in EARS Bridge, then let Dirac run its normal measurement — it follows each earcup for you.</p>
+  <p class="sub">You'll also need <a href="https://www.dirac.com/live/">Dirac Live</a> to measure, the Dirac Live Processor to apply the result, and a virtual audio device. In EARS Bridge pick <b>Auto per-ear</b> and set everything to 48&nbsp;kHz, then run Dirac's normal measurement — it follows each earcup for you. The <a href="https://github.com/Elevatormusic/ears-bridge#usage--correct-your-headphones-from-scratch">full from-scratch guide</a> walks through every step.</p>
   <div class="dl">
     <div class="dlcard">
       <h3><i class="ti ti-brand-windows" aria-hidden="true"></i>Windows</h3>
