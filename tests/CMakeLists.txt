@@ -29,6 +29,7 @@ add_executable(eb_tests
     test_snrstatus.cpp
     test_liveinputstatus.cpp
     test_statusphase.cpp
+    test_signalchainview.cpp
     test_irquality.cpp
     test_refmonitor.cpp
     test_refmon_live.cpp

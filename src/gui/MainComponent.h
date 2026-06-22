@@ -301,6 +301,7 @@ private:
     // the verdict LOGIC is fully unit-tested headless (test_deviceconfigcheck.cpp).
     void pollChainConfig();
     eb::ConfigVerdict chainVerdict_;                  // last computed verdict (read by updateStatusLine)
+    eb::ChainConfig   chainFormats_;                  // the three per-endpoint formats behind the verdict (read by the Signal-chain panel)
     int    chainPollTick_ = 0;                        // 30 Hz tick counter for the ~1 s chain-config throttle
     static constexpr int kChainPollTicks = 30;        // ~1 s at the 30 Hz GUI timer
     juce::String lastChainSummaryLogged_;             // last chain-config line logged (log on change only)
