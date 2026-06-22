@@ -1507,9 +1507,12 @@ void MainComponent::onLearnReference() {
                 std::vector<float> trimL (cap.samplesL.begin() + spanL.first, cap.samplesL.begin() + spanL.last);
                 std::vector<float> trimR (cap.samplesR.begin() + spanR.first, cap.samplesR.begin() + spanR.last);
                 // Validate each TRIMMED channel on its own — each must contain a clean single sweep. Name the
-                // failing ear precisely.
-                const auto vL = eb::validateReferenceCapture (trimL.data(), (int) trimL.size(), cap.rate);
-                const auto vR = eb::validateReferenceCapture (trimR.data(), (int) trimR.size(), cap.rate);
+                // failing ear precisely. minSeconds=3 here (NOT the full-sequence default ~8 s): the trimmed
+                // span is ONE per-ear sweep, which Dirac plays in ~5 s — so 8 s would wrongly reject a correct
+                // single-sweep reference (it did: a real R sweep trimmed to 5.1 s failed the 8 s floor). 3 s
+                // still rejects a stray/truncated blip.
+                const auto vL = eb::validateReferenceCapture (trimL.data(), (int) trimL.size(), cap.rate, 3.0);
+                const auto vR = eb::validateReferenceCapture (trimR.data(), (int) trimR.size(), cap.rate, 3.0);
                 if (! vL.ok)      { resultMsg = "Rejected (Left ear): " + vL.reason; }
                 else if (! vR.ok) { resultMsg = "Rejected (Right ear): " + vR.reason; }
                 else {

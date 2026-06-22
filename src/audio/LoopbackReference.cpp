@@ -180,8 +180,10 @@ void decodePacketPerChannel (const unsigned char* data, unsigned int frames, int
 // ---------------------------------------------------------------------------
 // PURE active-sweep span — trim a hard-panned per-channel reference to JUST its
 // own sweep, dropping the silent half (where the OTHER ear sweeps). Block-RMS over
-// ~20 ms blocks; threshold at the loudest block minus 40 dB; the span is the first
-// to the last above-threshold block plus a ~50 ms margin, clamped to [0, n).
+// ~20 ms blocks; threshold at the loudest block minus 40 dB; the span is the LONGEST
+// contiguous run of above-threshold blocks (a brief sub-threshold dip is tolerated) plus a
+// ~50 ms margin, clamped to [0, n) — so a stray transient or a SECOND sweep elsewhere in the
+// capture cannot over-extend the span across the silent half.
 // ---------------------------------------------------------------------------
 ActiveSpan findActiveSpan (const float* samples, int n, double rate) {
     ActiveSpan span;
@@ -221,14 +223,31 @@ ActiveSpan findActiveSpan (const float* samples, int n, double rate) {
     // sits far below this, while the whole ESS sweep — flat-ish envelope and all — stays above it.
     const float threshold = maxRms * std::pow (10.0f, (float) (kThresholdDb / 20.0));
 
-    // Pass 2: first and last block whose RMS clears the threshold.
-    int firstBlock = -1, lastBlock = -1;
+    // Pass 2: the LONGEST CONTIGUOUS run of above-threshold blocks (tolerating a brief sub-threshold dip
+    // of up to ~100 ms inside one sweep). A first-to-last scan would over-extend ACROSS the silent half if
+    // a stray transient OR a SECOND sweep sits later in the capture (a Dirac measurement can play more than
+    // one sweep per ear, separated by a gap, and the silent half is not always perfectly below threshold) —
+    // that would leave silence/gap inside the trimmed reference, defeating the trim. Picking the single
+    // longest run isolates ONE clean sweep and drops the gap/silence.
+    constexpr int kGapBlocks = 5;   // ~100 ms of sub-threshold tolerated WITHIN one sweep before the run ends
+    int firstBlock = -1, lastBlock = -1, bestLen = -1;
+    int runStart = -1, runEnd = -1, gapRun = 0;
+    auto closeRun = [&] () {
+        if (runStart >= 0) {
+            const int len = runEnd - runStart;
+            if (len > bestLen) { bestLen = len; firstBlock = runStart; lastBlock = runEnd; }
+        }
+        runStart = -1; runEnd = -1; gapRun = 0;
+    };
     for (int b = 0; b < numBlocks; ++b) {
         if (blockRms[(size_t) b] >= threshold) {
-            if (firstBlock < 0) firstBlock = b;
-            lastBlock = b;
+            if (runStart < 0) runStart = b;
+            runEnd = b; gapRun = 0;
+        } else if (runStart >= 0) {
+            if (++gapRun > kGapBlocks) closeRun();   // a long enough gap ends the current run
         }
     }
+    closeRun();   // flush the final run
     if (firstBlock < 0)
         return span;   // valid=false (no block cleared the threshold)
 
