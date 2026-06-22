@@ -1101,23 +1101,18 @@ MainComponent::LiveReadout MainComponent::updateLiveInputReadout() {
         return out;
     }
 
-    // Sweep-active: rebuild the readout text from the HELD (steady) values only on the ~7 Hz cadence tick, but
+    // Sweep-active: rebuild the readout text from the HELD (steady) peak only on the ~7 Hz cadence tick, but
     // CARRY the last-rendered text/colour out on EVERY engaged tick (Bug B-1). render==true on the first
     // engaged tick (liveTextTick_ resets to 0 when idle above) and every kLiveTextEveryTicks after; on the
-    // in-between ticks we re-emit liveHeldPrimary_/liveHeldSecond_/liveHeldColour_ so the live line and its
-    // reseat hint persist through the set-if-changed commit instead of blinking.
+    // in-between ticks we re-emit liveHeldPrimary_/liveHeldColour_ so the live line persists through the
+    // set-if-changed commit instead of blinking.
     if (liveTextTick_ == 0) {
         const auto s = eb::liveInputStatus (liveHeldLDb_, liveHeldRDb_, true);
-        // Map the colour-free severity to a Theme role (semantic colours only; no hardcoded hex). Clip uses
-        // the strongest warn/error role; the WORDS ("CLIPPING" + the dB) carry the meaning without colour.
-        liveHeldColour_ = (s.severity == eb::LiveInputSeverity::Clip)   ? Theme::danger()
-                        : (s.severity == eb::LiveInputSeverity::Warn)   ? Theme::warn()
-                                                                        : Theme::text();
-        // The helper puts the optional reseat hint on a second line (after a '\n'); split it so the live
-        // readout sits on statusLine and the hint on statusLineR (the existing second status line).
-        const int nl = s.text.indexOfChar ('\n');
-        liveHeldPrimary_ = nl < 0 ? s.text : s.text.substring (0, nl);
-        liveHeldSecond_  = nl < 0 ? juce::String() : s.text.substring (nl + 1);
+        // Map the colour-free severity to a Theme role (semantic colours only; no hardcoded hex). A clip uses
+        // the danger role; the WORDS ("CLIPPING" + the dB) carry the meaning without colour.
+        liveHeldColour_  = (s.severity == eb::LiveInputSeverity::Clip) ? Theme::danger() : Theme::text();
+        liveHeldPrimary_ = s.text;     // single-line peak readout (the live line never owns statusLineR now)
+        liveHeldSecond_.clear();
     }
     out.render  = (liveTextTick_ == 0);
     out.primary = liveHeldPrimary_;   // carried EVERY engaged tick so the line persists (no blink)

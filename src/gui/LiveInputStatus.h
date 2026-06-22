@@ -26,10 +26,6 @@ struct LiveInputStatus {
     LiveInputSeverity severity = LiveInputSeverity::Normal;
 };
 
-// Tunables (kept here so the helper + its tests share one source of truth).
-inline constexpr float kLiveImbalanceGapDb   = 6.0f;     // an L/R gap this large (dB) hints a reseat
-inline constexpr float kLiveImbalanceQuietDb = -15.0f;   // ...but only if the quiet ear is below this level
-
 // peakLDb / peakRDb: the (peak-held) per-channel input level in dBFS, NOT clamped at 0 (a clip reads positive).
 // sweepActive: the debounced "the sweep is sounding now" flag (held ~0.3 s above the room floor by the caller).
 // Returns empty text when NOT sweep-active so the caller keeps the existing idle per-ear verdict lines.
@@ -37,41 +33,21 @@ inline constexpr float kLiveImbalanceQuietDb = -15.0f;   // ...but only if the q
     LiveInputStatus s;
     if (! sweepActive) return s;   // idle: defer to the per-ear verdicts (do NOT regress them)
 
+    // Dirac HARD-PANS its per-ear sweeps SEQUENTIALLY (L earcup, then R), so at any instant ONLY ONE earcup is
+    // sounding and the other is legitimately silent / crosstalk. A live L-vs-R comparison is therefore meaningless
+    // mid-sweep: the idle earcup is NOT "low - reseat", it just hasn't been swept yet. (That false "(R low -
+    // reseat the earcup?)" fired on the OPPOSITE ear during every sweep.) So the live readout reports only the
+    // PEAK - the loudest the input reached this sweep - which is exactly what's needed to set the level and catch
+    // a clip. The L/R imbalance is judged AFTER the grade (both earcups measured), never live.
     const float peakMax = juce::jmax (peakLDb, peakRDb);
 
-    // CLIPPING: at or over full scale on either ear. Name the clipping ear + show the dB (the words carry it).
-    if (peakMax >= 0.0f) {
-        const bool   lHot   = peakLDb >= peakRDb;        // the hotter ear is the one that clipped
-        const float  hotDb  = lHot ? peakLDb : peakRDb;
-        const juce::String ear = lHot ? "L" : "R";
-        // "CLIPPING  L +1.6 dBFS - lower the output"
-        s.text     = "CLIPPING  " + ear + " "
-                   + (hotDb >= 0.0f ? juce::String ("+") : juce::String())
-                   + juce::String (hotDb, 1) + " dBFS - lower the output";
+    if (peakMax >= 0.0f) {   // CLIPPING (at/over full scale) on the loudest earcup
+        s.text     = "CLIPPING  +" + juce::String (peakMax, 1) + " dBFS - lower the output";
         s.severity = LiveInputSeverity::Clip;
         return s;
     }
-
-    // In-progress live readout: both channels, rounded to 0.1 dB. "Sweep in progress - in  L -2.1  R -8.4 dBFS".
-    auto fmt = [] (float db) {
-        return (db >= 0.0f ? juce::String ("+") : juce::String()) + juce::String (db, 1);
-    };
-    s.text     = "Sweep in progress - in  L " + fmt (peakLDb) + "  R " + fmt (peakRDb) + " dBFS";
+    s.text     = "Sweep in progress - peak " + juce::String (peakMax, 1) + " dBFS";
     s.severity = LiveInputSeverity::Normal;
-
-    // L/R imbalance hint: one ear is >6 dB below the other AND that quiet ear is itself below ~-15 dBFS — a
-    // seating imbalance the user can fix by reseating the quiet earcup. Append it on a second line; the WARN
-    // severity carries the colour but, again, the word "low" + the named ear carry the meaning without colour.
-    const float gap = std::abs (peakLDb - peakRDb);
-    if (gap > kLiveImbalanceGapDb) {
-        const bool  rQuiet = peakRDb < peakLDb;          // which ear is the quiet one
-        const float quietDb = rQuiet ? peakRDb : peakLDb;
-        if (quietDb < kLiveImbalanceQuietDb) {
-            const juce::String ear = rQuiet ? "R" : "L";
-            s.text    += "\n(" + ear + " low - reseat the earcup?)";
-            s.severity = LiveInputSeverity::Warn;
-        }
-    }
     return s;
 }
 
