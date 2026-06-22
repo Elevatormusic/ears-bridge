@@ -1974,6 +1974,7 @@ void MainComponent::pollChainConfig() {
         cfg.diracOutput = eb::readEndpointFormat (diracOut, /*isInput*/ false);
 
     chainVerdict_ = eb::checkChainConfig (cfg);
+    chainFormats_ = cfg;   // keep the per-endpoint formats so the Signal-chain panel can render rate/channels/bits
 
     // Log ON CHANGE only. The change key folds in the RATE summary AND the secondary advisory (channels +
     // bit-depth), so an advisory-only change (e.g. Dirac output flips to 16-bit while the rate stays 48k)
