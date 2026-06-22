@@ -245,6 +245,27 @@ StereoLoopbackResult captureLoopbackStereo (const juce::String& renderDeviceName
                                             double expectedRate = 48000.0,
                                             const std::atomic<bool>* cancel = nullptr);
 
+// ---- Per-channel reference-file presence (the testable reload decision) ----
+// Per-Ear Per-Channel Grading (Task 2). The per-channel reference is stored as TWO files
+// (reference_L.f32 + reference_R.f32). An OLD single-file mono reference (reference.f32)
+// cannot grade per-ear, so on reload we must distinguish three outcomes. This is the PURE
+// decision behind MainComponent::loadStoredReference, factored out so the unit suite can
+// assert it without touching the filesystem.
+enum class ReferenceFilesState {
+    None,           // no reference at all (neither the per-channel pair nor an old mono file)
+    PerChannel,     // BOTH reference_L.f32 and reference_R.f32 present -> loadable for per-ear grading
+    ReLearnNeeded   // only the old mono reference.f32 (or just one channel) -> must RE-LEARN; do NOT grade
+};
+
+// Decide the reload outcome from which files exist. PER-CHANNEL wins (both halves present).
+// Otherwise, if an old mono file OR exactly one channel is present, the stored state is unusable
+// for per-ear grading -> ReLearnNeeded. Nothing present -> None.
+[[nodiscard]] inline ReferenceFilesState classifyReferenceFiles (bool hasLeft, bool hasRight, bool hasMono) {
+    if (hasLeft && hasRight)          return ReferenceFilesState::PerChannel;
+    if (hasMono || hasLeft || hasRight) return ReferenceFilesState::ReLearnNeeded;
+    return ReferenceFilesState::None;
+}
+
 // ---- Per-channel pan-check capture (Windows-only; stub elsewhere) ---------
 // DIAGNOSTIC ONLY (eb_diag pancheck). captureLoopback downmixes Dirac's render to MONO,
 // which is correct for the single-source reference but blind to L-vs-R structure. To decide

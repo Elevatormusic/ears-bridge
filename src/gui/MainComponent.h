@@ -143,6 +143,14 @@ private:
     // to run gradeMeasurement OFFLINE. Populated on a successful learn; the rate drives the Farina offsets.
     std::vector<float> loadedReference_;              // the learned ESS reference samples (empty until learned)
     double             loadedReferenceRate_ = 48000.0;
+    // Per-Ear Per-Channel Grading (Task 2): the learned reference is now PER CHANNEL — ref_L = Dirac's
+    // hard-panned LEFT sweep (render ch0), ref_R = the RIGHT sweep (render ch1). They are stored separately
+    // (reference_L.f32 / reference_R.f32) so each earcup can be deconvolved against the channel that drove
+    // it (Task 4). TRANSITIONAL: loadedReference_ above is aliased to loadedReferenceL_ at the end of every
+    // learn/load so the existing single-ring grade path (pollReferenceGrade) keeps compiling and grading on
+    // ref_L until Task 4 switches it to the two per-ear pollers. Do NOT add a separate grade path here yet.
+    std::vector<float> loadedReferenceL_, loadedReferenceR_;  // per-channel learned reference samples (empty until learned)
+    double             loadedReferenceRateL_ = 0.0, loadedReferenceRateR_ = 0.0;
     std::atomic<bool>  gradeInFlight_ { false };      // guards against re-posting while a grade job runs
     // Task 4 match poll: the 30 Hz timer calls pollReferenceGrade, but the MATCH (a cross-correlation FFT) is
     // throttled to ~every kGradePollTicks ticks (~2 s) while Running + referenceLoaded. Grade on a STABLE
