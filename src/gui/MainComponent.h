@@ -132,6 +132,35 @@ private:
     int          lowSnrTicks_ = 0;                    // consecutive ticks with the LowSnr flag set (debounce)
     static constexpr int kLowSnrHoldTicks = 6;        // ~0.2 s: steady the per-sweep verdict without lag
     juce::String statusErrorMsg_;                     // specific Error-state message (survives re-renders)
+    // LIVE in-sweep input readout (per-channel dBFS + clip + L/R imbalance). The raw 30 Hz dB would jitter on
+    // the last digit and read as distracting motion (HIG: avoid distracting motion / Reduce Motion), so we
+    // PEAK-HOLD then DECAY the displayed value like a level meter: hold a new peak instantly, decay slowly
+    // (~kLiveDecayDbPerTick per 30 Hz tick ~= -12 dB/s) toward the live value. The displayed text is also
+    // rebuilt at a reduced cadence (~7 Hz) from the held/rounded value so it reads steady, not flickering.
+    // Sweep-active is debounced: peakMax must hold above the gate for ~0.3 s before the live line takes over
+    // the per-ear verdicts, and the line doesn't fro back and forth on a momentary dip.
+    float        liveHeldLDb_ = -120.0f;              // peak-held, slowly-decaying L level (dBFS) for display
+    float        liveHeldRDb_ = -120.0f;              // peak-held, slowly-decaying R level (dBFS) for display
+    int          sweepActiveTicks_ = 0;               // consecutive ticks with peakMax above the live gate (debounce)
+    int          liveTextTick_ = 0;                   // counts down to the next live-text rebuild (~7 Hz cadence)
+    static constexpr float kLiveActiveGateDb   = -18.0f;  // peakMax above this = a sweep (room floor ~-30 sits below)
+    static constexpr int   kSweepActiveHoldTicks = 9;     // ~0.3 s at 30 Hz before the live line engages
+    static constexpr float kLiveDecayDbPerTick = 0.4f;    // ~-12 dB/s decay of the held display value
+    static constexpr int   kLiveTextEveryTicks = 4;       // rebuild the live text ~every 4 ticks (~7 Hz)
+    // The rendered live-readout for one tick: the (held, throttled) status text split across the two status
+    // lines, the primary line's Theme colour, and whether the live readout OWNS the status this tick.
+    struct LiveReadout {
+        bool         owns = false;        // true iff sweep-active (the live line should take over)
+        bool         render = false;      // true iff this tick is a text-rebuild tick (the ~7 Hz cadence)
+        juce::String primary;             // statusLine text (the live readout)
+        juce::String second;              // statusLineR text (the optional reseat hint; empty otherwise)
+        juce::Colour colour;              // statusLine colour (a semantic Theme role)
+    };
+    // Advance liveHeldL/RDb_ (peak-hold + decay) from the engine's live per-channel peaks and the sweep-active
+    // debounce EVERY tick (so the held level + debounce stay continuous), and compute the rendered readout.
+    // Pure of side effects on the labels — the caller writes them only when the live readout takes precedence,
+    // so a co-occurring hard error keeps statusLineR blank. Throttles the text rebuild to ~7 Hz (render flag).
+    LiveReadout  updateLiveInputReadout();
     // Reference-Based Measurement Monitor (Plan 5): drives the GUI worker that grades a completed sweep
     // OFFLINE against the learned reference, then surfaces the verdict in the status ladder.
     void onLearnReference();         // Advanced affordance: capture + validate + store a loopback reference (on-device)

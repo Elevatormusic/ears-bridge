@@ -26,6 +26,7 @@ add_executable(eb_tests
     test_clipstatus.cpp
     test_rawrailstatus.cpp
     test_snrstatus.cpp
+    test_liveinputstatus.cpp
     test_irquality.cpp
     test_refmonitor.cpp
     test_refmon_live.cpp

@@ -41,9 +41,16 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
         // sustained blocks, so a clip during the brief pre-arm ramp is intentionally inside the dropped
         // pre-sweep region; a clip on the block that COMPLETES the arm still latches.
         const float pk = eb::HealthMonitor::blockPeak (l, r, numSamples);
+        // Per-EAR block peak, computed UNCONDITIONALLY every block (not just inside the sweep) so the live
+        // in-sweep readout has a fresh L/R level each block. The sweep-SNR numerator below reuses these.
+        float spkL = 0.0f, spkR = 0.0f;
+        eb::HealthMonitor::blockPeakPerEar (l, r, numSamples, spkL, spkR);
         // Diagnostic getter (Task 2): publish the live input block peak (single writer, audio thread,
         // relaxed; the *Milli_ fixed-point idiom). lastInputBlockPeak() reads it lock-free GUI-side.
-        e.lastInputPeakMilli_.store ((int) std::lround (pk * 1000.0f), std::memory_order_relaxed);
+        // The per-channel twins (Milli L/R) drive the LIVE in-sweep dBFS readout; same single-writer/relaxed idiom.
+        e.lastInputPeakMilli_.store  ((int) std::lround (pk   * 1000.0f), std::memory_order_relaxed);
+        e.lastInputPeakLMilli_.store ((int) std::lround (spkL * 1000.0f), std::memory_order_relaxed);
+        e.lastInputPeakRMilli_.store ((int) std::lround (spkR * 1000.0f), std::memory_order_relaxed);
         e.session_.observeBlockPeak (pk);
         if (e.session_.consumeSweepStarted())
             e.hm.resetMeasurementLatches();
@@ -54,11 +61,8 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
         // over the SweepActive window). Gated here -- observeSweepPeak only runs inside the sweep, so
         // pre/post-sweep room noise never inflates the numerator. resetMeasurementLatches() above
         // already zeroed the latch on the onset edge.
-        if (e.session_.sweepActive()) {
-            float spkL = 0.0f, spkR = 0.0f;
-            eb::HealthMonitor::blockPeakPerEar (l, r, numSamples, spkL, spkR);
-            e.hm.observeSweepPeak (spkL, spkR);
-        }
+        if (e.session_.sweepActive())
+            e.hm.observeSweepPeak (spkL, spkR);   // spkL/spkR computed unconditionally above
 
         // Live grading (Plan 5): BOTH mic channels are buffered CONTINUOUSLY (NOT gated on level, NOT gated on
         // the active ear) and the grade fires from the off-thread reference MATCH. Dirac hard-pans the sweeps,
@@ -496,6 +500,15 @@ float AudioEngine::referenceSweepPeakDb (int ear) const noexcept { return refSwe
 float AudioEngine::lastInputBlockPeak() const noexcept {
     return lastInputPeakMilli_.load (std::memory_order_relaxed) / 1000.0f;
 }
+// LIVE per-channel input peak -> dBFS for the in-sweep readout. NOT clamped at 0: gainToDecibels of a
+// linear value > 1.0 (a float that overshot full scale) returns a positive dB, so a clip reads e.g. +1.6.
+// Floor at -120 dBFS (a silent block). The *Milli_ store rounds to 0.001 linear; the GUI rounds to 0.1 dB.
+float AudioEngine::lastInputPeakLDb() const noexcept {
+    return juce::Decibels::gainToDecibels (lastInputPeakLMilli_.load (std::memory_order_relaxed) / 1000.0f, -120.0f);
+}
+float AudioEngine::lastInputPeakRDb() const noexcept {
+    return juce::Decibels::gainToDecibels (lastInputPeakRMilli_.load (std::memory_order_relaxed) / 1000.0f, -120.0f);
+}
 float AudioEngine::lastMatchCoherence (int ear) const noexcept {
     return lastMatchCoherMilli_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f;
 }
@@ -714,18 +727,20 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
     // Mirror the capture-callback ordering: feed the session this block's peak, re-scope on the sweep
     // onset, analyze, then latch Invalid if an invalidating flag fired in-measurement.
     const float pk = eb::HealthMonitor::blockPeak (inL, inR, numSamples);
+    float spkL = 0.0f, spkR = 0.0f;                                  // per-ear peak (mirror the capture callback)
+    eb::HealthMonitor::blockPeakPerEar (inL, inR, numSamples, spkL, spkR);
     // Diagnostic getter (Task 2): mirror the capture-callback store of the live input block peak (single
     // writer, relaxed; the *Milli_ idiom) so the headless seam reflects the same getter as a real run.
-    lastInputPeakMilli_.store ((int) std::lround (pk * 1000.0f), std::memory_order_relaxed);
+    // The per-channel twins drive the live in-sweep dBFS readout (same idiom).
+    lastInputPeakMilli_.store  ((int) std::lround (pk   * 1000.0f), std::memory_order_relaxed);
+    lastInputPeakLMilli_.store ((int) std::lround (spkL * 1000.0f), std::memory_order_relaxed);
+    lastInputPeakRMilli_.store ((int) std::lround (spkR * 1000.0f), std::memory_order_relaxed);
     session_.observeBlockPeak (pk);
     if (session_.consumeSweepStarted()) hm.resetMeasurementLatches();
     bridge.setSweepActive (session_.sweepActive());                  // D6: mirror the capture-callback freeze sync
     hm.analyzeInputBlock (inL, inR, numSamples);                      // same analysis as the capture callback
-    if (session_.sweepActive()) {                                    // SNR numerator (mirror the capture callback)
-        float spkL = 0.0f, spkR = 0.0f;
-        eb::HealthMonitor::blockPeakPerEar (inL, inR, numSamples, spkL, spkR);
-        hm.observeSweepPeak (spkL, spkR);
-    }
+    if (session_.sweepActive())                                      // SNR numerator (mirror the capture callback)
+        hm.observeSweepPeak (spkL, spkR);                            // spkL/spkR computed unconditionally above
     // Live grading: continuous per-mic ring write (l->ringL, r->ringR, no active-ear gating) + cosmetic
     // activity flag + periodic snapshot (mirror the capture callback). No absolute level trigger; the
     // off-thread match is the detector. Single writer.
