@@ -139,29 +139,37 @@ public:
     // Set on the audio thread (single writer, relaxed); read lock-free GUI-side.
     bool gradeSignalPresent() const noexcept;
 
-    // ---- Live grading response buffer (RT-safe; capture thread writes, worker reads) ----
-    // REFERENCE-MATCH grade detection (Task 4). The mic RESPONSE (the ACTIVE earcup's channel) is memcpy'd
-    // CONTINUOUSLY into a PRE-ALLOCATED ROLLING ring buffer whenever the engine is Running AND a reference is
-    // loaded — NOT gated on level at all. The ring holds the last kGradingSeconds (>= 28 s, > the ~25 s Dirac
-    // L+R sequence) so the whole sequence is always present.
+    // ---- Live grading response buffers (RT-safe; capture thread writes, worker reads) ----
+    // REFERENCE-MATCH grade detection. Dirac HARD-PANS the measurement sweeps (the L sweep drives ch0 only,
+    // the R sweep drives ch1 only), so the LEFT earcup's mic carries the L sweep and the RIGHT earcup's mic
+    // carries the R sweep. We buffer BOTH mic channels into TWO independent rolling rings every block — ringL
+    // (left mic) and ringR (right mic) — whenever the engine is Running AND a reference is loaded, NOT gated on
+    // level and NOT gated on the active ear (the per-channel references from Task 2 handle the L/R separation).
+    // Each ring holds the last kGradingSeconds (>= 28 s, > the ~25 s Dirac L+R sequence) so the whole sequence
+    // is always present. (activeEar()/autoActiveEar() now drive ONLY the meter-accent UI, not grading.)
     //
     // There is NO absolute-level grade trigger. Instead the capture thread, once per ~kGradeSnapshotSeconds,
-    // SNAPSHOTS the rolling ring (oldest-to-newest) into the contiguous responseBuffer_ and sets responseReady_
-    // (it re-snapshots only after the worker has consumed the prior one). The GUI poll copies that window out
-    // (copyGradingResponse), runs eb::referenceMatches over it — the MATCH is the DETECTOR, firing at ANY level
-    // — and, only when matched AND the signal has SETTLED (gradeSignalPresent()==false), runs gradeMeasurement.
+    // SNAPSHOTS each rolling ring (oldest-to-newest) into its contiguous snapshot buffer and sets that ring's
+    // ready flag (it re-snapshots only after the worker has consumed the prior one). The GUI poll copies a
+    // window out (snapshotGradeRing(ear,...)), runs eb::referenceMatches over it — the MATCH is the DETECTOR,
+    // firing at ANY level — and, when matched, runs gradeMeasurement against that ear's reference channel.
     // A finger snap / music / a wrong reference fails referenceMatches and is NOT graded. The audio thread does
     // NO deconvolution and NO matching; all heavy work runs off-thread in the poll.
     //
-    // The GUI worker calls copyGradingResponse(dst, maxLen) to copy the ready snapshot into ITS OWN buffer
-    // (the allocation lives in the GUI, never the engine). Returns the number of samples copied (0 when no
-    // fresh response is ready) and clears the ready flag. The reference itself is held by the GUI (from the
-    // learn), so the worker has both halves and runs the match + gradeMeasurement off-thread.
-    int  copyGradingResponse (float* dst, int maxLen) noexcept;
-    // The rate the response buffer was captured at (the active capture rate), for the Farina offsets.
+    // Per-ear API (Task 3): snapshotGradeRing(ear, dst, maxLen) copies the ready snapshot for ear 0 (left mic)
+    // or ear 1 (right mic) into the CALLER's buffer (the allocation lives in the GUI), returns the number of
+    // samples copied (0 when no fresh window is ready for that ear) and clears that ear's ready flag.
+    // gradingResponseReady(ear) is the matching test seam.
+    int  snapshotGradeRing (int ear, float* dst, int maxLen) noexcept;
+    bool gradingResponseReady (int ear) const noexcept;
+    // OLD single-ring API, kept this task as a LEFT-ear alias so pollReferenceGrade (and the live tests) keep
+    // building + grading the LEFT mic vs ref_L (consistent with Task 2's loadedReference_ = loadedReferenceL_).
+    // Task 4 switches the consumer to the per-ear API. These forward to ear 0 (left).
+    int  copyGradingResponse (float* dst, int maxLen) noexcept { return snapshotGradeRing (0, dst, maxLen); }
+    bool gradingResponseReady() const noexcept { return gradingResponseReady (0); }
+    // The rate the response buffers were captured at (the active capture rate, SHARED by both ears), for the
+    // Farina offsets. Single getter — the input rate is the same for both mics.
     double gradingResponseRate() const noexcept { return grantedRate_; }
-    // Test seam: true once a fresh ring snapshot has been published by the capture thread (the poll grades it).
-    bool gradingResponseReady() const noexcept { return responseReady_.load(); }
 
     // Publish a reference-grade verdict (message/worker thread, OFFLINE). Snapshots the workflow state +
     // IR-SNR + THD TOGETHER (the SNR lesson) and raises the matching GUIDANCE flag (RefMismatch when the
@@ -293,40 +301,52 @@ private:
     std::atomic<int> lastInputPeakMilli_  { 0 };
     std::atomic<int> lastMatchCoherMilli_ { 0 };
 
-    // Live grading buffers (Task 4 reference-match detection). BOTH are PRE-ALLOCATED in prepare/start
-    // (sized for kGradingSeconds at the active rate) and NEVER resized on the audio thread.
-    //   gradeRing_       : a ROLLING ring the capture thread fills CONTINUOUSLY whenever Running + a
-    //                      reference is loaded (NOT gated on level). Single writer (capture thread);
-    //                      gradeRingWrite_ is the running write head modulo size.
-    //   responseBuffer_  : the contiguous SNAPSHOT the capture thread copies the ring into (oldest->newest)
-    //                      once per ~kGradeSnapshotSeconds; the poll copies it out via copyGradingResponse()
-    //                      and runs the MATCH over it. The capture thread re-snapshots only after the poll
-    //                      has consumed the prior one (responseReady_ is the producer->consumer handoff).
+    // Live grading buffers (reference-match detection). TWO independent rings — gradeRingL_ (left mic) and
+    // gradeRingR_ (right mic) — each with its own snapshot buffer + ready flag. ALL are PRE-ALLOCATED in
+    // prepare/start (sized for kGradingSeconds at the active rate) and NEVER resized on the audio thread.
+    //   GradeRing{L,R}_ : a ROLLING ring the capture thread fills CONTINUOUSLY whenever Running + a reference
+    //                     is loaded (NOT gated on level, NOT gated on the active ear). Single writer (capture
+    //                     thread); each `.write` is the running write head modulo size, `.filled` the running
+    //                     total. l -> ringL, r -> ringR every block (Dirac hard-pans, so each ring carries its
+    //                     own channel's sweep; the per-channel references handle separation).
+    //   GradeRing.snapshot : the contiguous SNAPSHOT the capture thread copies the ring into (oldest->newest)
+    //                     once per ~kGradeSnapshotSeconds; the poll copies it out via snapshotGradeRing(ear,..)
+    //                     and runs the MATCH over it. The capture thread re-snapshots only after the poll has
+    //                     consumed THAT ear's prior one (the per-ring ready flag is the producer->consumer
+    //                     handoff). The snapshot cadence/blocks counter is SHARED (one block-clock for both).
     static constexpr double kGradingSeconds      = 28.0;   // >= the ~25 s Dirac L+R sequence, with margin
-    // COSMETIC activity floor (Task 4): a LOW floor (~-50 dBFS) just above room noise. The block peak crossing
-    // it sets gradeSignalPresent_ (drives ONLY the status text + the poll's settled check). NOT a grade gate.
+    // COSMETIC activity floor: a LOW floor (~-50 dBFS) just above room noise. The block peak crossing it sets
+    // gradeSignalPresent_ (drives ONLY the status text + the poll's settled check). NOT a grade gate.
     static constexpr float  kActivityFloorLinear = 0.003f;  // ~ -50 dBFS
     // The capture thread publishes a fresh ring snapshot for the poll about this often (so the off-thread
     // match always has a recent window). Converted to a per-block count in allocateResponseBuffer.
     static constexpr double kGradeSnapshotSeconds = 0.5;
-    std::vector<float> gradeRing_;                    // pre-allocated rolling ring; capture-thread writes
-    int                gradeRingWrite_  = 0;          // capture-thread scratch: ring write head (mod size)
-    long long          gradeRingFilled_ = 0;          // capture-thread scratch: total samples ever written this run
-    int                gradeSnapshotBlocks_  = 0;     // capture-thread scratch: blocks since the last published snapshot
-    int                gradeSnapshotNeeded_  = 1;     // configured snapshot cadence in blocks (kGradeSnapshotSeconds)
-    std::vector<float> responseBuffer_;               // pre-allocated snapshot; capture-thread writes, worker reads
-    std::atomic<int>   responseReadyLen_ { 0 };       // length of the published snapshot
-    std::atomic<bool>  responseReady_    { false };   // a fresh ring snapshot is ready for the poll to grade
-    // Capture-thread helper: snapshot the rolling ring (oldest->newest) into responseBuffer_ and publish the
-    // length + ready flags. RT-safe (two bounded memcpy into pre-allocated storage). Single writer.
-    void snapshotGradeRing() noexcept;
-    // Capture-thread helper (Task 4): when a reference is loaded, write this block's ACTIVE-EAR mic response
-    // into the rolling ring, set the COSMETIC gradeSignalPresent_ from blockPeak, and (on the snapshot cadence,
-    // once the poll consumed the prior one) publish a fresh ring snapshot for the off-thread match. It does NO
-    // matching/deconvolution and NO absolute-level grade trigger. Called by BOTH the real capture callback and
-    // the headless test seam so the two paths stay aligned. blockPeak is the already-computed per-block input
-    // peak (so the caller doesn't recompute it). RT-safe (no alloc/lock/syscall).
-    void processGradeDetection (const float* respCh, int numSamples, float blockPeak) noexcept;
+    // One per-mic grade ring (rolling buffer + its published snapshot + handoff state). Symmetric L/R twins.
+    struct GradeRing {
+        std::vector<float> ring;                      // pre-allocated rolling ring; capture-thread writes
+        int                write  = 0;                // capture-thread scratch: ring write head (mod size)
+        long long          filled = 0;                // capture-thread scratch: total samples ever written this run
+        std::vector<float> snapshot;                  // pre-allocated snapshot; capture-thread writes, worker reads
+        std::atomic<int>   readyLen { 0 };            // length of the published snapshot
+        std::atomic<bool>  ready    { false };        // a fresh ring snapshot is ready for the poll to grade
+    };
+    GradeRing gradeRingL_;                            // left mic  (ear 0) — the OLD single-ring API aliases here
+    GradeRing gradeRingR_;                            // right mic (ear 1)
+    int       gradeSnapshotBlocks_ = 0;               // capture-thread scratch: blocks since the last published snapshot (SHARED clock)
+    int       gradeSnapshotNeeded_ = 1;               // configured snapshot cadence in blocks (kGradeSnapshotSeconds)
+    // Capture-thread helper: write this block's `src` into `gr`'s rolling ring (wrap handled) and advance the
+    // head/fill. Two bounded memcpy into pre-allocated storage -> RT-safe (no alloc/lock). Single writer.
+    void writeGradeRing (GradeRing& gr, const float* src, int numSamples) noexcept;
+    // Capture-thread helper: snapshot `gr`'s rolling ring (oldest->newest) into its snapshot buffer and publish
+    // the length + ready flag. RT-safe (two bounded memcpy into pre-allocated storage). Single writer.
+    void snapshotGradeRing (GradeRing& gr) noexcept;
+    // Capture-thread helper: when a reference is loaded, write left->ringL and right->ringR EVERY block (no
+    // active-ear gating), set the COSMETIC gradeSignalPresent_ from blockPeak, and (on the snapshot cadence,
+    // once the poll consumed the prior one) publish a fresh snapshot of EACH ring for the off-thread match. It
+    // does NO matching/deconvolution and NO absolute-level grade trigger. Called by BOTH the real capture
+    // callback and the headless test seam so the two paths stay aligned. blockPeak is the already-computed
+    // per-block input peak (max over L/R, so the caller doesn't recompute it). RT-safe (no alloc/lock/syscall).
+    void processGradeDetectionStereo (const float* left, const float* right, int numSamples, float blockPeak) noexcept;
 
     // Calibration generation lifecycle. The three ids are atomic so the GUI gate reads them lock-free
     // (the audio thread never reads them); appliedGen_ is written on the message thread only.

@@ -60,13 +60,12 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
             e.hm.observeSweepPeak (spkL, spkR);
         }
 
-        // Live grading (Plan 5, Task 4): the mic RESPONSE is buffered CONTINUOUSLY (NOT gated on level) and
-        // the grade fires from the off-thread reference MATCH. Buffer the ACTIVE earcup's mic channel: in
-        // AutoPerEar that is whichever ear Dirac is currently sweeping (graph.activeEar(), 0=L/1=R; it reads
-        // the previous block's published decision, which is stable across a sweep). The reference is mono, so
-        // a single channel is graded. Single writer, RT-safe.
-        const float* respCh = (e.graph.activeEar() == 1) ? r : l;
-        e.processGradeDetection (respCh, numSamples, pk);
+        // Live grading (Plan 5): BOTH mic channels are buffered CONTINUOUSLY (NOT gated on level, NOT gated on
+        // the active ear) and the grade fires from the off-thread reference MATCH. Dirac hard-pans the sweeps,
+        // so the LEFT mic carries the L sweep and the RIGHT mic the R sweep; we feed l->ringL and r->ringR every
+        // block and grade each against its own per-channel reference (Task 2). activeEar() now drives ONLY the
+        // meter-accent UI, not grading. Single writer, RT-safe.
+        e.processGradeDetectionStereo (l, r, numSamples, pk);
         // SNR (LEVEL-ARM path, mostly DEAD on real sweeps -- kept harmless): once per SweepActive->Complete edge
         // (the sweep just finished), compute the per-ear SNR verdict ONCE and raise the LowSnr GUIDANCE flag on a
         // noisy sweep. The catch: consumeSweepComplete() is driven by MeasurementSession's rise-ratio level arm,
@@ -338,94 +337,108 @@ bool AudioEngine::gradeSignalPresent()     const noexcept { return gradeSignalPr
 
 void AudioEngine::allocateResponseBuffer (double rate, int blockLen) {
     // Pre-allocate (message thread) for kGradingSeconds at this rate so the capture thread NEVER resizes.
-    // BOTH the rolling ring and the contiguous snapshot are sized identically; the capture thread only
-    // memcpy's into them (never grows them). Reset all capture-thread trigger scratch for a fresh run.
+    // BOTH per-mic rings and their snapshots are sized identically; the capture thread only memcpy's into
+    // them (never grows them). Reset all capture-thread trigger scratch for a fresh run.
     const int len = juce::jmax (1, (int) std::lround (rate * kGradingSeconds));
-    gradeRing_.assign ((size_t) len, 0.0f);
-    responseBuffer_.assign ((size_t) len, 0.0f);
-    gradeRingWrite_      = 0;
-    gradeRingFilled_     = 0;
+    for (GradeRing* gr : { &gradeRingL_, &gradeRingR_ }) {
+        gr->ring.assign     ((size_t) len, 0.0f);
+        gr->snapshot.assign ((size_t) len, 0.0f);
+        gr->write  = 0;
+        gr->filled = 0;
+        gr->readyLen.store (0);
+        gr->ready.store (false);
+    }
     gradeSnapshotBlocks_ = 0;
     gradeSignalPresent_.store (false, std::memory_order_relaxed);
     // Snapshot cadence for THIS block size/rate: the capture thread counts WHOLE blocks, so convert
     // kGradeSnapshotSeconds into blocks for the real block size (>= 1 so a degenerate block can't disable it).
     const int blk = juce::jmax (1, blockLen);
     gradeSnapshotNeeded_ = juce::jmax (1, (int) std::lround (kGradeSnapshotSeconds * rate / (double) blk));
-    responseReadyLen_.store (0);
-    responseReady_.store (false);
 }
 
-void AudioEngine::snapshotGradeRing() noexcept {
-    // Capture-thread: copy the rolling ring into responseBuffer_ in OLDEST->NEWEST order, then publish the
-    // length + ready flag. Two bounded memcpy into pre-allocated storage -> RT-safe (no alloc/lock). When
-    // the run has not yet filled the ring, the valid span is [0, gradeRingFilled_) starting at index 0;
-    // once wrapped, the oldest sample sits at gradeRingWrite_ and the span is the whole ring.
-    const int size = (int) gradeRing_.size();
-    if (size <= 0 || (int) responseBuffer_.size() < size) { responseReadyLen_.store (0); responseReady_.store (true); return; }
-    if (gradeRingFilled_ < (long long) size) {
-        // Not wrapped yet: the valid samples are the first gradeRingFilled_ entries, already in order.
-        const int n = (int) gradeRingFilled_;
-        if (n > 0) std::memcpy (responseBuffer_.data(), gradeRing_.data(), (size_t) n * sizeof (float));
-        responseReadyLen_.store (n);
-    } else {
-        // Wrapped: oldest is at gradeRingWrite_. Copy [write..end) then [0..write).
-        const int tail = size - gradeRingWrite_;
-        if (tail > 0) std::memcpy (responseBuffer_.data(), gradeRing_.data() + gradeRingWrite_, (size_t) tail * sizeof (float));
-        if (gradeRingWrite_ > 0) std::memcpy (responseBuffer_.data() + tail, gradeRing_.data(), (size_t) gradeRingWrite_ * sizeof (float));
-        responseReadyLen_.store (size);
-    }
-    responseReady_.store (true);
-}
-
-void AudioEngine::processGradeDetection (const float* respCh, int numSamples, float blockPeak) noexcept {
-    // Task 4 reference-match detection. Runs ONLY when a reference is loaded (so non-adopters are completely
-    // unaffected). The audio thread does NO matching and NO absolute-level grade trigger — it only buffers the
-    // active-ear response, maintains the COSMETIC activity flag, and periodically publishes a ring snapshot for
-    // the off-thread match poll (which is the sole grade detector).
-    if (! referenceLoaded_.load() || gradeRing_.empty() || respCh == nullptr || numSamples <= 0)
-        return;
-
-    // 1) Continuous rolling-ring write (single writer, capture thread, pre-allocated -> RT-safe). Copy the
-    //    block in, wrapping at the ring end; advance the head + the running fill count. A ~25 s sequence is
-    //    far shorter than the ring, so the most-recent kGradingSeconds always holds the whole sequence.
-    const int size = (int) gradeRing_.size();
-    int idx = gradeRingWrite_;
+void AudioEngine::writeGradeRing (GradeRing& gr, const float* src, int numSamples) noexcept {
+    // Capture-thread: copy `src` into the rolling ring, wrapping at the ring end; advance the head + the
+    // running fill count. Two bounded memcpy into pre-allocated storage -> RT-safe (no alloc/lock). A ~25 s
+    // sequence is far shorter than the ring, so the most-recent kGradingSeconds always holds the whole sequence.
+    const int size = (int) gr.ring.size();
+    if (size <= 0) return;
+    int idx = gr.write;
     const int first = juce::jmin (numSamples, size - idx);
-    if (first > 0) std::memcpy (gradeRing_.data() + idx, respCh, (size_t) first * sizeof (float));
+    if (first > 0) std::memcpy (gr.ring.data() + idx, src, (size_t) first * sizeof (float));
     const int rest = numSamples - first;
-    if (rest > 0) std::memcpy (gradeRing_.data(), respCh + first, (size_t) juce::jmin (rest, size) * sizeof (float));
+    if (rest > 0) std::memcpy (gr.ring.data(), src + first, (size_t) juce::jmin (rest, size) * sizeof (float));
     idx += numSamples;
     while (idx >= size) idx -= size;
-    gradeRingWrite_  = idx;
-    gradeRingFilled_ += numSamples;
+    gr.write  = idx;
+    gr.filled += numSamples;
+}
 
-    // 2) COSMETIC room-floor activity flag (NOT a grade gate). True when this block's peak clears the LOW
-    //    activity floor (~-50 dBFS, just above room noise). Single writer, relaxed; the GUI reads it ONLY for
-    //    the "Sweep in progress..." status. It NO LONGER gates grading (grading triggers on a stable match):
-    //    the EARS mic always reads ambient above this floor, so it never "settles", which is exactly why the
-    //    old silence-gated grade never fired on hardware.
+void AudioEngine::snapshotGradeRing (GradeRing& gr) noexcept {
+    // Capture-thread: copy the rolling ring into its snapshot in OLDEST->NEWEST order, then publish the length
+    // + ready flag. Two bounded memcpy into pre-allocated storage -> RT-safe (no alloc/lock). When the run has
+    // not yet filled the ring, the valid span is [0, gr.filled) starting at index 0; once wrapped, the oldest
+    // sample sits at gr.write and the span is the whole ring.
+    const int size = (int) gr.ring.size();
+    if (size <= 0 || (int) gr.snapshot.size() < size) { gr.readyLen.store (0); gr.ready.store (true); return; }
+    if (gr.filled < (long long) size) {
+        // Not wrapped yet: the valid samples are the first gr.filled entries, already in order.
+        const int n = (int) gr.filled;
+        if (n > 0) std::memcpy (gr.snapshot.data(), gr.ring.data(), (size_t) n * sizeof (float));
+        gr.readyLen.store (n);
+    } else {
+        // Wrapped: oldest is at gr.write. Copy [write..end) then [0..write).
+        const int tail = size - gr.write;
+        if (tail > 0) std::memcpy (gr.snapshot.data(), gr.ring.data() + gr.write, (size_t) tail * sizeof (float));
+        if (gr.write > 0) std::memcpy (gr.snapshot.data() + tail, gr.ring.data(), (size_t) gr.write * sizeof (float));
+        gr.readyLen.store (size);
+    }
+    gr.ready.store (true);
+}
+
+void AudioEngine::processGradeDetectionStereo (const float* left, const float* right,
+                                               int numSamples, float blockPeak) noexcept {
+    // Reference-match detection. Runs ONLY when a reference is loaded (so non-adopters are completely
+    // unaffected). The audio thread does NO matching and NO absolute-level grade trigger — it only buffers BOTH
+    // mic channels (l->ringL, r->ringR, NO active-ear gating), maintains the COSMETIC activity flag, and
+    // periodically publishes a ring snapshot per ear for the off-thread match poll (the sole grade detector).
+    if (! referenceLoaded_.load() || gradeRingL_.ring.empty() || numSamples <= 0)
+        return;
+
+    // 1) Continuous per-mic rolling-ring write (single writer, capture thread, pre-allocated -> RT-safe). Each
+    //    channel goes to its OWN ring: Dirac hard-pans, so ringL holds the L sweep, ringR holds the R sweep.
+    if (left  != nullptr) writeGradeRing (gradeRingL_, left,  numSamples);
+    if (right != nullptr) writeGradeRing (gradeRingR_, right, numSamples);
+
+    // 2) COSMETIC room-floor activity flag (NOT a grade gate). True when this block's peak (max over L/R, as
+    //    before) clears the LOW activity floor (~-50 dBFS, just above room noise). Single writer, relaxed; the
+    //    GUI reads it ONLY for the "Sweep in progress..." status. It does NOT gate grading.
     gradeSignalPresent_.store (blockPeak >= kActivityFloorLinear, std::memory_order_relaxed);
 
-    // 3) Periodic ring snapshot for the off-thread match poll. Publish a fresh window about every
-    //    kGradeSnapshotSeconds, but ONLY after the poll has consumed the prior one (responseReady_ false) so
-    //    the capture thread never writes responseBuffer_ while the poll is reading it. The MATCH (run in the
-    //    poll over this window) is the detector; there is no level trigger here.
+    // 3) Periodic ring snapshot for the off-thread match poll. On a SHARED block-clock, publish a fresh window
+    //    for EACH ear about every kGradeSnapshotSeconds, but ONLY after the poll has consumed THAT ear's prior
+    //    one (its ready flag false) so the capture thread never writes a snapshot the poll is reading. The MATCH
+    //    (run in the poll over this window) is the detector; there is no level trigger here.
     if (++gradeSnapshotBlocks_ >= gradeSnapshotNeeded_) {
         gradeSnapshotBlocks_ = 0;
-        if (! responseReady_.load())
-            snapshotGradeRing();   // sets responseReadyLen_ + responseReady_
+        if (! gradeRingL_.ready.load()) snapshotGradeRing (gradeRingL_);
+        if (! gradeRingR_.ready.load()) snapshotGradeRing (gradeRingR_);
     }
 }
 
-int AudioEngine::copyGradingResponse (float* dst, int maxLen) noexcept {
-    // Worker/message thread: copy the ready response snapshot into the CALLER's buffer (the allocation
-    // lives in the GUI, never here), then clear the ready flag. Returns the number of samples copied, or
-    // 0 when no fresh response is ready. responseBuffer_ is not resized once a run is prepared, so reading
-    // up to responseReadyLen_ (snapshotted at the sweep edge) is safe against the idle capture thread.
-    if (! responseReady_.exchange (false) || dst == nullptr || maxLen <= 0) return 0;
-    const int n = juce::jmin (maxLen, juce::jmin (responseReadyLen_.load(), (int) responseBuffer_.size()));
-    if (n > 0) std::memcpy (dst, responseBuffer_.data(), (size_t) n * sizeof (float));
+int AudioEngine::snapshotGradeRing (int ear, float* dst, int maxLen) noexcept {
+    // Worker/message thread: copy the ready snapshot for `ear` (0=left mic, 1=right mic) into the CALLER's
+    // buffer (the allocation lives in the GUI, never here), then clear that ear's ready flag. Returns the
+    // number of samples copied, or 0 when no fresh response is ready for that ear. The snapshot buffer is not
+    // resized once a run is prepared, so reading up to readyLen (snapshotted by the capture thread) is safe.
+    GradeRing& gr = (ear == 1) ? gradeRingR_ : gradeRingL_;
+    if (! gr.ready.exchange (false) || dst == nullptr || maxLen <= 0) return 0;
+    const int n = juce::jmin (maxLen, juce::jmin (gr.readyLen.load(), (int) gr.snapshot.size()));
+    if (n > 0) std::memcpy (dst, gr.snapshot.data(), (size_t) n * sizeof (float));
     return n;
+}
+
+bool AudioEngine::gradingResponseReady (int ear) const noexcept {
+    return ((ear == 1) ? gradeRingR_ : gradeRingL_).ready.load();
 }
 void AudioEngine::publishReferenceGrade (int refMonState, float irSnrDb, float thdPercent,
                                          bool mismatch, bool lowQuality) noexcept {
@@ -676,11 +689,10 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
         eb::HealthMonitor::blockPeakPerEar (inL, inR, numSamples, spkL, spkR);
         hm.observeSweepPeak (spkL, spkR);
     }
-    // Live grading (Task 4): continuous active-ear ring write + cosmetic activity flag + periodic snapshot
-    // (mirror the capture callback). No absolute level trigger; the off-thread match is the detector. Buffer
-    // the active earcup's channel (graph.activeEar(): 0=L/1=R), so the seam mirrors the real path. Single writer.
-    const float* respCh = (graph.activeEar() == 1) ? inR : inL;
-    processGradeDetection (respCh, numSamples, pk);
+    // Live grading: continuous per-mic ring write (l->ringL, r->ringR, no active-ear gating) + cosmetic
+    // activity flag + periodic snapshot (mirror the capture callback). No absolute level trigger; the
+    // off-thread match is the detector. Single writer.
+    processGradeDetectionStereo (inL, inR, numSamples, pk);
     // SNR: per-sweep verdict at the SweepActive->Complete edge (mirror the capture callback) -- raise
     // LowSnr on a noisy sweep, SNAPSHOT the verdict dB, then scope the per-ear peaks to ONE sweep.
     if (session_.consumeSweepComplete()) {
