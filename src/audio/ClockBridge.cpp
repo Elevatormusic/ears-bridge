@@ -12,7 +12,7 @@ void ClockBridge::prepare (double capRate, double renRate, int /*channels*/, int
     // Worst-case SRC needs ceil(ratio*numOut)+a few guard samples; size generously.
     srcInput.assign ((size_t) capacity, 0.0f);
     src.reset();
-    smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0;
+    smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0; avgRatioTrim_ = 1.0;
     sweepActive_.store (false); emergencyCorrection_.store (false);
     freezeArmed_ = false; frozenRatio_ = captureRate / juce::jmax (1.0, renderRate);
     underrunCount.store (0); overrunCount.store (0); droppedFrameCount.store (0);
@@ -26,7 +26,7 @@ void ClockBridge::reset() {
     fifo.reset();
     std::fill (ring.begin(), ring.end(), 0.0f);
     src.reset();
-    smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0;
+    smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0; avgRatioTrim_ = 1.0;
     sweepActive_.store (false); emergencyCorrection_.store (false);
     freezeArmed_ = false; frozenRatio_ = captureRate / juce::jmax (1.0, renderRate);
     underrunCount.store (0); overrunCount.store (0); droppedFrameCount.store (0);
@@ -79,7 +79,11 @@ int ClockBridge::pullRender (float* out, int numFrames) {
     double ratio;
     if (sweepActive_.load()) {
         // --- D6 FROZEN: hold the converged trim; do NOT advance the PI integrator (no creep). ---
-        if (! freezeArmed_) { frozenRatio_ = nominal * ratioTrim; freezeArmed_ = true; }   // snapshot once
+        // Snapshot the slow AVERAGE of ratioTrim (~= the true clock ratio), NOT the instantaneous PI value.
+        // The PI oscillates around the true ratio by up to ~500 ppm; freezing an instantaneous sample held a
+        // sustained ratio error that accumulated a timing drift across the sweep -> worst at the HF end (a log
+        // sweep ends high), degrading the top of the measurement. The average carries ~no sustained offset.
+        if (! freezeArmed_) { frozenRatio_ = nominal * avgRatioTrim_; freezeArmed_ = true; }   // snapshot once
         ratio = frozenRatio_;
         // RAW fill (not the lagged smoother) for the imminence check: the held ratio can no longer keep
         // the FIFO and a real drop/insert is imminent -> flag NOW. Do NOT steer (that is the creep D6 forbids).
@@ -92,6 +96,7 @@ int ClockBridge::pullRender (float* out, int numFrames) {
         integ = juce::jlimit (-0.02, 0.02, integ + 1.0e-4 * errFill);
         ratioTrim = juce::jlimit (0.97, 1.03, 1.0 + (2.0e-2 * errFill + integ));
         ratio = nominal * ratioTrim;
+        avgRatioTrim_ += 0.001 * (ratioTrim - avgRatioTrim_);   // slow EMA (~10 s) -> the true ratio for the freeze snapshot
     }
     publishedRatio.store (ratio);                             // expose to currentRatio() (lock-free)
 

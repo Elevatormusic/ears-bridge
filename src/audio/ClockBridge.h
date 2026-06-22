@@ -71,6 +71,9 @@ private:
     // PI fill-control state (consumer thread only).
     double smoothedFill = 0.5;          // fraction
     double ratioTrim    = 1.0;          // multiplies nominal ratio
+    double avgRatioTrim_ = 1.0;         // slow EMA of ratioTrim ~= the TRUE clock ratio; the freeze snapshots THIS
+                                        // (not the instantaneous, possibly-off PI value) so the held ratio carries
+                                        // no sustained offset that would accumulate a HF timing error across a sweep
     double integ        = 0.0;
 
     std::atomic<int>    underrunCount { 0 };
