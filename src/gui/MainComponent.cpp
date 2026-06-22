@@ -1333,7 +1333,49 @@ void MainComponent::renderEarStatusLine (int ear, const char* prefix, juce::Labe
         col  = Theme::textDim();
     }
 
-    label.setText (text + snrTail, juce::dontSendNotification);
+    // GAIN-STAGING READOUT (this ear's RAW input sweep peak in dBFS). The grade ring is fed the RAW pre-processing
+    // mic capture, so the published peak IS how hot the EARS float ran for THIS earcup. It is NOT clamped at 0, so a
+    // float that overshot full-scale reads POSITIVE (e.g. +1.6). Only meaningful once this ear graded (the engine
+    // resets it to the -120 floor otherwise), so gate on the two GRADED states. The correction is ONE shared output
+    // level, but reported PER EAR since one earcup can be hotter than the other.
+    //   peak >= 0 dBFS      -> WARN: clip, lower the output by ceil(peak)+3 dB (round up + a 3 dB margin). This WARN
+    //                          OVERRIDES the IR-SNR/THD INFO on this ear's line — a clipped capture is the actionable
+    //                          thing, and it must win over the neutral numbers above.
+    //   peak in [-1, 0)     -> caution: right at clipping, ease the output down (still a warn-coloured override).
+    //   peak in [-12, -1)   -> fine: append a SHORT neutral " (peak -N dBFS)" to the existing verdict line.
+    //   peak < -18 dBFS     -> low: append " (peak -N dBFS - low)" (the existing "level low" guidance owns the warn).
+    //   peak in [-18, -12)  -> nothing appended (a healthy-enough level; keep the line short).
+    const bool graded   = state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedSuspect;
+    const float peakDb   = engine.referenceSweepPeakDb (ear);
+    const bool peakKnown = graded && peakDb > -119.0f;   // a real published peak (not the silent/never-graded floor)
+    juce::String peakTail;   // a short neutral info tail appended to the verdict line (fine / low cases)
+    if (peakKnown) {
+        if (peakDb >= 0.0f) {
+            // Clipped: quantify the overshoot and how much to lower the output. cut = ceil(peak) + 3 dB margin.
+            const int peakWhole = juce::roundToInt (std::ceil (peakDb));   // +1.6 -> 2 (headroom to clear full scale)
+            const int cutDb     = peakWhole + 3;                           // + a 3 dB margin (the spec's ceil(peak)+3)
+            text = p + "clipped +" + juce::String (peakDb, 1) + " dBFS - lower the output ~"
+                 + juce::String (cutDb) + " dB";
+            col  = Theme::warn();
+            tip  = "This earcup's sweep peaked at +" + juce::String (peakDb, 1) + " dBFS - it overshot full scale and "
+                   "clipped. Lower Dirac's output (or the system level) by about " + juce::String (cutDb)
+                 + " dB, then re-measure. The correction is one shared output level; the hotter earcup sets the cut.";
+        } else if (peakDb >= -1.0f) {
+            // Right at clipping: no headroom left. Ease the output down before it overshoots.
+            text = p + "peaked " + juce::String (peakDb, 1) + " dBFS - right at clipping, ease the output down";
+            col  = Theme::warn();
+            tip  = "This earcup's sweep peaked at " + juce::String (peakDb, 1) + " dBFS - right at full scale with no "
+                   "headroom. Ease the output down a few dB so the next sweep can't clip.";
+        } else if (peakDb < -1.0f && peakDb >= -12.0f) {
+            // A healthy peak: a short neutral note so the user sees their headroom, no warn.
+            peakTail = " (peak " + juce::String (peakDb, 0) + " dBFS)";
+        } else if (peakDb < -18.0f) {
+            // Low level: the existing "level low" guidance owns the warn; just note the peak (don't duplicate a warn).
+            peakTail = " (peak " + juce::String (peakDb, 0) + " dBFS - low)";
+        }
+    }
+
+    label.setText (text + snrTail + peakTail, juce::dontSendNotification);
     label.setColour (juce::Label::textColourId, col);
     label.setTooltip (tip);
 }
@@ -1681,7 +1723,11 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
         // snrValid is false when neither a leading nor a trailing noise region is usable -> we must NOT flag.
         const float sweepSnr = g.sweepSnrDb;
         const bool  snrValid = g.sweepSnrValid;
-        juce::MessageManager::callAsync ([safe, ear, state, irSnr, thd, mismatch, lowQ, sweepSnr, snrValid,
+        // Gain-staging readout: the RAW input sample peak over the aligned sweep region (dBFS, NOT clamped at 0 so
+        // an overshoot reads positive). Always published (unlike the SNR, it has no valid/invalid gate — a peak is
+        // always measurable); -120 means a silent span. The status line derives the clip-correction guidance from it.
+        const float sweepPeak = g.sweepPeakDb;
+        juce::MessageManager::callAsync ([safe, ear, state, irSnr, thd, mismatch, lowQ, sweepSnr, snrValid, sweepPeak,
                                           coherence, alignOffset, refLen, rate]() {
             auto* mc = safe.getComponent();
             if (! mc) return;
@@ -1696,6 +1742,10 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
                 if (sweepSnr < eb::kMinSweepSnrDb)
                     mc->engine.raiseLowSnr();
             }
+            // Gain-staging readout: publish THIS ear's RAW input sweep peak (dBFS, clip reads positive) so the
+            // per-ear status line can quantify the overshoot and suggest how much to lower the output. Always
+            // published (no valid/invalid gate); GUIDANCE only — it does NOT invalidate the grade.
+            mc->engine.publishCompletedSweepPeakDb (ear, sweepPeak);
             // Ratification-grade summary: ONE comprehensive line PER EAR per graded sweep so a single real
             // measurement carries everything needed to set the IR-SNR / THD / sweep-SNR / match-coherence cutoffs
             // and flip kIrThresholdsRatified. Info level, message-thread-only, serial-scrubbed by logLine.
@@ -1707,6 +1757,8 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
                 + " IR-SNR=" + juce::String (irSnr, 1) + "dB"
                 + " THD=" + juce::String (thd, 2) + "%"
                 + " sweepSNR=" + (snrValid ? juce::String (sweepSnr, 1) + "dB" : juce::String ("n/a"))
+                + " sweepPeak=" + (sweepPeak >= 0.0f ? juce::String ("+") : juce::String())
+                                + juce::String (sweepPeak, 1) + "dBFS"
                 + " coherence=" + juce::String (coherence, 3)
                 + " alignOffset=" + juce::String (alignOffset)
                 + " refLen=" + juce::String (refLen)

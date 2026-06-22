@@ -324,6 +324,12 @@ void AudioEngine::publishCompletedSweepSnrDb (int ear, float snrDbMin) noexcept 
     refSweepSnrMilliPerEar_[(ear == 1) ? 1 : 0].store ((int) std::lround (snrDbMin * 1000.0f));
     hm.publishCompletedSnrDb (snrDbMin);
 }
+// Gain-staging readout: snapshot THIS ear's RAW input sweep PEAK (dBFS) into the per-ear store so the status line
+// can derive the clip-correction guidance. NOT clamped at 0 — a clipping float reads as a positive dBFS. Lock-free
+// milli store; message/worker-thread caller (the grade math already ran off-thread; this is just the publish step).
+void AudioEngine::publishCompletedSweepPeakDb (int ear, float peakDb) noexcept {
+    refSweepPeakMilliPerEar_[(ear == 1) ? 1 : 0].store ((int) std::lround (peakDb * 1000.0f));
+}
 void AudioEngine::raiseLowSnr() noexcept { hm.raiseLowSnr(); }
 int  AudioEngine::autoActiveEar()          const noexcept { return graph.activeEar(); }
 float AudioEngine::headroomAttenuationDb() const noexcept { return graph.headroomAttenuationDb(); }
@@ -339,6 +345,7 @@ void AudioEngine::publishBaseRefState (RefMonState s) noexcept {
         refIrSnrDbMilliPerEar_[ear].store (0);
         refThdPctMilliPerEar_[ear].store (0);
         refSweepSnrMilliPerEar_[ear].store (0);
+        refSweepPeakMilliPerEar_[ear].store (-120000);   // reset to the silent floor (no stale clip across runs)
         lastMatchCoherMilli_[ear].store (0);
     }
     hm.publishRefGrade ((int) s, 0.0f, 0.0f);   // the combined snapshot the legacy status ladder still reads
@@ -480,6 +487,7 @@ int   AudioEngine::refMonState   (int ear) const noexcept { return refMonStatePe
 float AudioEngine::refIrSnrDb    (int ear) const noexcept { return refIrSnrDbMilliPerEar_[(ear == 1) ? 1 : 0].load() / 1000.0f; }
 float AudioEngine::refThdPercent (int ear) const noexcept { return refThdPctMilliPerEar_[(ear == 1) ? 1 : 0].load() / 1000.0f; }
 float AudioEngine::refSweepSnrDb (int ear) const noexcept { return refSweepSnrMilliPerEar_[(ear == 1) ? 1 : 0].load() / 1000.0f; }
+float AudioEngine::referenceSweepPeakDb (int ear) const noexcept { return refSweepPeakMilliPerEar_[(ear == 1) ? 1 : 0].load() / 1000.0f; }
 
 // ---- Diagnostic getters (Task 2): the *Milli_ fixed-point idiom, lock-free reads ----
 // lastInputBlockPeak() converts the audio-thread store back to float (relaxed; the GUI only needs the

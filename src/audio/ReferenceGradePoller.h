@@ -50,6 +50,13 @@ struct GradePollResult {
     // flag, no divide-by-~0). GUIDANCE only: it never invalidates cleanCapture.
     float sweepSnrDb    = 0.0f;
     bool  sweepSnrValid = false;
+
+    // The SAMPLE PEAK of the RAW per-ear mic input over the aligned sweep region, in dBFS (valid only when
+    // didGrade). The grade ring is fed the RAW pre-processing capture, so this IS the input level that drove the
+    // sweep. It is NOT clamped at 0 dB: a float that overshot full-scale (an EARS-mic float > 1.0) reads as a
+    // POSITIVE dBFS (e.g. +1.6) — that is the whole point, so the GUI can say "clipped +1.6 dBFS, lower the
+    // output". Floored at -120 dB for a silent span (no -inf/NaN). GUIDANCE only: it never invalidates the grade.
+    float sweepPeakDb   = -120.0f;
 };
 
 // The stateful grade-poll decision. Holds the two-poll debounce state; otherwise pure logic. NOT
@@ -102,6 +109,13 @@ public:
     // Sets out.sweepSnrDb / out.sweepSnrValid on the supplied result. Static: touches no debounce state.
     static void computeSweepSnr (const float* window, int winLen, int alignOffset, int refLen,
                                  GradePollResult& out) noexcept;
+
+    // The SAMPLE-PEAK input level over the aligned sweep region, in dBFS. maxAbs = max(|window[i]|) over
+    // [alignOffset, min(alignOffset+refLen, winLen)) (skipping non-finite samples); returns 20*log10(maxAbs).
+    // DELIBERATELY NOT clamped at 0 dB: a clipping float > 1.0 returns a POSITIVE dBFS so the GUI can quantify
+    // the overshoot ("clipped +1.6 dBFS"). Floored at -120 dB for a silent / empty span (no -inf/NaN). Pure +
+    // off-thread (one linear max-scan). The grade ring carries RAW pre-processing capture, so this is the input.
+    static float sweepPeakDb (const float* window, int winLen, int alignOffset, int refLen) noexcept;
 
     // Clear the debounce state (call on Start/Stop — a fresh run starts un-matched + un-graded, so two
     // consecutive matched polls are again required before the first grade).
