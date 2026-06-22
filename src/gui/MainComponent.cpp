@@ -842,7 +842,7 @@ void MainComponent::onStartStop() {
         // Reset the live in-sweep readout state too, so a held level / sweep-active hold / live text from this
         // run can't bleed into the idle line after Stop (matches the Start-path reset).
         liveHeldLDb_ = liveHeldRDb_ = -120.0f;
-        sweepActiveTicks_ = 0; sweepActiveReleaseTicks_ = 0; liveTextTick_ = 0;
+        sweepActiveTicks_ = 0; sweepActiveReleaseTicks_ = 0; liveTextTick_ = 0; liveWasActive_ = false;
         liveHeldPrimary_.clear(); liveHeldSecond_.clear();
         logLine (eb::DiagnosticLog::Level::Info, "Stop: measurement stopped by the user.");
     } else {
@@ -860,7 +860,7 @@ void MainComponent::onStartStop() {
             // debounce, the text cadence, and the held live-line text reset, so a prior run's held level /
             // sweep-active state / live text can't bleed in.
             liveHeldLDb_ = liveHeldRDb_ = -120.0f;
-            sweepActiveTicks_ = 0; sweepActiveReleaseTicks_ = 0; liveTextTick_ = 0;
+            sweepActiveTicks_ = 0; sweepActiveReleaseTicks_ = 0; liveTextTick_ = 0; liveWasActive_ = false;
             liveHeldPrimary_.clear(); liveHeldSecond_.clear();
             // Task 4 match-poll debounce: a fresh run starts un-matched and un-graded, so the first sustained
             // match (two consecutive matched polls) grades exactly once.
@@ -1062,18 +1062,8 @@ MainComponent::LiveReadout MainComponent::updateLiveInputReadout() {
     const float liveL = engine.lastInputPeakLDb();
     const float liveR = engine.lastInputPeakRDb();
 
-    // PEAK-HOLD + DECAY (per channel) so the displayed number reads like a level meter, not jittering digits
-    // (HIG: avoid distracting motion). A new live peak is taken instantly; otherwise the held value decays
-    // slowly toward the live level (~kLiveDecayDbPerTick per 30 Hz tick ~= -12 dB/s). Run every tick so the
-    // decay is smooth even though the TEXT is rebuilt at a lower cadence.
-    auto holdDecay = [] (float held, float live) {
-        if (live >= held) return live;                                  // peak-hold: jump up instantly
-        return juce::jmax (live, held - kLiveDecayDbPerTick);           // decay down slowly toward live
-    };
-    liveHeldLDb_ = holdDecay (liveHeldLDb_, liveL);
-    liveHeldRDb_ = holdDecay (liveHeldRDb_, liveR);
-
-    // Sweep-active debounce off the LIVE (not held) peak with an ATTACK and a RELEASE (Bug B-2):
+    // Sweep-active debounce off the LIVE (not held) peak with an ATTACK and a RELEASE (Bug B-2). Computed FIRST
+    // so we know when a sweep ENGAGES (to reset the running max for it):
     //   attack  - peakMax must hold above the gate ~0.3 s (kSweepActiveHoldTicks) before the live line engages,
     //             so a momentary blip can't flip the status on;
     //   release - once engaged it STAYS engaged for ~1.5 s (kSweepActiveReleaseTicks) after the level last
@@ -1088,6 +1078,20 @@ MainComponent::LiveReadout MainComponent::updateLiveInputReadout() {
                                                        attacked || (aboveGate && sweepActiveReleaseTicks_ > 0),
                                                        kSweepActiveReleaseTicks);
     out.owns = attacked || sweepActiveReleaseTicks_ > 0;   // engaged while attacking-above OR within the hold
+
+    // TRUE PEAK-HOLD over the WHOLE sweep, NOT a fast decay. The earlier ~-12 dB/s decay made the held value
+    // jitter DOWN as the chirp swept across the earcup's frequency response, so at a rolled-off moment one
+    // channel read low + imbalanced and tripped "(R low - reseat the earcup?)" — even while the sweep PEAK was
+    // CLIPPING (a flat contradiction the user hit). Hold the running MAX since this sweep ENGAGED instead: reset
+    // on the idle->active edge, accumulate the max while engaged. The readout's level / clip / L-R imbalance is
+    // then the stable per-channel PEAK of the whole sweep — what's needed to set the level and spot a REAL
+    // imbalance, not the instantaneous frequency-dependent dip.
+    if (out.owns && ! liveWasActive_) liveHeldLDb_ = liveHeldRDb_ = -120.0f;   // new sweep -> fresh running max
+    if (out.owns) {
+        liveHeldLDb_ = juce::jmax (liveHeldLDb_, liveL);
+        liveHeldRDb_ = juce::jmax (liveHeldRDb_, liveR);
+    }
+    liveWasActive_ = out.owns;
 
     if (! out.owns) {
         // Idle: hand the status back to the per-ear verdicts and render the live line immediately on the next
