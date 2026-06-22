@@ -104,6 +104,12 @@ MainComponent::MainComponent() {
     statusLine.setFont (juce::Font (juce::FontOptions (12.0f)));
     statusLine.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (statusLine);
+    // Second status line (Task 5): the RIGHT-ear verdict when both per-ear lines show; blank otherwise.
+    // Same typography/justification as statusLine; the per-branch colour is set in updateStatusLine.
+    statusLineR.setColour (juce::Label::textColourId, Theme::textDim());
+    statusLineR.setFont (juce::Font (juce::FontOptions (12.0f)));
+    statusLineR.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (statusLineR);
 
     // Update link: hidden until a newer release is found; opens the release page in the browser.
     updateLink.setColour (juce::HyperlinkButton::textColourId, Theme::accent());
@@ -1041,6 +1047,12 @@ void MainComponent::applyTitleBarTheme() {
 void MainComponent::updateStatusLine() {
     const auto st = engine.status();
     statusLine.setTooltip ({});   // only the low-SNR branch sets a tooltip; clear it on every other path
+    // Per-Ear Per-Channel Grading (Task 5): the SECOND (RIGHT-ear) line is blank by default. Every
+    // global/hard branch below leaves it blank — a device error, the 48k veto, the Stopped/gate states,
+    // learning, or no per-ear reference all show ONE message on statusLine with NO stale per-ear grade
+    // beneath it. ONLY renderPerEarStatusLines() (Running + a per-ear reference loaded) populates it.
+    statusLineR.setText ({}, juce::dontSendNotification);
+    statusLineR.setTooltip ({});
     if (st == EngineStatus::Running) {
         const auto h = engine.health();
         // An invalidating condition is reported the instant it latches, regardless of phase.
@@ -1100,52 +1112,17 @@ void MainComponent::updateStatusLine() {
             // single short title-bar line naming the off-48k / unreadable endpoint(s).
             statusLine.setText (chainVerdict_.summary, juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::warn());
-        } else if ((engine.referenceLoaded()
-                    || (eb::RefMonState) engine.refMonState() != eb::RefMonState::NotLearned)
-                   && refMonBlocksGreen ((eb::RefMonState) engine.refMonState())
-                   // Fix 2 (review): while the IR-SNR/THD cutoffs are UNRATIFIED, GradedSuspect must NOT
-                   // be treated as a green-blocking WARN — a clean deconvolved ESS reads only ~13 dB and
-                   // would false-warn. Drop it OUT of this warn branch so it falls through to the green
-                   // "captured" branch and shows the numbers as INFO instead. (The pure module still
-                   // computes lowQuality for the ratification campaign; only the presentation is gated.)
-                   && ! (! eb::kIrThresholdsRatified
-                         && (eb::RefMonState) engine.refMonState() == eb::RefMonState::GradedSuspect)) {
-            // Reference-Based Measurement Monitor — surfaced ABOVE the green "captured" branch so a NOT-
-            // graded / mismatched / suspect measurement can NEVER read as a clean green capture. The
-            // grading is GUIDANCE (it never invalidated cleanCapture above); the state machine decides the
-            // wording. GradedClean is the only state that falls THROUGH to the green branch below (it is
-            // NOT green-blocking, so refMonBlocksGreen excludes it here). This branch only engages once the
-            // reference monitor is ENGAGED (a reference loaded, or a verdict already published) — when no
-            // reference was ever learned (the NotLearned default) it falls through to the existing ladder,
-            // so users who never opt into the monitor keep the unchanged green "Sweep captured".
-            const auto state = (eb::RefMonState) engine.refMonState();
-            if (state == eb::RefMonState::ReferenceStale) {
-                statusLine.setText ("Reference doesn't match your sweep - re-learn", juce::dontSendNotification);
-                statusLine.setColour (juce::Label::textColourId, Theme::warn());
-                statusLine.setTooltip ("The deconvolution didn't match the learned reference (the gate "
-                                       "failed). Re-learn the reference in Dirac's Windows Audio mode "
-                                       "(Advanced -> Learn reference), then measure again.");
-            } else if (state == eb::RefMonState::GradedSuspect) {
-                // Reached ONLY when the cutoffs ARE ratified (the unratified case is excluded above and
-                // shows the numbers as info in the green branch). A real below-cutoff measurement: warn.
-                const int snr = juce::roundToInt (engine.refIrSnrDb());
-                const int thd = juce::roundToInt (engine.refThdPercent());
-                statusLine.setText ("Measurement quality low - " + juce::String (snr) + " dB IR-SNR",
-                                    juce::dontSendNotification);
-                statusLine.setColour (juce::Label::textColourId, Theme::warn());
-                statusLine.setTooltip ("Graded against the reference: IR-SNR " + juce::String (snr)
-                                       + " dB, distortion " + juce::String (thd)
-                                       + "%. Below the clean cutoff - quieten the room or raise the level "
-                                         "and re-measure.");
-            } else {
-                // Learned / NotGraded / NotLearned: nothing clean is graded yet. Distinguish a LOADED
-                // reference (don't tell the user to "learn" one they already have) from none at all.
-                statusLine.setText (engine.referenceLoaded()
-                        ? "Reference ready - Start and run a Dirac sweep"
-                        : "Not graded - learn a reference (Advanced)",
-                    juce::dontSendNotification);
-                statusLine.setColour (juce::Label::textColourId, Theme::textDim());
-            }
+        } else if (engine.referenceLoaded()) {
+            // Per-Ear Per-Channel Grading (Task 5): a per-ear reference IS loaded, so the verdict is PER
+            // EARCUP. Dirac hard-pans its sweeps; each earcup is graded against the channel that drove it,
+            // so the two verdicts are independent and we show TWO lines (L on statusLine, R on statusLineR).
+            // This REPLACES both the old single reference-monitor branch and the green "captured (earcup)"
+            // branch for reference adopters — those collapsed everything to ONE line and one earcup. Every
+            // hard/global guard above (invalid capture, Idle/Preflight pre-sweep activity, output-clip,
+            // combined low-SNR, the 48k veto) still has precedence and short-circuits before we get here,
+            // leaving statusLineR blank under them. renderPerEarStatusLines mirrors the unratified-INFO gate
+            // (kIrThresholdsRatified) so a clean ~13 dB ESS shows the numbers as INFO, never a false warn.
+            renderPerEarStatusLines();
         } else if (h.session == SessionPhase::Complete) {
             // Sweep finished clean: an honest sweep-scoped all-clear (no dropouts / clipping seen during
             // the captured sweep), with the OS-resampled caveat when the input ran through OS SRC.
@@ -1287,6 +1264,78 @@ void MainComponent::updateStatusLine() {
             // stays dim. The advisory is INFO, never a veto -> we never recolour to warn/danger here.
         }
     }
+}
+
+// Per-Ear Per-Channel Grading (Task 5): drive BOTH per-ear status lines. Called ONLY from the Running +
+// reference-loaded path in updateStatusLine — the hard/global ladder above it (device error, 48k veto,
+// pre-sweep activity, output-clip, combined low-SNR) has precedence and short-circuits before this. Pure
+// DISPLAY: it reads the ear-indexed engine getters and never touches grading, the match-gate, or thresholds.
+void MainComponent::renderPerEarStatusLines() {
+    renderEarStatusLine (0, "L", statusLine);
+    renderEarStatusLine (1, "R", statusLineR);
+}
+
+// Build ONE ear's status line from THAT ear's published refMonState + IR-SNR / THD / sweep-SNR (ear 0 = L,
+// 1 = R). The wording mirrors the (now-replaced) single-line ladder but scoped to one earcup:
+//   GradedClean   -> ok-colour "L: verified - IR-SNR N dB, THD N% (calibration pending)"   (INFO numbers);
+//   GradedSuspect -> while the cutoffs are UNRATIFIED, the SAME neutral/ok INFO line, NOT a warn (a clean
+//                    deconvolved ESS reads only ~13 dB and would false-warn) — mirrors kIrThresholdsRatified;
+//                    once ratified, a real below-cutoff measurement reads warn "L: low quality - N dB IR-SNR";
+//   ReferenceStale -> warn "L: re-learn the reference" (the match-gate failed -> nothing to grade);
+//   Learned / NotGraded / NotLearned -> dim "L: waiting for the sweep" (this ear hasn't graded yet this run).
+// Per-ear low SNR (this ear's sweep ran too close to the room floor) appends a short " (low SNR)". Lines are
+// kept SHORT for the title-bar width. NO grading logic here — display only.
+void MainComponent::renderEarStatusLine (int ear, const char* prefix, juce::Label& label) {
+    const auto  state    = (eb::RefMonState) engine.refMonState (ear);
+    const juce::String p = juce::String (prefix) + ": ";
+    // This ear's sweep-to-room-noise SNR is published (>0) only when it graded with a valid SNR; flag low
+    // only then — a 0 (not graded / SNR not assessable) must NOT read as "low SNR".
+    const float sweepSnr = engine.refSweepSnrDb (ear);
+    const bool  lowSnr   = sweepSnr > 0.0f && sweepSnr < eb::kMinSweepSnrDb;
+    const juce::String snrTail = lowSnr ? juce::String (" (low SNR)") : juce::String();
+
+    juce::String text;
+    juce::Colour col;
+    juce::String tip;
+
+    if (state == eb::RefMonState::GradedClean) {
+        const int snr = juce::roundToInt (engine.refIrSnrDb    (ear));
+        const int thd = juce::roundToInt (engine.refThdPercent (ear));
+        text = p + "verified - IR-SNR " + juce::String (snr) + " dB, THD "
+             + juce::String (thd) + "% (calibration pending)";
+        col  = Theme::ok();
+    } else if (state == eb::RefMonState::GradedSuspect) {
+        const int snr = juce::roundToInt (engine.refIrSnrDb    (ear));
+        const int thd = juce::roundToInt (engine.refThdPercent (ear));
+        if (! eb::kIrThresholdsRatified) {
+            // Unratified: show the numbers as INFO, NOT a warn (a clean ~13 dB ESS would false-warn). Mirror
+            // the green branch's neutral tone so this never reads as a failed measurement.
+            text = p + "IR-SNR " + juce::String (snr) + " dB, THD "
+                 + juce::String (thd) + "% (calibration pending)";
+            col  = Theme::ok();
+        } else {
+            // Ratified: a real below-cutoff measurement -> warn.
+            text = p + "low quality - " + juce::String (snr) + " dB IR-SNR";
+            col  = Theme::warn();
+            tip  = "Graded against the reference: IR-SNR " + juce::String (snr) + " dB, distortion "
+                 + juce::String (thd) + "%. Below the clean cutoff - quieten the room or raise the level "
+                   "and re-measure.";
+        }
+    } else if (state == eb::RefMonState::ReferenceStale) {
+        // The match-gate failed for this ear -> there is nothing to grade; re-learn the reference.
+        text = p + "re-learn the reference";
+        col  = Theme::warn();
+        tip  = "This earcup's sweep didn't match the learned reference channel (the gate failed). Re-learn "
+               "the reference in Dirac's Windows Audio mode (Advanced -> Learn reference), then measure again.";
+    } else {
+        // Learned / NotGraded / NotLearned: this ear hasn't produced a gradeable sweep yet this run.
+        text = p + "waiting for the sweep";
+        col  = Theme::textDim();
+    }
+
+    label.setText (text + snrTail, juce::dontSendNotification);
+    label.setColour (juce::Label::textColourId, col);
+    label.setTooltip (tip);
 }
 
 // ---- Reference-Based Measurement Monitor (Plan 5): learn + grade ----------------------
@@ -2032,7 +2081,13 @@ void MainComponent::resized() {
             updateLink.setBounds (x.removeFromRight (w).withSizeKeepingCentre (w, 22));
             x.removeFromRight (12);
         }
-        statusLine.setBounds (x.withSizeKeepingCentre (x.getWidth(), 22));
+        // Two stacked per-ear status lines (Task 5). Centre a 36px block (two 18px rows) in the title bar so
+        // the pair sits where the single line used to. statusLine = upper (L), statusLineR = lower (R). When
+        // only one message shows (the hard/global ladder), statusLineR is blanked so the upper line reads as
+        // the single status line did. Same right-justification + width as before, so neither line truncates.
+        auto stack = x.withSizeKeepingCentre (x.getWidth(), 36);
+        statusLine.setBounds  (stack.removeFromTop (18));
+        statusLineR.setBounds (stack.removeFromTop (18));
     }
 
     // --- Version footnote (pinned bottom-right, below both panes) ---

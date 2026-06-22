@@ -182,7 +182,24 @@ private:
     bool               learning_ = false;
     // Transport.
     juce::TextButton startStop { "Start" };
+    // Status note in the title bar. Per-Ear Per-Channel Grading (Task 5): TWO stacked lines. statusLine is
+    // the upper/LEFT line, statusLineR the lower/RIGHT line. For every GLOBAL/hard condition (device error,
+    // the 48k config veto, Stopped/gate states, learning, no per-ear reference) statusLine carries the ONE
+    // message and statusLineR is blanked — a hard error must never show a stale per-ear grade beneath it.
+    // Only when Running with a per-ear reference loaded do BOTH lines render, one verdict per ear ("L:" /
+    // "R:"). renderEarStatusLine() builds one ear's text+colour; renderPerEarStatusLines() drives both.
     juce::Label statusLine;
+    juce::Label statusLineR;
+    // Per-Ear Per-Channel Grading (Task 5): set both per-ear lines from each ear's published state+metrics.
+    // Called only from the Running + reference-loaded path in updateStatusLine (the hard/global ladder above
+    // it has precedence and blanks statusLineR). Pure DISPLAY — reads the ear-indexed engine getters, never
+    // touches grading logic, the match-gate, or the thresholds.
+    void renderPerEarStatusLines();
+    // Build ONE ear's status line (ear 0 = LEFT, 1 = RIGHT) into `label` from THAT ear's refMonState +
+    // IR-SNR/THD/sweepSNR. INFO-not-warn while kIrThresholdsRatified is false (a clean ~13 dB ESS must not
+    // false-warn); mismatch/stale -> warn "re-learn"; ungraded -> dim "waiting for the sweep"; per-ear low
+    // SNR appends "(low SNR)". prefix is "L:" / "R:".
+    void renderEarStatusLine (int ear, const char* prefix, juce::Label& label);
     // Non-modal "Update available" link shown in the title bar when a newer release exists.
     juce::HyperlinkButton updateLink;
     UpdateChecker         updateChecker;
