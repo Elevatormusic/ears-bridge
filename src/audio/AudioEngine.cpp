@@ -54,7 +54,12 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
         e.session_.observeBlockPeak (pk);
         if (e.session_.consumeSweepStarted())
             e.hm.resetMeasurementLatches();
-        e.bridge.setSweepActive (e.session_.sweepActive());   // D6: freeze the SRC ratio during the sweep, release between sweeps
+        // D6: freeze the SRC ratio during the sweep. Driven by a RELIABLE fixed-threshold level gate (FreezeGate),
+        // NOT session_.sweepActive() — an on-device probe proved the session's +12 dB-rise arm never fires on a
+        // gradual Dirac log-sweep (frozen=no x590), so the ratio free-ran and crept ~1100 ppm, smearing the
+        // sweep's phase. The gate holds ONE ratio across both earcup sweeps (long release bridges the L<->R gap),
+        // then releases so the PI loop re-centers. session_ still scopes the SNR numerator below (unchanged).
+        e.bridge.setSweepActive (eb::freezeGateStep (e.freezeGate_, pk, numSamples, e.captureRate_));
 
         e.hm.analyzeInputBlock (l, r, numSamples);             // detection (raw input): peak, run, NaN
         // SNR numerator: while the sweep is active, latch this block's per-ear peak (the per-ear max
@@ -636,6 +641,7 @@ bool AudioEngine::start (juce::String& errorOut) {
     // output is silent. (The render callback still reports a NOMINAL ratio on the aggregate path so the
     // aggregate's internal drift-correction wobble can't trip the drift latch.)
     bridge.prepare (capRate, renRate, 1, cap);
+    captureRate_ = capRate;   // the freeze-gate release is timed in samples at the capture rate
     hm.prepare (inputId.model, cap, capRate / juce::jmax (1.0, renRate));   // reset + size + NOMINAL ratio (drift detection)
     // hm.prepare() reset the published refMon state back to its NotLearned default -- which would OVERWRITE
     // the honest Learned that setReferenceLoaded() published when the user learned a reference, making the
@@ -664,7 +670,8 @@ bool AudioEngine::start (juce::String& errorOut) {
     // prime depth and the setpoint can never drift apart. It absorbs the startup gap and starts fill
     // AT target (no drift).
     bridge.primeToTarget();
-    bridge.setSweepActive (false);   // D6: a fresh run starts free-running; the session arms the sweep later
+    bridge.setSweepActive (false);   // D6: a fresh run starts free-running; the freeze gate arms on the first sweep
+    freezeGate_ = {};                 // reset the level gate so a prior run's hold can't carry into this one
     // Reset the per-callback diff baselines: bridge.reset() zeroed the bridge's under/over/dropped
     // counters, so the callbacks' "last seen" baselines must also return to 0 or a stale-high value
     // from a prior run would suppress detection (underruns) / inject a spurious negative delta
@@ -785,7 +792,9 @@ void AudioEngine::prepareCallbacksForTest (double sampleRate, int block, int fif
     allocateResponseBuffer (sampleRate, block);        // Plan 5: pre-allocate the live-grading ring + size the trigger
     bridge.reset();
     bridge.primeToTarget();                            // mirror start(): prime to the PI setpoint, no startup underrun
-    bridge.setSweepActive (false);                     // D6: a fresh run free-runs; the session arms the sweep later
+    bridge.setSweepActive (false);                     // D6: a fresh run free-runs; the freeze gate arms on the sweep
+    freezeGate_ = {};                                  // reset the level gate (mirror start())
+    captureRate_ = sampleRate;                          // keep the gate's release timing correct on this path too
 
     // Reset the per-callback diff baselines exactly as start() does (a stale value would suppress
     // underrun detection or inject a spurious dropped-frame delta on the first driven block).

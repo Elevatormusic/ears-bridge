@@ -2,6 +2,7 @@
 #include <juce_audio_devices/juce_audio_devices.h>
 #include "audio/DeviceManager.h"
 #include "audio/ClockBridge.h"
+#include "audio/FreezeGate.h"
 #include "audio/HealthMonitor.h"
 #include "audio/MeasurementSession.h"
 #include "audio/EngineTypes.h"
@@ -274,6 +275,13 @@ public:
     void processCaptureBlockForTest (const float* inL, const float* inR,
                                      float* outMono, int numSamples);
     bool bridgeSweepFrozen() const noexcept { return bridge.sweepActive(); }   // D6 test accessor
+    // Phase-precision DIAGNOSTIC accessors (GUI-thread reads of the atomically-published bridge stats). Used by
+    // the temporary CLOCKBRIDGE probe in the timer to measure the real clock drift + whether the D6 freeze
+    // actually engages on a real Dirac sweep, before any change to the real-time bridge.
+    double bridgeRatio()     const noexcept { return bridge.currentRatio(); }
+    double bridgeFifoFill()  const noexcept { return bridge.fifoFill(); }
+    int    bridgeUnderruns() const noexcept { return bridge.underruns(); }
+    int    bridgeOverruns()  const noexcept { return bridge.overruns(); }
     // SNR review-fix test accessors: the per-ear sweep-peak numerators (so a test can assert the stale
     // left peak does NOT leak into the second earcup's sweep after resetSweepPeaks() runs per Complete).
     float maxSweepPeakLForTest() const noexcept { return hm.maxSweepPeakL(); }
@@ -311,6 +319,8 @@ private:
     ClockBridge        bridge;
     HealthMonitor      hm;
     MeasurementSession session_;   // D5: re-armable level-threshold sweep-window state machine
+    eb::FreezeGateState freezeGate_;   // capture-thread-only: drives the D6 ratio freeze from a reliable level gate
+    double             captureRate_ = 48000.0;   // set at start(); the freeze-gate release is timed in samples
 
     LrVerify      lrVerify_;        // Plan 4 (pure state machine; touched only on the verify audio thread)
     std::atomic<int>  verifyResult_ { (int) LrResult::Pending };  // lock-free verdict snapshot for the GUI
