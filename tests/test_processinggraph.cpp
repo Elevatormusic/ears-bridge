@@ -135,24 +135,30 @@ TEST_CASE("ProcessingGraph AutoPerEar follows whichever earcup is sounding (Dira
 
     g.setCombineMode (eb::CombineMode::AutoPerEar);
 
+    // Drive each phase for 40 blocks, NOT 15. The active-ear SWITCH crossfades the OUTPUT, and that crossfade
+    // lags the (faster) active-ear decision; 15 blocks left the switch cases settling right at the assertion
+    // tolerance, so a 1-2 block per-run timing wobble could catch the output mid-fade (a macOS CI flake read
+    // out=0.23 vs the settled 0.30). Ample settling makes out[N-1] deterministically the full active-ear level.
+    const int settle = 40;
+
     // LEFT earcup sweeping (L loud, R silent): output is the LEFT mic, NOT the silent right.
-    for (int i = 0; i < 15; ++i) g.process (loud.data(), silent.data(), out.data(), N);
+    for (int i = 0; i < settle; ++i) g.process (loud.data(), silent.data(), out.data(), N);
     INFO ("left active out=" << out[N-1]);
     CHECK_THAT (out[N-1], WithinAbs (0.3f, 1e-2));
     CHECK (g.activeEar() == 0);   // published for the GUI "capturing Left/Right" indicator
 
     // Inter-sweep silence: the held choice should not flip.
-    for (int i = 0; i < 15; ++i) g.process (silent.data(), silent.data(), out.data(), N);
+    for (int i = 0; i < settle; ++i) g.process (silent.data(), silent.data(), out.data(), N);
     CHECK (g.activeEar() == 0);   // held through the gap, not reset to a default
 
     // RIGHT earcup sweeping: it switches to the RIGHT mic.
-    for (int i = 0; i < 15; ++i) g.process (silent.data(), loud.data(), out.data(), N);
+    for (int i = 0; i < settle; ++i) g.process (silent.data(), loud.data(), out.data(), N);
     INFO ("right active out=" << out[N-1]);
     CHECK_THAT (out[N-1], WithinAbs (0.3f, 1e-2));
     CHECK (g.activeEar() == 1);
 
     // And follows back to LEFT for the validation repeat.
-    for (int i = 0; i < 15; ++i) g.process (loud.data(), silent.data(), out.data(), N);
+    for (int i = 0; i < settle; ++i) g.process (loud.data(), silent.data(), out.data(), N);
     CHECK_THAT (out[N-1], WithinAbs (0.3f, 1e-2));
     CHECK (g.activeEar() == 0);
 }
