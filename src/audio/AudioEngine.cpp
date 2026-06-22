@@ -69,6 +69,10 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
         if (e.session_.sweepActive())
             e.hm.observeSweepPeak (spkL, spkR);   // spkL/spkR computed unconditionally above
 
+        // Noise-floor primitive: feed the per-ear block PEAK every block (the tracker self-gates on quiet
+        // windows). Unconditional -- the floor baselines from the pre-sweep silence + refines in the gaps.
+        e.hm.observeFloorBlock (spkL, spkR, (double) numSamples / juce::jmax (1.0, e.captureRate_));
+
         // Live grading (Plan 5): BOTH mic channels are buffered CONTINUOUSLY (NOT gated on level, NOT gated on
         // the active ear) and the grade fires from the off-thread reference MATCH. Dirac hard-pans the sweeps,
         // so the LEFT mic carries the L sweep and the RIGHT mic the R sweep; we feed l->ringL and r->ringR every
@@ -86,9 +90,13 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
         // the consumeSweepComplete edge still also scopes the ClockBridge freeze + the per-ear clip peaks below.
         // RT-safe: evaluateSnr is a few log10 + compares + atomic reads, raiseLowSnr is one atomic OR.
         if (e.session_.consumeSweepComplete()) {
-            const auto v = eb::evaluateSnr (e.session_.armNoiseFloor(),
+            // Use the MEASURED floor as the SNR denominator once trusted AND above the digital-silence floor
+            // (a 0.0 measured floor -- pure synthetic silence -- makes peak/floor degenerate); else the arm.
+            const bool useFloor = e.hm.floorValid() && e.hm.measuredFloorLinear (0) > 1.0e-5f;
+            const float snrFloor = useFloor ? e.hm.measuredFloorLinear (0) : e.session_.armNoiseFloor();
+            const auto v = eb::evaluateSnr (snrFloor,
                                             e.hm.maxSweepPeakL(), e.hm.maxSweepPeakR(),
-                                            e.session_.completedFloorStable());
+                                            e.session_.completedFloorStable() || useFloor);
             if (v.lowSnr) e.hm.raiseLowSnr();
             // SNR review fix: SNAPSHOT this sweep's verdict dB so the GUI names the exact dB that raised
             // the flag (it must NOT recompute from the live atomics, which the next sweep mutates), THEN
@@ -323,6 +331,8 @@ float AudioEngine::completedSweepSnrDb()   const noexcept {
     // matches the dB that raised the flag. Pure lock-free read.
     return hm.completedSnrDb();
 }
+float AudioEngine::noiseFloorDbAveraged() const noexcept { return hm.measuredFloorDbAveraged(); }
+bool  AudioEngine::noiseFloorValid()      const noexcept { return hm.floorValid(); }
 // Match-window sweep-SNR fix: forward the GUI-worker-computed sweep SNR to HealthMonitor. publishCompletedSweepSnrDb
 // reuses publishCompletedSnrDb so completedSweepSnrDb()/the status line read the SAME snapshot; raiseLowSnr raises the
 // GUIDANCE LowSnr flag (not invalidating). Both are message/worker-thread callers writing lock-free atomics off the
@@ -751,6 +761,7 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
     hm.analyzeInputBlock (inL, inR, numSamples);                      // same analysis as the capture callback
     if (session_.sweepActive())                                      // SNR numerator (mirror the capture callback)
         hm.observeSweepPeak (spkL, spkR);                            // spkL/spkR computed unconditionally above
+    hm.observeFloorBlock (spkL, spkR, (double) numSamples / juce::jmax (1.0, activeRate));  // activeRate: set by both seams
     // Live grading: continuous per-mic ring write (l->ringL, r->ringR, no active-ear gating) + cosmetic
     // activity flag + periodic snapshot (mirror the capture callback). No absolute level trigger; the
     // off-thread match is the detector. Single writer.
@@ -758,9 +769,11 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
     // SNR: per-sweep verdict at the SweepActive->Complete edge (mirror the capture callback) -- raise
     // LowSnr on a noisy sweep, SNAPSHOT the verdict dB, then scope the per-ear peaks to ONE sweep.
     if (session_.consumeSweepComplete()) {
-        const auto v = eb::evaluateSnr (session_.armNoiseFloor(),
+        const bool useFloor = hm.floorValid() && hm.measuredFloorLinear (0) > 1.0e-5f;
+        const float snrFloor = useFloor ? hm.measuredFloorLinear (0) : session_.armNoiseFloor();
+        const auto v = eb::evaluateSnr (snrFloor,
                                         hm.maxSweepPeakL(), hm.maxSweepPeakR(),
-                                        session_.completedFloorStable());
+                                        session_.completedFloorStable() || useFloor);
         if (v.lowSnr) hm.raiseLowSnr();
         hm.publishCompletedSnrDb (v.snrDbMin);
         hm.resetSweepPeaks();
