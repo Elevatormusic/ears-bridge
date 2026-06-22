@@ -102,10 +102,14 @@ Headphone amp  ──►  Headphones on the EARS jig  ──►  EARS Bridge  �
 
 **Everything in that chain must run at 48 kHz.** A single device left at 44.1 kHz silently resamples and quietly ruins the measurement — Windows gives no warning. EARS Bridge watches for it, but it's easiest to set every device to 48 kHz up front (Windows: Sound settings → each device → Properties → Advanced; macOS: Audio MIDI Setup).
 
-### 1. One-time setup
+### 1. One-time setup — turn off exclusive mode, everywhere, at 48 kHz
+
+The whole path has to run in plain **Windows Audio** (shared / non-exclusive) at **48 kHz** — that's what lets EARS Bridge sit in the middle, and what lets it capture Dirac's reference sweep. Set this up once:
 
 1. Install EARS Bridge, VB-CABLE, Dirac Live, and the Dirac Live Processor (see [Install](#install)). Reboot if VB-CABLE asks.
-2. **Put the cable in shared mode.** Dirac opens its recording device in *exclusive* mode by default, which the standard VB-CABLE doesn't offer — so the first time you connect them, Dirac fails with error **600007**. EARS Bridge fixes this in one click: when it detects the standard cable it shows a **"Set Dirac to shared mode"** button. Click it, then fully quit and relaunch Dirac. (Manual alternatives are in [troubleshooting](#tips-and-troubleshooting).)
+2. **Dirac's output** → the **Windows Audio** driver. Not *Windows Audio Low Latency*, not *ASIO*, not an exclusive mode — only plain Windows Audio. (EARS Bridge tells you if it's wrong when you learn the reference.)
+3. **The virtual cable** → turn off exclusive control: `mmsys.cpl` → **Recording** → "CABLE Output (VB-Audio Virtual Cable)" → **Properties → Advanced** → untick *"Allow applications to take exclusive control of this device."* EARS Bridge's **"Set Dirac to shared mode"** button does the matching fix on Dirac's recording side — click it, then fully quit and relaunch Dirac. (This is what clears Dirac's error **600007**; see [troubleshooting](#tips-and-troubleshooting).)
+4. **Set every device to 48 kHz** — Sound settings → each device → **Properties → Advanced**. A single device left at 44.1 kHz silently resamples and ruins the measurement, with no warning.
 
 ### 2. Set up EARS Bridge
 
@@ -113,27 +117,32 @@ Headphone amp  ──►  Headphones on the EARS jig  ──►  EARS Bridge  �
 2. It **auto-selects** a connected EARS as the input and a standard VB-CABLE as the output — just confirm both are chosen. (If the EARS isn't listed at all, it isn't enumerating on USB — try a known-good **data** cable and a direct port.)
 3. Load each ear's **HPN** calibration file into the matching **Left** and **Right** slot (see [Calibration files](#calibration-files)).
 4. Leave the combine mode on **Auto per-ear (Dirac)** — it's the only mode that works with a Dirac measurement (see [Combine modes](#combine-modes)).
-5. Set the sample rate to **48000** and press **Start**. Leave EARS Bridge running for the whole session.
+5. Set the sample rate to **48000**.
 
 ### 3. Point Dirac Live at the chain
 
 Open the standalone **Dirac Live** app:
 
-1. **Output device** → your **headphone amp or DAC** (whatever the headphones plug into). This is what plays the sweep. Confirm it's at **48 kHz**.
+1. **Output device** → your **headphone amp or DAC** (whatever the headphones plug into), on the **Windows Audio** driver from step 1. This is what plays the sweep. Confirm it's at **48 kHz**.
 2. **Recording device** (the microphone) → the cable's capture side, **"CABLE Output (VB-Audio Virtual Cable)"** (macOS: **BlackHole 2ch**). Also at **48 kHz**. This is EARS Bridge's feed standing in as the mic.
 
-### 4. Measure
+### 4. Learn the reference
 
-1. **Set the level.** At Dirac's volume/level step, turn your **headphone amp up** until EARS Bridge's **L and R input meters sit in the green band** — comfortably loud, matched, and not clipping. The absolute loudness doesn't matter; *too quiet* is what produces a thin, "tin-can" result (see [Setting the level](#setting-the-level-gain-staging)). Set it once and leave it for both ears.
-2. **Run the sweeps.** Start Dirac's measurement. It's one routine that sweeps the left channel, then the right — there's no separate per-earcup step. EARS Bridge follows automatically and feeds whichever earcup is sounding; a live indicator shows which ear is being captured.
-3. **Reposition between positions.** When Dirac asks for several measurement positions, **gently scoot the headphones around on the jig between each one** — shift them up, down, forward, back. The point is to capture the slight seating differences you'd get every time you actually put the headphones on, so the correction is robust to how they sit rather than perfect for one exact placement. (For speakers you move the mic around the room; for headphones you move the headphones around the jig.)
-4. **Keep the health line clean.** A capture has to read clean for the whole sweep. EARS Bridge flags clipping, dropouts, a too-quiet level, or a wrong sample rate instead of letting a bad capture pass as good (see [Health indicators](#health-indicators)). If a position isn't clean, redo it.
+EARS Bridge needs to hear Dirac's own sweep once so it can grade every later measurement against it. In EARS Bridge click **Learn reference**, set Dirac Live's **output level to −12.5 dB**, and let Dirac play its sweep — EARS Bridge captures it through Windows' loopback. (That loopback is why Dirac's output must be plain **Windows Audio**, not exclusive; EARS Bridge tells you if it's in the wrong mode.) Do this with the bridge **stopped** — it can't learn while it's running.
 
-### 5. Build the filter
+### 5. Measure
+
+1. **Press Start** in EARS Bridge, then run Dirac's measurement.
+2. **Check the level on the first real sweep.** EARS Bridge's **L and R meters** should sit in the **green band**, matched and not clipping. If it flags **clipping**, turn Dirac's output **down** from −12.5 dB; if it's too quiet, raise it. The absolute loudness doesn't matter — clipping or too-quiet is what hurts (see [Setting the level](#setting-the-level-gain-staging)).
+3. **The sweeps.** Dirac's measurement is one routine that sweeps left, then right — no separate per-earcup step. EARS Bridge follows automatically; a live indicator shows which ear is being captured.
+4. **Reposition between positions.** When Dirac asks for several measurement positions, **gently scoot the headphones around on the jig between each one** — up, down, forward, back — to capture the slight seating differences you'd get every time you put the headphones on, so the correction is robust to how they sit. (For speakers you move the mic around the room; for headphones you move the headphones around the jig.)
+5. **Keep the health line clean.** Clipping, dropouts, a too-quiet level, or a wrong sample rate are flagged so a bad capture never passes as good (see [Health indicators](#health-indicators)). Redo any position that isn't clean.
+
+### 6. Build the filter
 
 Back in Dirac Live, once both ears are measured across your positions, design the correction the way you normally would — choose or draw your target curve and let Dirac compute the filter — and **export** it so the Processor can load it.
 
-### 6. Apply it and listen
+### 7. Apply it and listen
 
 Open the **Dirac Live Processor**, load the filter you just exported, and route your PC's audio through it to your headphones. That's the finished correction running live — your headphones EQ'd to your target. To redo it later (new headphones, a different target), repeat from step 2.
 
@@ -166,7 +175,7 @@ So there is really just one thing to set: **the level the meters show.**
 - **Dirac's output / playback level** — keep it healthy, not buried. Together with the amp it drives the meters; *raise* it (don't cut it) if a measurement is too quiet.
 - **Dirac's microphone / input gain** — set so Dirac's own recording meter sits in its target window with headroom above the noise floor. It is an SNR trim, not a loudness control; don't crank it to silence a low-signal warning — if the level is already good, the problem is the capture path, not mic gain.
 - **EARS Bridge Output trim** (under Advanced) — leave at 0 dB. It can only *attenuate*, so it cannot rescue a too-quiet measurement — that fix is upstream at the amp. Use it only to pull a hot or Sum-mode feed down.
-- **Exclusive vs shared mode** is a separate axis entirely — it decides whether devices *connect*, not how loud they are. Leave every device in **shared** mode (see [troubleshooting](#tips-and-troubleshooting)).
+- **Exclusive mode** is a separate axis entirely — it decides whether devices *connect*, not how loud they are. **Turn off exclusive mode on every device in the path** — Dirac's output, the virtual cable, and Dirac's recording device (this is what some guides call "shared mode"). See [one-time setup](#1-one-time-setup--turn-off-exclusive-mode-everywhere-at-48-khz) and [troubleshooting](#tips-and-troubleshooting).
 
 **If the SNR stays only moderate even at a healthy level,** the limit is usually your **amp's own hiss** — tube amps especially — not your gain. Turning the mic gain up won't help: it lifts the hiss along with the signal. A quieter amp is the only real lever, and a moderate SNR still makes a perfectly usable correction — don't chase the number by driving the level into clipping.
 
