@@ -125,6 +125,8 @@ public:
     bool reachedGoodLevel() const noexcept { return reachedGood_.load(); }
 
     // ---- Measured noise floor (replaces the fixed armFloor SNR denominator once valid) ----
+    // The engine re-baselines the floor automatically via prepare() -> reset() -> floor_.reset(); this
+    // explicit entry is for direct/unit setup of a bare HealthMonitor (the engine does not call it).
     void prepareNoiseFloor (double sampleRate, int maxBlock) noexcept { floor_.prepare (sampleRate, maxBlock); }
     // Fed every capture block with the per-ear block PEAK (the engine already computes spkL/spkR). The
     // tracker self-gates on quiet windows, so this is called unconditionally. RT-safe.

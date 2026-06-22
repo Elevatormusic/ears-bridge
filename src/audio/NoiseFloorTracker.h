@@ -14,7 +14,9 @@ constexpr double kFloorSustainSec = 0.5;   // sustained quiet before a window fo
 // std::sort over <=kWindowCap elements at fold time (infrequent, no allocation).
 class NoiseFloorTracker {
 public:
-    void prepare (double sampleRate, int /*maxBlock*/) noexcept { sr_ = sampleRate; reset(); }
+    // Rate-agnostic: per-fold timing comes from the blockSeconds arg to observeBlock, so the tracker
+    // stores neither the rate nor maxBlock -- prepare just resets. (Params kept for call-site symmetry.)
+    void prepare (double /*sampleRate*/, int /*maxBlock*/) noexcept { reset(); }
 
     void reset() noexcept {
         for (int c = 0; c < 2; ++c) {
@@ -59,7 +61,6 @@ public:
 
 private:
     static constexpr int kWindowCap = 256;   // ~2.5 s of 10 ms blocks; bounds the per-fold sort
-    double sr_ = 48000.0;
     std::array<std::array<float, kWindowCap>, 2> win_ {};
     int    count_[2] { 0, 0 };   // valid entries in the ring (capped at kWindowCap)
     int    head_[2]  { 0, 0 };   // ring write cursor
