@@ -17,9 +17,12 @@ TEST_CASE("robustLowFloor: median rejects a transient spike in an otherwise-quie
     CHECK (eb::robustLowFloor (nullptr, 0) == 0.0f);
 }
 
-TEST_CASE("blendFloor: slow EMA toward the candidate; uninitialized adopts it") {
+TEST_CASE("blendFloor: adopts when uninitialized; fast DOWN, slow UP (resists upward ratchet)") {
     CHECK_THAT (eb::blendFloor (0.0f, 0.004f, eb::kFloorBlendAlpha), WithinAbs (0.004f, 1e-6)); // 0 -> adopt
-    CHECK_THAT (eb::blendFloor (0.004f, 0.006f, 0.5f), WithinAbs (0.005f, 1e-6));               // halfway
+    CHECK_THAT (eb::blendFloor (0.006f, 0.004f, 0.5f), WithinAbs (0.005f, 1e-6));   // DOWN: halfway at alpha
+    const float up = eb::blendFloor (0.004f, 0.006f, 0.5f);                        // UP: throttled by kFloorRiseFactor
+    CHECK (up > 0.004f);
+    CHECK (up < 0.0042f);   // 0.004 + 0.5*0.1*(0.002) = 0.0041, NOT 0.005
 }
 
 TEST_CASE("averageFloorDb: power-mean of two channel floors, in dB") {
@@ -63,4 +66,31 @@ TEST_CASE("NoiseFloorTracker: averaged readout is the power-mean of the two chan
     eb::NoiseFloorTracker t; t.prepare (48000.0, 480);
     feed (t, 0.0100f, 0.0100f, 60);
     CHECK_THAT (t.floorDbAveraged(), WithinAbs (-40.0f, 0.5f));
+}
+
+// ---- regression: the two MAJORs the fresh-context verifier caught ----
+
+TEST_CASE("NoiseFloorTracker: a noisier (sub-ceiling) gap does NOT ratchet the floor up much") {
+    eb::NoiseFloorTracker t; t.prepare (48000.0, 480);
+    feed (t, 0.0030f, 0.0030f, 60);            // baseline ~0.003
+    REQUIRE (t.valid());
+    const float base = t.floorLinear (0);
+    feed (t, 0.0100f, 0.0100f, 60);            // noisier but still below the 0.0631 ceiling
+    CHECK (t.floorLinear (0) < base + 0.0010f);  // up-throttled: rose <1e-3, NOT toward 0.010
+}
+
+TEST_CASE("NoiseFloorTracker: folds correctly when the sustain window exceeds the ring cap (small buffers)") {
+    eb::NoiseFloorTracker t; t.prepare (48000.0, 64);
+    // 64 samples @ 48k ~ 1.33 ms -> ~376 quiet blocks for 0.5 s, exceeding the 256-entry ring
+    for (int i = 0; i < 400; ++i) t.observeBlock (0.0040f, 0.0040f, 64.0 / 48000.0);
+    CHECK (t.valid());
+    CHECK_THAT (t.floorLinear (0), WithinAbs (0.0040f, 5e-4));   // constant level -> ring median exact
+}
+
+TEST_CASE("NoiseFloorTracker: an all-NaN run never produces a NaN floor and never folds") {
+    eb::NoiseFloorTracker t; t.prepare (48000.0, 480);
+    for (int i = 0; i < 60; ++i) t.observeBlock (std::nanf (""), std::nanf (""), 0.010);
+    CHECK_FALSE (t.valid());                       // non-finite is never quiet -> never folds
+    CHECK (std::isfinite (t.floorLinear (0)));     // stays the finite reset value
+    CHECK (t.floorLinear (0) == 0.0f);
 }

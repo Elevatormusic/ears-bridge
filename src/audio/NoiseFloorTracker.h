@@ -18,7 +18,7 @@ public:
 
     void reset() noexcept {
         for (int c = 0; c < 2; ++c) {
-            count_[c] = 0; quietSec_[c] = 0.0;
+            count_[c] = 0; head_[c] = 0; quietSec_[c] = 0.0;
             floorMilli_[c].store (0);
         }
         valid_.store (false);
@@ -28,7 +28,13 @@ public:
         const float lv[2] = { levelL, levelR };
         for (int c = 0; c < 2; ++c) {
             if (isQuietBlock (lv[c], kQuietCeilingLin)) {
-                if (count_[c] < kWindowCap) win_[c][(size_t) count_[c]++] = lv[c];
+                // Ring write: keep the MOST-RECENT kWindowCap quiet blocks, so a sustain window longer
+                // than the cap (small ASIO buffers -> >256 blocks per 0.5 s) folds the recent samples,
+                // not a stale first-N latch. count_ counts valid entries (capped); they occupy [0..count_)
+                // until the first fold resets head_, so robustLowFloor(data, count_) always sorts them.
+                win_[c][(size_t) head_[c]] = lv[c];
+                head_[c] = (head_[c] + 1) % kWindowCap;
+                if (count_[c] < kWindowCap) ++count_[c];
                 quietSec_[c] += blockSeconds;
                 if (quietSec_[c] >= kFloorSustainSec) {
                     const float est  = robustLowFloor (win_[c].data(), count_[c]);
@@ -36,10 +42,10 @@ public:
                     const float next = blendFloor (cur, est, kFloorBlendAlpha);
                     floorMilli_[c].store ((int) std::lround (next * 1.0e6f));
                     valid_.store (true);
-                    count_[c] = 0; quietSec_[c] = 0.0;   // start the next window fresh
+                    count_[c] = 0; head_[c] = 0; quietSec_[c] = 0.0;   // start the next window fresh
                 }
             } else {
-                count_[c] = 0; quietSec_[c] = 0.0;       // a loud / non-quiet block breaks the run
+                count_[c] = 0; head_[c] = 0; quietSec_[c] = 0.0;       // a non-quiet block breaks the run
             }
         }
     }
@@ -55,7 +61,8 @@ private:
     static constexpr int kWindowCap = 256;   // ~2.5 s of 10 ms blocks; bounds the per-fold sort
     double sr_ = 48000.0;
     std::array<std::array<float, kWindowCap>, 2> win_ {};
-    int    count_[2] { 0, 0 };
+    int    count_[2] { 0, 0 };   // valid entries in the ring (capped at kWindowCap)
+    int    head_[2]  { 0, 0 };   // ring write cursor
     double quietSec_[2] { 0.0, 0.0 };
     std::atomic<int>  floorMilli_[2] { {0}, {0} };   // floor * 1e6 (linear), atomic-published
     std::atomic<bool> valid_ { false };
