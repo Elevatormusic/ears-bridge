@@ -829,6 +829,9 @@ void MainComponent::onStartStop() {
         logLine (eb::DiagnosticLog::Level::Debug, "Button: Stop clicked");
         engine.stop();
         startStop.setButtonText ("Start");
+        // Task 4: re-arm BOTH per-ear grade pollers on Stop so a stale match from this run can't carry into
+        // the next (each ear again needs two consecutive matched polls before its first grade).
+        gradePollTick_ = 0; gradePollerL_.reset(); gradePollerR_.reset();
         logLine (eb::DiagnosticLog::Level::Info, "Stop: measurement stopped by the user.");
     } else {
         logLine (eb::DiagnosticLog::Level::Debug, "Button: Start clicked");
@@ -843,7 +846,7 @@ void MainComponent::onStartStop() {
             inputClipHold_ = 0; silentTicks_ = 0; lowLevelTicks_ = 0; lowSnrTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
             // Task 4 match-poll debounce: a fresh run starts un-matched and un-graded, so the first sustained
             // match (two consecutive matched polls) grades exactly once.
-            gradePollTick_ = 0; gradePoller_.reset(); lastListenTextLogged_.clear();
+            gradePollTick_ = 0; gradePollerL_.reset(); gradePollerR_.reset(); lastListenTextLogged_.clear();
             // Surface a silent format downgrade: WASAPI shared mode can grant a different rate/depth
             // than the user selected, which would otherwise resample with no indication. The split:
             // genuine cautions (a real resample, an unverifiable rail) go on preflightLabel (yellow);
@@ -1326,8 +1329,7 @@ void MainComponent::loadStoredReference() {
             loadedReferenceR_.assign (fR, fR + nR);
             loadedReferenceRateL_ = 48000.0;         // v1: 48k-only (the capture asserted 48k)
             loadedReferenceRateR_ = 48000.0;
-            // TRANSITIONAL alias: keep the existing single-ring grade path (pollReferenceGrade) running on
-            // ref_L until Task 4 splits it into two per-ear pollers. loadedReference_/Rate_ track the LEFT.
+            // LEFT alias kept ONLY for the startup duration log (the grade path uses loadedReferenceL_/R_ directly).
             loadedReference_     = loadedReferenceL_;
             loadedReferenceRate_ = loadedReferenceRateL_;
             referenceStatePath_  = refL.getFullPathName();
@@ -1492,9 +1494,9 @@ void MainComponent::onLearnReference() {
                 auto refOld = dir.getChildFile ("reference.f32");
                 if (refOld.existsAsFile()) refOld.deleteFile();   // obsolete mono ref -> remove on a successful re-learn
                 mc->referenceStatePath_ = refL.getFullPathName();
-                // Hold both channels IN MEMORY so the per-ear grade path (Task 4) can deconvolve each earcup
-                // against its own reference. TRANSITIONAL alias: keep the single-ring grade (pollReferenceGrade)
-                // running on ref_L until Task 4 splits it — loadedReference_/Rate_ track the LEFT.
+                // Hold both channels IN MEMORY so the per-ear grade path (gradeOneEar) can deconvolve each
+                // earcup against its own reference channel (ref_L / ref_R). loadedReference_/Rate_ is a LEFT
+                // alias kept ONLY for the startup duration log — the grade reads loadedReferenceL_/R_ directly.
                 mc->loadedReferenceL_     = samplesL;   // copy (moved-in but still readable here)
                 mc->loadedReferenceR_     = samplesR;
                 mc->loadedReferenceRateL_ = capRate;
@@ -1512,124 +1514,129 @@ void MainComponent::onLearnReference() {
 }
 
 void MainComponent::pollReferenceGrade() {
-    // Task 4 reference-MATCH grading (replaces the broken absolute-level arm). The capture thread buffers the
-    // active-ear mic response CONTINUOUSLY into the engine's rolling ring and publishes a fresh window snapshot
-    // every ~0.5 s. Here, throttled to ~2 s, we copy that window out and run eb::referenceMatches over it —
-    // the MATCH is the DETECTOR, so a measurement at ANY level (incl. the low ~-25 dBFS the old -24 dBFS arm
-    // could never fire on) is detected. There is NO absolute level gate anywhere in this grade path.
+    // Per-Ear Per-Channel Grading (Task 4). The capture thread buffers BOTH mic channels CONTINUOUSLY into two
+    // independent rolling rings (left mic -> ringL, right mic -> ringR) and publishes a fresh window snapshot per
+    // ear every ~0.5 s. Here, throttled to ~2 s, we grade EACH earcup against the channel that drove it — Dirac
+    // hard-pans its sweeps, so ringL is graded vs ref_L and ringR vs ref_R via TWO independent pollers. The MATCH
+    // is the DETECTOR (any level), and there is NO absolute level gate anywhere in this grade path.
     //
-    // Grade on a STABLE MATCH, not on silence. The old trigger waited for the signal to SETTLE
-    // (! gradeSignalPresent) before grading — but the EARS mic always registers ambient above the cosmetic
-    // activity floor, so the run never "settled" and the grade was gated forever even at coherence 0.99
-    // (on-device: coherence climbed 0.72->0.99 the whole measurement, no grade ever fired). Instead we grade
-    // when the match is CONFIRMED across two consecutive (throttled ~2 s) polls: a single matched poll can
-    // catch a sweep still rising into the ring, but two in a row means the full sweep has landed in the 28 s
-    // window. gradedThisSession_ is the one-grade-per-match debounce, cleared when the match drops so a fresh
-    // sweep can grade again. gradeSignalPresent() is now used ONLY for the cosmetic "Sweep in progress..."
-    // status (see updateStatusLine) — it NO LONGER gates grading.
-    if (loadedReference_.empty() || ! engine.referenceLoaded()) return;   // nothing to grade against
+    // Grade on a STABLE MATCH, not on silence (the old "wait for the signal to settle" trigger never fired because
+    // the EARS mic always registers ambient): each ear's poller grades only when ITS match holds across two
+    // consecutive ~2 s polls. The two ears are FULLY INDEPENDENT — one earcup can grade GradedClean while the
+    // other (a silent ring, or no sweep on that channel) never matches and stays at its base Learned state. A
+    // silent ear can NEVER publish a clean grade or raise LowSnr: decide() returns not-matched on silence, so
+    // gradeOneEar publishes nothing for it (the honesty gate).
+    if (! engine.referenceLoaded()) return;                              // nothing learned -> nothing to grade against
+    if (loadedReferenceL_.empty() && loadedReferenceR_.empty()) return;  // no per-ear reference present
 
-    if (gradeInFlight_.load()) return;                                    // a prior grade is still running
-    if (++gradePollTick_ < kGradePollTicks) return;                      // ~2 s match-poll throttle
+    // ONE in-flight guard for BOTH ears: we grade them SEQUENTIALLY within a tick (L first, then R) so their
+    // off-thread jobs never race over the shared firPool/publish; whichever ear is ready + stable posts a job and
+    // claims the guard, the other ear grades on the next eligible tick. Both ears eventually grade because their
+    // ring snapshots keep republishing and each poller holds its own debounce until ITS sweep lands.
+    if (gradeInFlight_.load()) return;                                   // a prior grade (either ear) is still running
+    if (++gradePollTick_ < kGradePollTicks) return;                     // ~2 s match-poll throttle (shared clock)
     gradePollTick_ = 0;
 
-    if (! engine.gradingResponseReady()) return;                         // no fresh ring window published yet
+    // Grade LEFT vs ref_L; if it did not post a job this tick, grade RIGHT vs ref_R. Each is independent — both
+    // run their own snapshot/rate-guard/decide/grade/publish. (If L posts a job, R grades next eligible tick; the
+    // guard serializes them so only one off-thread grade is in flight at a time.)
+    if (gradeOneEar (0, gradePollerL_, loadedReferenceL_, loadedReferenceRateL_)) return;
+    gradeOneEar (1, gradePollerR_, loadedReferenceR_, loadedReferenceRateR_);
+}
 
-    // Copy the FULL rolling-ring WINDOW out of the engine into our own buffer (the allocation lives here, not
-    // the engine). The window is leading silence + the sweep somewhere inside it; the worker aligns the
-    // reference inside it via cross-correlation, so we must NOT truncate it to the reference length.
+bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
+                                 const std::vector<float>& reference, double referenceRate) {
+    // Grade ONE earcup against ITS OWN reference channel. Returns true iff it posted an off-thread grade job this
+    // tick (so the caller can serialize the two ears under the single gradeInFlight_ guard). ear 0 = LEFT, 1 = RIGHT.
+    if (reference.empty()) return false;                                 // that ear has no reference -> skip it
+    if (! engine.gradingResponseReady (ear)) return false;              // no fresh ring window published for this ear
+
+    const char* earTag = (ear == 1) ? "R" : "L";
+
+    // Copy the FULL rolling-ring WINDOW for THIS ear out of the engine into our own buffer (the allocation lives
+    // here, not the engine). The window is leading silence/room noise + the sweep somewhere inside it; the worker
+    // aligns the reference inside it via cross-correlation, so we must NOT truncate it to the reference length.
     std::vector<float> window ((size_t) juce::jmax (1, (int) std::lround (engine.gradingResponseRate() * 28.0)), 0.0f);
-    const int got = engine.copyGradingResponse (window.data(), (int) window.size());
-    if (got <= 0) return;
+    const int got = engine.snapshotGradeRing (ear, window.data(), (int) window.size());
+    if (got <= 0) return false;
     window.resize ((size_t) got);
 
-    // Fix 2 (honesty): guard the capture rate against the reference rate. A measurement at 44.1k matched against a
-    // 48k reference is the SAME chirp stretched ~8.8% — it can still clear the provisional match cutoffs and read
-    // green "verified", which is a lie (a rate-mismatched measurement is invalid). Both rates are known here, so
-    // if they differ by more than a tiny tolerance, publish ReferenceStale and do NOT grade. The match-gate runs
-    // FIRST conceptually, but a wrong sample rate invalidates the comparison itself, so it is gated here up front.
+    // Fix 2 (honesty): guard the capture rate against THIS ear's reference rate. A measurement at 44.1k matched
+    // against a 48k reference is the SAME chirp stretched ~8.8% — it can still clear the provisional match cutoffs
+    // and read green "verified", which is a lie. Both rates are known here, so if they differ by more than a tiny
+    // tolerance, publish ReferenceStale FOR THIS EAR and do NOT grade it.
     const double respRate = engine.gradingResponseRate();
-    if (loadedReferenceRate_ > 0.0 && respRate > 0.0
-        && std::abs (respRate - loadedReferenceRate_) > 1.0) {
-        gradePoller_.reset();   // a rate change is not a sweep -> re-arm so a later same-rate sweep can grade
-        engine.setLastMatchCoherence (0.0f);
-        engine.publishReferenceGrade ((int) eb::RefMonState::ReferenceStale, 0.0f, 0.0f, /*mismatch*/ true, false);
-        return;
+    if (referenceRate > 0.0 && respRate > 0.0 && std::abs (respRate - referenceRate) > 1.0) {
+        poller.reset();   // a rate change is not a sweep -> re-arm so a later same-rate sweep can grade
+        engine.setLastMatchCoherence (ear, 0.0f);
+        engine.publishReferenceGrade (ear, (int) eb::RefMonState::ReferenceStale, 0.0f, 0.0f, /*mismatch*/ true, false);
+        return false;
     }
 
-    // The DECISION (match-gate FIRST + the two-consecutive-matched-polls STABLE debounce) lives in the
-    // headless eb::ReferenceGradePoller so it can be self-tested without the GUI/hardware. decide() runs the
-    // cross-correlation match on the message thread (cheap) and returns whether THIS poll should grade; it does
-    // NOT run the heavy deconvolve+grade (that stays off-thread below). Publish the coherence either way so the
-    // diagnostic log + the RefMon-change line see it (the match-gate ran here, FIRST, before any quality).
-    const auto d = gradePoller_.decide (window.data(), (int) window.size(),
-                                        loadedReference_.data(), (int) loadedReference_.size());
-    engine.setLastMatchCoherence (d.coherence);
-    // DIAGNOSTIC (grade-not-firing investigation): log EVERY decide() poll's full match-gate internals so we can
-    // see WHY a high-coherence real sweep may not grade. matched needs BOTH gates (coherence>=min AND mainLobe>=
-    // kMainLobeMin); a real headphone response is the sweep convolved with the earcup IR, which spreads the
-    // cross-correlation energy and can drop mainLobe below the synthetic-tuned min. The matched SEQUENCE across
-    // polls also shows whether the two-consecutive-matched stable debounce is being met. DEBUG; msg-thread-only.
+    // The DECISION (match-gate FIRST + the two-consecutive-matched-polls STABLE debounce) lives in the headless
+    // eb::ReferenceGradePoller so it can be self-tested without the GUI/hardware. decide() runs the cross-
+    // correlation match on the message thread (cheap) and returns whether THIS poll should grade; it does NOT run
+    // the heavy deconvolve+grade (that stays off-thread below). Publish THIS ear's coherence either way so the
+    // diagnostic log + the RefMon-change line see it. A SILENT ring fails the gate here -> matched=false ->
+    // didGrade=false -> nothing published (the silent-ear honesty gate).
+    const auto d = poller.decide (window.data(), (int) window.size(),
+                                  reference.data(), (int) reference.size());
+    engine.setLastMatchCoherence (ear, d.coherence);
     logLine (eb::DiagnosticLog::Level::Debug,
-             juce::String ("GradePoll: coher=") + juce::String (d.coherence, 3)
+             juce::String ("GradePoll: ear=") + earTag
+             + " coher=" + juce::String (d.coherence, 3)
              + " mainLobe=" + juce::String (d.mainLobe, 3)
              + " matched=" + juce::String (d.matched ? "1" : "0")
              + " align=" + juce::String (d.alignOffset)
              + " winLen=" + juce::String ((int) window.size())
              + " didGrade=" + juce::String (d.didGrade ? "1" : "0"));
-    if (! d.didGrade) return;                                             // need a stable, not-yet-graded match
+    if (! d.didGrade) return false;                                      // need a stable, not-yet-graded match
 
     gradeInFlight_.store (true);
     juce::Component::SafePointer<MainComponent> safe (this);
-    auto reference = loadedReference_;                 // copy for the worker (message-thread snapshot)
-    const double rate = loadedReferenceRate_;
-    const int refLen = (int) reference.size();
+    auto refCopy = reference;                          // copy for the worker (message-thread snapshot)
+    const double rate = referenceRate;
+    const int refLen = (int) refCopy.size();
     const int alignOffset = d.alignOffset;             // where decide() located the sweep (Fix 1: reuse it)
     const float coherence = d.coherence;               // match-gate coherence — captured for the ratification log line
-    firPool->addJob ([safe, reference = std::move (reference), window = std::move (window), rate, refLen, alignOffset, coherence]() mutable {
-        // OFFLINE on the worker: the pure grade for the window decide() said to grade. gradeWindow() grades at
-        // the SAME offset decide() located via cross-correlation (Fix 1 — the gate and the grade agree on where
-        // the sweep is; no second xcorr), re-runs the match-gate FIRST there, then quality — a non-sweep segment
-        // fails the gate -> stale.
+    firPool->addJob ([safe, ear, refCopy = std::move (refCopy), window = std::move (window), rate, refLen, alignOffset, coherence]() mutable {
+        // OFFLINE on the worker: the pure grade for the window decide() said to grade. gradeWindow() grades at the
+        // SAME offset decide() located (Fix 1 — gate and grade agree; no second xcorr), re-runs the match-gate
+        // FIRST there, then quality — a non-sweep segment fails the gate -> stale.
         const auto g = eb::ReferenceGradePoller::gradeWindow (window.data(), (int) window.size(),
-                                                              reference.data(), refLen, rate, alignOffset);
-        const int   state   = (int) g.state;
+                                                              refCopy.data(), refLen, rate, alignOffset);
+        const int   state    = (int) g.state;
         const bool  mismatch = g.mismatch;
-        const float irSnr   = g.irSnrDb;
-        const float thd     = g.thdPercent;
-        const bool  lowQ    = g.lowQuality;
+        const float irSnr    = g.irSnrDb;
+        const float thd      = g.thdPercent;
+        const bool  lowQ     = g.lowQuality;
         // Sweep-to-room-noise SNR computed from the SAME match-aligned window (off-thread, here on the worker).
-        // This REPLACES the dead level-arm SNR check (AudioEngine::evaluateSnr scoped to MeasurementSession's
-        // rise-ratio arm, which never fires on a gradual Dirac log-sweep): a genuinely low-SNR sweep is now
-        // flagged whenever it GRADES. snrValid is false when neither a leading nor a trailing noise region is
-        // usable -> we must NOT flag (no false positive / no div-by-0).
-        const float sweepSnr  = g.sweepSnrDb;
-        const bool  snrValid  = g.sweepSnrValid;
-        juce::MessageManager::callAsync ([safe, state, irSnr, thd, mismatch, lowQ, sweepSnr, snrValid,
+        // snrValid is false when neither a leading nor a trailing noise region is usable -> we must NOT flag.
+        const float sweepSnr = g.sweepSnrDb;
+        const bool  snrValid = g.sweepSnrValid;
+        juce::MessageManager::callAsync ([safe, ear, state, irSnr, thd, mismatch, lowQ, sweepSnr, snrValid,
                                           coherence, alignOffset, refLen, rate]() {
             auto* mc = safe.getComponent();
             if (! mc) return;
-            // Publish the verdict snapshot (the SNR lesson: trio published together); raise the guidance
+            // Publish THIS ear's verdict snapshot (the SNR lesson: trio published together); raise the guidance
             // flag matching the verdict. NEITHER flag invalidates the capture (they are guidance only).
-            mc->engine.publishReferenceGrade (state, irSnr, thd, mismatch, lowQ);
-            // Match-window sweep-SNR fix: publish the sweep SNR (so the existing "Low SNR: sweep only N dB over
-            // the room noise" status line names the exact dB) and raise the GUIDANCE LowSnr flag when the sweep
-            // ran too close to the room floor. Match-gate already passed (we only get here when g.didGrade), so a
-            // non-sweep never reaches this. GUIDANCE only: LowSnr is not in the invalidating mask, so cleanCapture
-            // is untouched. kMinSweepSnrDb stays PROVISIONAL (on-device ratification).
+            mc->engine.publishReferenceGrade (ear, state, irSnr, thd, mismatch, lowQ);
+            // Match-window sweep-SNR fix: publish THIS ear's sweep SNR and raise the GUIDANCE LowSnr flag when the
+            // sweep ran too close to the room floor. Match-gate already passed (we only get here when g.didGrade),
+            // so a non-sweep / silent ear never reaches this -> a silent ear NEVER raises LowSnr. GUIDANCE only.
             if (snrValid) {
-                mc->engine.publishCompletedSweepSnrDb (sweepSnr);
+                mc->engine.publishCompletedSweepSnrDb (ear, sweepSnr);
                 if (sweepSnr < eb::kMinSweepSnrDb)
                     mc->engine.raiseLowSnr();
             }
-            // Ratification-grade summary: ONE comprehensive line per graded sweep so a single real measurement
-            // carries everything needed to set the IR-SNR / THD / sweep-SNR / match-coherence cutoffs and flip
-            // kIrThresholdsRatified. Info level (always-on in release), message-thread-only, serial-scrubbed by
-            // logLine. config48k correlates the grade with the live 48k-everywhere chain verdict; activeEar names
-            // which earcup Auto-per-ear was capturing at grade time (today's single-ring grade covers one ear).
-            const int ear = mc->engine.autoActiveEar();
+            // Ratification-grade summary: ONE comprehensive line PER EAR per graded sweep so a single real
+            // measurement carries everything needed to set the IR-SNR / THD / sweep-SNR / match-coherence cutoffs
+            // and flip kIrThresholdsRatified. Info level, message-thread-only, serial-scrubbed by logLine.
+            // config48k correlates the grade with the live 48k-everywhere chain verdict; ear names which earcup
+            // this verdict is for (each ear graded against its OWN reference channel).
             mc->logLine (eb::DiagnosticLog::Level::Info,
-                juce::String ("GRADE COMPLETE: state=") + refMonStateName (state)
+                juce::String ("GRADE COMPLETE: ear=") + (ear == 1 ? "R" : "L")
+                + " state=" + refMonStateName (state)
                 + " IR-SNR=" + juce::String (irSnr, 1) + "dB"
                 + " THD=" + juce::String (thd, 2) + "%"
                 + " sweepSNR=" + (snrValid ? juce::String (sweepSnr, 1) + "dB" : juce::String ("n/a"))
@@ -1638,11 +1645,11 @@ void MainComponent::pollReferenceGrade() {
                 + " refLen=" + juce::String (refLen)
                 + " rate=" + juce::String (rate, 0)
                 + " config48k=" + juce::String (mc->chainVerdict_.checked
-                                                ? (mc->chainVerdict_.all48k ? "yes" : "NO") : "unknown")
-                + " activeEar=" + juce::String (ear == 0 ? "L" : ear == 1 ? "R" : "-"));
+                                                ? (mc->chainVerdict_.all48k ? "yes" : "NO") : "unknown"));
             mc->gradeInFlight_.store (false);
         });
     });
+    return true;
 }
 
 void MainComponent::updateActiveEarIndicator (bool silent) {

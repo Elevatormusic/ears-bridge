@@ -10,6 +10,7 @@
 #include "audio/LrVerify.h"
 #include "audio/AsioFallback.h"
 #include "audio/CalibrationGeneration.h"
+#include "audio/RefMonitor.h"   // Plan 5: RefMonState (the per-ear published-grade enum)
 #include "platform/AggregateDevice_mac.h"   // portable header; macOS-gated .mm (Plan 4 Task 7)
 #include "cal/CalFile.h"
 #include "cal/FirDesigner.h"
@@ -111,7 +112,11 @@ public:
     // dead level arm — and forwards the result here. publishCompletedSweepSnrDb snapshots the dB so the existing
     // "Low SNR: sweep only N dB over the room noise" status line names it; raiseLowSnr raises the GUIDANCE LowSnr
     // flag (NOT invalidating). Both forward to HealthMonitor; message/worker-thread callers (lock-free stores).
-    void publishCompletedSweepSnrDb (float snrDbMin) noexcept;
+    // Per-ear (ear 0 = LEFT, 1 = RIGHT): snapshots THAT ear's completed-sweep SNR into the per-ear store
+    // (so the per-ear status line names the exact dB) AND forwards the value to HealthMonitor's combined
+    // completedSnrDb()/the existing status line. The no-arg overload publishes the LEFT ear.
+    void publishCompletedSweepSnrDb (int ear, float snrDbMin) noexcept;
+    void publishCompletedSweepSnrDb (float snrDbMin) noexcept { publishCompletedSweepSnrDb (0, snrDbMin); }
     void raiseLowSnr() noexcept;
 
     // AutoPerEar: which earcup is currently being fed to Dirac (0 = left, 1 = right). Drives the GUI
@@ -171,17 +176,33 @@ public:
     // Farina offsets. Single getter — the input rate is the same for both mics.
     double gradingResponseRate() const noexcept { return grantedRate_; }
 
-    // Publish a reference-grade verdict (message/worker thread, OFFLINE). Snapshots the workflow state +
-    // IR-SNR + THD TOGETHER (the SNR lesson) and raises the matching GUIDANCE flag (RefMismatch when the
-    // match-gate failed, RefLowQuality when matched-but-suspect) — neither invalidates the capture.
-    void publishReferenceGrade (int refMonState, float irSnrDb, float thdPercent,
+    // Publish a reference-grade verdict for ONE EAR (message/worker thread, OFFLINE). ear 0 = LEFT, 1 = RIGHT.
+    // Each earcup is graded against the channel that actually drove it (Dirac hard-pans), so the two verdicts
+    // are FULLY INDEPENDENT: a silent/ungraded ear keeps its base (Learned/NotGraded) state and NEVER reads as
+    // a clean grade. Snapshots that ear's workflow state + IR-SNR + THD + sweepSNR + coherence TOGETHER (the
+    // SNR lesson) and raises that ear's GUIDANCE flag (RefMismatch when the match-gate failed, RefLowQuality
+    // when matched-but-suspect). Neither flag invalidates the capture. The combined HealthMonitor flags
+    // (RefMismatch/RefLowQuality, which feed health()/cleanCapture) are also raised so a bad ear still warns;
+    // Task 5 wires the per-ear DISPLAY off the ear-indexed getters below.
+    void publishReferenceGrade (int ear, int refMonState, float irSnrDb, float thdPercent,
                                 bool mismatch, bool lowQuality) noexcept;
+    // Convenience overload: publishes the LEFT ear (ear 0). Kept so the legacy single-grade callers (and the
+    // base-state publishes in start/stop/setReferenceLoaded that already set BOTH ears) stay terse.
+    void publishReferenceGrade (int refMonState, float irSnrDb, float thdPercent,
+                                bool mismatch, bool lowQuality) noexcept
+    { publishReferenceGrade (0, refMonState, irSnrDb, thdPercent, mismatch, lowQuality); }
 
-    // The published reference-grade snapshot (lock-free; the int-milli idiom). refMonState() is
-    // RefMonState's underlying int (0 == NotLearned). 0 / 0.0 until a grade is published.
-    int   refMonState()   const noexcept;
-    float refIrSnrDb()    const noexcept;
-    float refThdPercent() const noexcept;
+    // The published per-ear reference-grade snapshot (lock-free; the int-milli idiom). ear 0 = LEFT, 1 = RIGHT.
+    // refMonState(ear) is RefMonState's underlying int (0 == NotLearned). 0 / 0.0 until a grade is published for
+    // that ear. The no-arg overloads return the LEFT ear (ear 0) so existing single-state readers (the heartbeat,
+    // the status ladder until Task 5) compile unchanged and reflect ear 0.
+    int   refMonState   (int ear) const noexcept;
+    float refIrSnrDb    (int ear) const noexcept;
+    float refThdPercent (int ear) const noexcept;
+    float refSweepSnrDb (int ear) const noexcept;   // per-ear sweep-to-room-noise SNR of that ear's last grade
+    int   refMonState()   const noexcept { return refMonState   (0); }
+    float refIrSnrDb()    const noexcept { return refIrSnrDb    (0); }
+    float refThdPercent() const noexcept { return refThdPercent (0); }
 
     // ---- Diagnostic getters (read-only, lock-free) — the GUI logs the detector's internals ----
     // lastInputBlockPeak(): the most recent capture block's input peak (max |sample| over L/R), stored on
@@ -189,9 +210,14 @@ public:
     // from the last referenceMatches poll — Task 4's match poll writes it via setLastMatchCoherence(); it
     // reads 0 until then. Both back std::atomic<int> milli stores; the getters are pure lock-free reads.
     float lastInputBlockPeak() const noexcept;
-    float lastMatchCoherence() const noexcept;
-    // Writer for the match coherence (Task 4's poll, message/worker thread). Single writer; lock-free.
-    void  setLastMatchCoherence (float coherence) noexcept;
+    // Per-ear match coherence (ear 0 = LEFT, 1 = RIGHT): the coherence from that ear's last referenceMatches
+    // poll. The no-arg overload returns the LEFT ear (ear 0) so the heartbeat/RefMon-change line compile
+    // unchanged. 0 until Task 4's poll calls setLastMatchCoherence(ear, ...) for that ear.
+    float lastMatchCoherence (int ear) const noexcept;
+    float lastMatchCoherence() const noexcept { return lastMatchCoherence (0); }
+    // Writer for the per-ear match coherence (Task 4's poll, message/worker thread). Single writer; lock-free.
+    void  setLastMatchCoherence (int ear, float coherence) noexcept;
+    void  setLastMatchCoherence (float coherence) noexcept { setLastMatchCoherence (0, coherence); }
 
     // Device-loss handling. A capture/render device that the OS removes mid-run (unplug, sleep,
     // gain-DIP re-enumerate) calls audioDeviceStopped(); we latch deviceDied_ there (never tear down
@@ -254,6 +280,10 @@ public:
 private:
     void rescanDevices();
     static int nextPow2 (int v);
+    // Publish a base refMon state (Learned/NotLearned/NotGraded) to BOTH per-ear stores + the combined
+    // HealthMonitor snapshot, clearing each ear's per-ear metrics. Used by start/stop/setReferenceLoaded so
+    // both ears start from an honest base before any per-ear grade lands. Message-thread caller.
+    void publishBaseRefState (RefMonState s) noexcept;
     // Pre-allocate (message thread) the live-grading ring + snapshot buffers for kGradingSeconds at `rate`,
     // size the trailing-silence trigger for `blockLen`, and clear the capture-thread trigger scratch.
     // Called from prepare/start; NEVER from the audio thread.
@@ -299,7 +329,21 @@ private:
     // getter reflects the live input level. lastMatchCoherMilli_ is written by Task 4's match poll (single
     // writer, message/worker thread); 0 until then. Both are lock-free reads on the GUI side.
     std::atomic<int> lastInputPeakMilli_  { 0 };
-    std::atomic<int> lastMatchCoherMilli_ { 0 };
+    // Per-ear match coherence (index 0 = LEFT, 1 = RIGHT). Each is the *Milli_ idiom (coherence*1000 in an
+    // atomic<int>); Task 4's two pollers each write their own ear; the GUI reads them lock-free. 0 until graded.
+    std::atomic<int> lastMatchCoherMilli_[2] { { 0 }, { 0 } };
+
+    // Per-ear PUBLISHED reference grade (Per-Ear Per-Channel Grading, Task 4). Dirac hard-pans its sweeps, so
+    // each earcup is graded against its OWN reference channel and publishes an INDEPENDENT verdict here. The
+    // engine holds the state TWICE (index 0 = LEFT, 1 = RIGHT) so a silent/ungraded ear can stay Learned while
+    // the other reads GradedClean — neither can mask the other. Each is the lock-free *Milli_ idiom (the
+    // mismatch/lowQ flags as plain atomic<bool>); the worker writes one ear's quad TOGETHER (state first), the
+    // GUI reads the quad lock-free. The COMBINED guidance (RefMismatch/RefLowQuality/LowSnr) still flows through
+    // HealthMonitor so health()/cleanCapture see a bad ear; these per-ear stores feed the per-ear display (Task 5).
+    std::atomic<int>  refMonStatePerEar_[2]     { { (int) 0 }, { (int) 0 } };   // RefMonState::NotLearned == 0
+    std::atomic<int>  refIrSnrDbMilliPerEar_[2] { { 0 }, { 0 } };
+    std::atomic<int>  refThdPctMilliPerEar_[2]  { { 0 }, { 0 } };
+    std::atomic<int>  refSweepSnrMilliPerEar_[2]{ { 0 }, { 0 } };
 
     // Live grading buffers (reference-match detection). TWO independent rings — gradeRingL_ (left mic) and
     // gradeRingR_ (right mic) — each with its own snapshot buffer + ready flag. ALL are PRE-ALLOCATED in

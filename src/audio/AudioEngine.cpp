@@ -96,7 +96,7 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
             // Here we ONLY publish the honest NotGraded state when NO reference is loaded, so a non-adopter run
             // still reads "not graded - learn a reference" and never green. RT-safe single store.
             if (! e.referenceLoaded_.load())
-                e.hm.publishRefGrade ((int) RefMonState::NotGraded, 0.0f, 0.0f);
+                e.publishBaseRefState (RefMonState::NotGraded);   // both ears; RT-safe relaxed stores
         }
         // In-measurement only: an invalidating flag (clip/NaN/dropout/drift) latches the session Invalid
         // so the GUI's phase-gated wording matches cleanCapture(). Single-writer: the capture thread is
@@ -318,19 +318,39 @@ float AudioEngine::completedSweepSnrDb()   const noexcept {
 // reuses publishCompletedSnrDb so completedSweepSnrDb()/the status line read the SAME snapshot; raiseLowSnr raises the
 // GUIDANCE LowSnr flag (not invalidating). Both are message/worker-thread callers writing lock-free atomics off the
 // audio thread (the grade math already ran on the worker; this is just the publish step).
-void AudioEngine::publishCompletedSweepSnrDb (float snrDbMin) noexcept { hm.publishCompletedSnrDb (snrDbMin); }
+void AudioEngine::publishCompletedSweepSnrDb (int ear, float snrDbMin) noexcept {
+    // Snapshot THIS ear's sweep-SNR into the per-ear store (the per-ear status line names the dB) AND forward
+    // to HealthMonitor's combined completedSnrDb()/the existing single status line. Lock-free milli store.
+    refSweepSnrMilliPerEar_[(ear == 1) ? 1 : 0].store ((int) std::lround (snrDbMin * 1000.0f));
+    hm.publishCompletedSnrDb (snrDbMin);
+}
 void AudioEngine::raiseLowSnr() noexcept { hm.raiseLowSnr(); }
 int  AudioEngine::autoActiveEar()          const noexcept { return graph.activeEar(); }
 float AudioEngine::headroomAttenuationDb() const noexcept { return graph.headroomAttenuationDb(); }
 
 // ---- Reference-Based Measurement Monitor (Plan 5) ----
+// Publish a BASE refMon state (Learned / NotLearned / NotGraded) to BOTH per-ear stores AND the combined
+// HealthMonitor snapshot, clearing each ear's per-ear metrics. The base state is published for both ears so a
+// later per-ear grade overwrites only the ear that graded; the other ear keeps the honest base state. Resets
+// each ear's coherence/sweep-SNR so a stale value never outlives a learn/start/stop. Lock-free atomic stores.
+void AudioEngine::publishBaseRefState (RefMonState s) noexcept {
+    for (int ear = 0; ear < 2; ++ear) {
+        refMonStatePerEar_[ear].store ((int) s);
+        refIrSnrDbMilliPerEar_[ear].store (0);
+        refThdPctMilliPerEar_[ear].store (0);
+        refSweepSnrMilliPerEar_[ear].store (0);
+        lastMatchCoherMilli_[ear].store (0);
+    }
+    hm.publishRefGrade ((int) s, 0.0f, 0.0f);   // the combined snapshot the legacy status ladder still reads
+}
+
 void AudioEngine::setReferenceLoaded (bool loaded) noexcept {
     referenceLoaded_.store (loaded);
-    // Publish an HONEST state immediately so the GUI/log don't read the NotLearned default while a
-    // reference IS loaded: a loaded-but-ungraded reference is Learned, not NotLearned. A later
-    // match-poll grade overwrites this; clearing the reference returns to NotLearned. (Message-thread
-    // caller -- learn / startup reload -- and publishRefGrade is just atomic stores.)
-    hm.publishRefGrade ((int) (loaded ? RefMonState::Learned : RefMonState::NotLearned), 0.0f, 0.0f);
+    // Publish an HONEST base state immediately so the GUI/log don't read the NotLearned default while a
+    // reference IS loaded: a loaded-but-ungraded reference is Learned, not NotLearned. Published for BOTH ears
+    // (Task 4) so each starts honest; a later per-ear match-poll grade overwrites only its ear; clearing the
+    // reference returns BOTH to NotLearned. (Message-thread caller -- learn / startup reload.)
+    publishBaseRefState (loaded ? RefMonState::Learned : RefMonState::NotLearned);
 }
 bool AudioEngine::referenceLoaded()        const noexcept { return referenceLoaded_.load(); }
 bool AudioEngine::gradeSignalPresent()     const noexcept { return gradeSignalPresent_.load (std::memory_order_relaxed); }
@@ -440,17 +460,26 @@ int AudioEngine::snapshotGradeRing (int ear, float* dst, int maxLen) noexcept {
 bool AudioEngine::gradingResponseReady (int ear) const noexcept {
     return ((ear == 1) ? gradeRingR_ : gradeRingL_).ready.load();
 }
-void AudioEngine::publishReferenceGrade (int refMonState, float irSnrDb, float thdPercent,
+void AudioEngine::publishReferenceGrade (int ear, int refMonState, float irSnrDb, float thdPercent,
                                          bool mismatch, bool lowQuality) noexcept {
-    // OFFLINE (message/worker thread). Snapshot the trio TOGETHER first so the displayed numbers always
-    // match the flag, THEN raise the matching GUIDANCE flag (neither invalidates cleanCapture).
+    // OFFLINE (message/worker thread). Publish THIS ear's verdict independently of the other ear. Snapshot
+    // the trio (state/IR-SNR/THD) into the per-ear store TOGETHER (state LAST is not required since the GUI
+    // reads relaxed; but write the metrics first then state so a reader that gates on state sees fresh numbers),
+    // so the displayed numbers always match that ear's flag. The COMBINED HealthMonitor snapshot + flags still
+    // get this ear's verdict so the legacy status ladder + cleanCapture see a bad ear; Task 5 splits the display.
+    const int e = (ear == 1) ? 1 : 0;
+    refIrSnrDbMilliPerEar_[e].store ((int) std::lround (irSnrDb   * 1000.0f));
+    refThdPctMilliPerEar_[e].store  ((int) std::lround (thdPercent * 1000.0f));
+    refMonStatePerEar_[e].store (refMonState);
+    // Combined snapshot (legacy single-state readers + cleanCapture guidance flags).
     hm.publishRefGrade (refMonState, irSnrDb, thdPercent);
     if (mismatch)   hm.raiseRefMismatch();
     if (lowQuality) hm.raiseRefLowQuality();
 }
-int   AudioEngine::refMonState()   const noexcept { return hm.refMonState(); }
-float AudioEngine::refIrSnrDb()     const noexcept { return hm.refIrSnrDb(); }
-float AudioEngine::refThdPercent()  const noexcept { return hm.refThdPercent(); }
+int   AudioEngine::refMonState   (int ear) const noexcept { return refMonStatePerEar_[(ear == 1) ? 1 : 0].load(); }
+float AudioEngine::refIrSnrDb    (int ear) const noexcept { return refIrSnrDbMilliPerEar_[(ear == 1) ? 1 : 0].load() / 1000.0f; }
+float AudioEngine::refThdPercent (int ear) const noexcept { return refThdPctMilliPerEar_[(ear == 1) ? 1 : 0].load() / 1000.0f; }
+float AudioEngine::refSweepSnrDb (int ear) const noexcept { return refSweepSnrMilliPerEar_[(ear == 1) ? 1 : 0].load() / 1000.0f; }
 
 // ---- Diagnostic getters (Task 2): the *Milli_ fixed-point idiom, lock-free reads ----
 // lastInputBlockPeak() converts the audio-thread store back to float (relaxed; the GUI only needs the
@@ -459,11 +488,11 @@ float AudioEngine::refThdPercent()  const noexcept { return hm.refThdPercent(); 
 float AudioEngine::lastInputBlockPeak() const noexcept {
     return lastInputPeakMilli_.load (std::memory_order_relaxed) / 1000.0f;
 }
-float AudioEngine::lastMatchCoherence() const noexcept {
-    return lastMatchCoherMilli_.load (std::memory_order_relaxed) / 1000.0f;
+float AudioEngine::lastMatchCoherence (int ear) const noexcept {
+    return lastMatchCoherMilli_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f;
 }
-void AudioEngine::setLastMatchCoherence (float coherence) noexcept {
-    lastMatchCoherMilli_.store ((int) std::lround (coherence * 1000.0f), std::memory_order_relaxed);
+void AudioEngine::setLastMatchCoherence (int ear, float coherence) noexcept {
+    lastMatchCoherMilli_[(ear == 1) ? 1 : 0].store ((int) std::lround (coherence * 1000.0f), std::memory_order_relaxed);
 }
 
 bool AudioEngine::consumeDeviceDied()      noexcept      { return deviceDied_.exchange (false); }
@@ -591,9 +620,9 @@ bool AudioEngine::start (juce::String& errorOut) {
     // the honest Learned that setReferenceLoaded() published when the user learned a reference, making the
     // GUI/log lie ("learn a reference") for the whole run. Re-publish the honest state from the live
     // referenceLoaded_ latch immediately, so a measurement that starts with a reference loaded reads Learned
-    // (a later match-poll grade overwrites this; the capture-callback/complete-edge NotGraded publishes are
-    // untouched and still fire when ! referenceLoaded).
-    hm.publishRefGrade ((int) (referenceLoaded_.load() ? RefMonState::Learned : RefMonState::NotLearned), 0.0f, 0.0f);
+    // (a later per-ear match-poll grade overwrites this; the capture-callback/complete-edge NotGraded publishes
+    // are untouched and still fire when ! referenceLoaded). Published for BOTH ears (Task 4) so each starts honest.
+    publishBaseRefState (referenceLoaded_.load() ? RefMonState::Learned : RefMonState::NotLearned);
     // D2: latch the raw-rail snapshot on this converged success path (always runs before a Running
     // return). reportRawRail MUST come AFTER hm.prepare() -- prepare resets flagBits, so reporting
     // before it would clear the OsResampled guidance flag this raises when the rail isn't verified.
@@ -705,7 +734,7 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
         // Plan 5 (Task 4): grading is triggered by the off-thread reference MATCH poll, not this edge. Only
         // publish the honest NotGraded state when NO reference is loaded (mirror the capture callback).
         if (! referenceLoaded_.load())
-            hm.publishRefGrade ((int) RefMonState::NotGraded, 0.0f, 0.0f);
+            publishBaseRefState (RefMonState::NotGraded);   // both ears; RT-safe relaxed stores
     }
     if (session_.inMeasurement() && ! hm.cleanCapture()) session_.markInvalid();
     if (graph.process (inL, inR, outMono, numSamples)) hm.reportNonFinite();
@@ -726,7 +755,7 @@ void AudioEngine::prepareCallbacksForTest (double sampleRate, int block, int fif
     hm.prepare (eb::EarsModel::Ears, cap, 1.0);        // nominal capture:render ratio == 1.0 (equal rates)
     // Mirror start(): hm.prepare() reset the published refMon state to NotLearned; re-publish the honest
     // state from referenceLoaded_ so the headless seam reflects a real run (Learned when a reference is loaded).
-    hm.publishRefGrade ((int) (referenceLoaded_.load() ? RefMonState::Learned : RefMonState::NotLearned), 0.0f, 0.0f);
+    publishBaseRefState (referenceLoaded_.load() ? RefMonState::Learned : RefMonState::NotLearned);   // both ears
     session_.configure (block, sampleRate);            // D5: size the silence window for this block/rate
     session_.reset();                                  // D5: fresh session each run (Idle -> Preflight -> ...)
     grantedRate_ = sampleRate;                         // gradingResponseRate() reports the seam's capture rate
