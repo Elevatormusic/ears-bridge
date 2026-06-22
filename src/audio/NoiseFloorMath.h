@@ -14,7 +14,8 @@ namespace eb {
 // below it. Keyed off an absolute ceiling, not a recent peak, so the FIRST (pre-sweep) window needs
 // no prior loud reference. On-device-tunable.
 constexpr float kQuietCeilingLin = 0.0631f;   // ~-24 dBFS
-constexpr float kFloorBlendAlpha = 0.3f;      // slow per-fold EMA toward a new quiet-window estimate
+constexpr float kFloorBlendAlpha = 0.3f;      // per-fold EMA rate toward a new quiet-window estimate (DOWN)
+constexpr float kFloorRiseFactor = 0.1f;      // UP moves use alpha*this -> floor resists ratcheting upward
 
 // True iff `level` is finite and strictly below the ceiling. Non-finite is never quiet.
 [[nodiscard]] inline bool isQuietBlock (float level, float ceiling) noexcept {
@@ -30,11 +31,15 @@ constexpr float kFloorBlendAlpha = 0.3f;      // slow per-fold EMA toward a new 
     return vals[n / 2];
 }
 
-// Slow EMA toward a new quiet-window estimate; an uninitialized floor (<=0) ADOPTS the candidate so
-// the first baseline is exact. The slow alpha lets the steady amp hiss converge without per-gap jitter.
+// ASYMMETRIC EMA toward a new quiet-window estimate. An uninitialized floor (<=0) ADOPTS the candidate
+// so the first baseline is exact. Tracks DOWN at `alpha` but UP at only `alpha*kFloorRiseFactor`, so a
+// transiently-noisier (but still sub-ceiling) gap can't ratchet the floor upward and inflate the SNR
+// denominator (the spec's "amp hiss is stable; resist upward spikes"); a genuinely-and-persistently
+// higher floor still converges, just slowly.
 [[nodiscard]] inline float blendFloor (float current, float candidate, float alpha) noexcept {
     if (current <= 0.0f) return candidate;
-    return current + alpha * (candidate - current);
+    const float a = (candidate < current) ? alpha : alpha * kFloorRiseFactor;   // fast down, slow up
+    return current + a * (candidate - current);
 }
 
 // Single user-facing number: the POWER mean (quadratic mean) of the two channel floors -> dB. Power-
