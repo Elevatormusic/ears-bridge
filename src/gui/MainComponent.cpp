@@ -8,6 +8,7 @@
 #include "audio/CalibrationGeneration.h"    // eb::CalibrationGeneration (generation lifecycle)
 #include "audio/RefMonitor.h"               // eb::RefMonState / gradeMeasurement / refMonBlocksGreen (Plan 5)
 #include "gui/SnrStatus.h"                  // eb::kMinSweepSnrDb (sweep-to-noise SNR threshold; match-window SNR fix)
+#include "gui/LiveInputStatus.h"            // eb::liveInputStatus (live per-channel in-sweep readout)
 #include "audio/LoopbackReference.h"        // eb::captureLoopback / validateReferenceCapture / readDiracDeviceType (Plan 5)
 #include "platform/EndpointFormat.h"        // eb::endpointMixSampleRateForName (the WASAPI mix-format rate)
 #include <algorithm>
@@ -850,6 +851,9 @@ void MainComponent::onStartStop() {
         if (engine.start (err)) {
             startStop.setButtonText ("Stop");
             inputClipHold_ = 0; silentTicks_ = 0; lowLevelTicks_ = 0; lowSnrTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
+            // Live in-sweep readout: start a fresh run at the silent floor with the sweep-active debounce
+            // and text cadence reset, so a prior run's held level / sweep-active state can't bleed in.
+            liveHeldLDb_ = liveHeldRDb_ = -120.0f; sweepActiveTicks_ = 0; liveTextTick_ = 0;
             // Task 4 match-poll debounce: a fresh run starts un-matched and un-graded, so the first sustained
             // match (two consecutive matched polls) grades exactly once.
             gradePollTick_ = 0; gradePollerL_.reset(); gradePollerR_.reset(); lastListenTextLogged_.clear();
@@ -1044,6 +1048,57 @@ void MainComponent::applyTitleBarTheme() {
    #endif
 }
 
+MainComponent::LiveReadout MainComponent::updateLiveInputReadout() {
+    LiveReadout out;
+    // Live per-channel input peaks from the engine (dBFS, NOT clamped at 0 so a clip reads positive).
+    const float liveL = engine.lastInputPeakLDb();
+    const float liveR = engine.lastInputPeakRDb();
+
+    // PEAK-HOLD + DECAY (per channel) so the displayed number reads like a level meter, not jittering digits
+    // (HIG: avoid distracting motion). A new live peak is taken instantly; otherwise the held value decays
+    // slowly toward the live level (~kLiveDecayDbPerTick per 30 Hz tick ~= -12 dB/s). Run every tick so the
+    // decay is smooth even though the TEXT is rebuilt at a lower cadence.
+    auto holdDecay = [] (float held, float live) {
+        if (live >= held) return live;                                  // peak-hold: jump up instantly
+        return juce::jmax (live, held - kLiveDecayDbPerTick);           // decay down slowly toward live
+    };
+    liveHeldLDb_ = holdDecay (liveHeldLDb_, liveL);
+    liveHeldRDb_ = holdDecay (liveHeldRDb_, liveR);
+
+    // Sweep-active debounce off the LIVE (not held) peak: peakMax must hold above the gate ~0.3 s before the
+    // live line takes over, so a momentary blip doesn't flip the status to-and-fro.
+    const float livePeakMax = juce::jmax (liveL, liveR);
+    sweepActiveTicks_ = (livePeakMax > kLiveActiveGateDb) ? (sweepActiveTicks_ + 1) : 0;
+    out.owns = sweepActiveTicks_ >= kSweepActiveHoldTicks;
+
+    if (! out.owns) {
+        // Idle: hand the status back to the per-ear verdicts and render the live line immediately on the next
+        // engage (don't wait out the text cadence). Let the held values keep decaying toward the floor.
+        liveTextTick_ = 0;
+        return out;
+    }
+
+    // Sweep-active: build the readout from the HELD (steady) values, throttled to ~7 Hz so the digits read
+    // steady. render==true on the first engaged tick (liveTextTick_ resets to 0 when idle above) and every
+    // kLiveTextEveryTicks after; the caller re-uses the prior label text on the in-between ticks.
+    out.render = (liveTextTick_ == 0);
+    if (out.render) {
+        const auto s = eb::liveInputStatus (liveHeldLDb_, liveHeldRDb_, true);
+        // Map the colour-free severity to a Theme role (semantic colours only; no hardcoded hex). Clip uses
+        // the strongest warn/error role; the WORDS ("CLIPPING" + the dB) carry the meaning without colour.
+        out.colour = (s.severity == eb::LiveInputSeverity::Clip)   ? Theme::danger()
+                   : (s.severity == eb::LiveInputSeverity::Warn)   ? Theme::warn()
+                                                                   : Theme::text();
+        // The helper puts the optional reseat hint on a second line (after a '\n'); split it so the live
+        // readout sits on statusLine and the hint on statusLineR (the existing second status line).
+        const int nl = s.text.indexOfChar ('\n');
+        out.primary = nl < 0 ? s.text : s.text.substring (0, nl);
+        out.second  = nl < 0 ? juce::String() : s.text.substring (nl + 1);
+    }
+    if (++liveTextTick_ >= kLiveTextEveryTicks) liveTextTick_ = 0;
+    return out;
+}
+
 void MainComponent::updateStatusLine() {
     const auto st = engine.status();
     statusLine.setTooltip ({});   // only the low-SNR branch sets a tooltip; clear it on every other path
@@ -1055,10 +1110,33 @@ void MainComponent::updateStatusLine() {
     statusLineR.setTooltip ({});
     if (st == EngineStatus::Running) {
         const auto h = engine.health();
+        // The 48k-everywhere config VETO is a hard error: a wrong-rate chain silently invalidates the
+        // measurement, so it must take precedence over the live readout below (you cannot trust a level
+        // shown over a mis-rated chain). Evaluated here so the live branch can defer to it.
+        const bool rateVeto = chainVerdict_.checked && ! chainVerdict_.all48k;
+        // Advance the live-readout state (peak-hold/decay + the sweep-active debounce) EVERY tick, even if a
+        // hard error will win this render, so the held level + debounce stay continuous. It writes NO labels
+        // itself; live.owns says whether the live line should take over (true only when sweep-active).
+        const LiveReadout live = updateLiveInputReadout();
         // An invalidating condition is reported the instant it latches, regardless of phase.
         if (! h.cleanCapture) {
             statusLine.setText (eb::invalidMeasurementMessage (h.flags), juce::dontSendNotification);
             statusLine.setColour (juce::Label::textColourId, Theme::danger());
+        } else if (! rateVeto && live.owns) {
+            // LIVE in-sweep readout: while Dirac is actually sweeping (debounced sweep-active), show the live
+            // per-channel input level / clip / L/R-imbalance, OVERRIDING the stale per-ear verdicts and the
+            // "waiting for the sweep" text below — the user needs to see the level move, catch a clip live,
+            // and spot a quiet earcup AS IT HAPPENS, not only after the grade. The two hard errors above
+            // (invalid capture, the 48k veto) still win (they short-circuit before this branch). On the
+            // in-between (non-render) ticks the labels keep their prior live text, so the digits read steady.
+            if (live.render) {
+                statusLine.setText (live.primary, juce::dontSendNotification);
+                statusLine.setColour (juce::Label::textColourId, live.colour);
+                statusLine.setTooltip ({});
+                statusLineR.setText (live.second, juce::dontSendNotification);
+                statusLineR.setColour (juce::Label::textColourId, Theme::warn());   // the reseat hint is a warn
+                statusLineR.setTooltip ({});
+            }
         } else if (h.session == SessionPhase::Idle || h.session == SessionPhase::Preflight) {
             // Before the sweep arms: validity isn't scoped to anything yet, so don't claim "clean" and
             // suppress the in-sweep warnings below (output-clip / silent / low-level), which are only

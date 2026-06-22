@@ -219,6 +219,14 @@ public:
     // from the last referenceMatches poll — Task 4's match poll writes it via setLastMatchCoherence(); it
     // reads 0 until then. Both back std::atomic<int> milli stores; the getters are pure lock-free reads.
     float lastInputBlockPeak() const noexcept;
+
+    // LIVE per-CHANNEL input peak in dBFS (the live-readout-during-the-sweep source). The audio thread
+    // stores each block's per-ear peak (max |sample| over the block) at the pk site, via the *Milli_ idiom;
+    // these getters convert back to dBFS. Deliberately NOT clamped at 0 dB: a float that overshot full scale
+    // reads as a POSITIVE dBFS (e.g. +1.6) so the GUI can show a live "CLIPPING +1.6 dBFS" during the sweep.
+    // The floor is -120 dBFS (a silent block). Lock-free reads (relaxed); the audio thread is the single writer.
+    float lastInputPeakLDb() const noexcept;
+    float lastInputPeakRDb() const noexcept;
     // Per-ear match coherence (ear 0 = LEFT, 1 = RIGHT): the coherence from that ear's last referenceMatches
     // poll. The no-arg overload returns the LEFT ear (ear 0) so the heartbeat/RefMon-change line compile
     // unchanged. 0 until Task 4's poll calls setLastMatchCoherence(ear, ...) for that ear.
@@ -338,6 +346,11 @@ private:
     // getter reflects the live input level. lastMatchCoherMilli_ is written by Task 4's match poll (single
     // writer, message/worker thread); 0 until then. Both are lock-free reads on the GUI side.
     std::atomic<int> lastInputPeakMilli_  { 0 };
+    // LIVE per-CHANNEL input peak (linear, the *Milli_ idiom: lin*1000 in an atomic<int>). The audio thread
+    // stores each block's per-ear peak at the pk site (single writer, relaxed); lastInputPeakLDb()/RDb()
+    // convert to dBFS (NOT clamped at 0) for the live in-sweep readout. 0 (silent floor) until the first block.
+    std::atomic<int> lastInputPeakLMilli_ { 0 };
+    std::atomic<int> lastInputPeakRMilli_ { 0 };
     // Per-ear match coherence (index 0 = LEFT, 1 = RIGHT). Each is the *Milli_ idiom (coherence*1000 in an
     // atomic<int>); Task 4's two pollers each write their own ear; the GUI reads them lock-free. 0 until graded.
     std::atomic<int> lastMatchCoherMilli_[2] { { 0 }, { 0 } };
