@@ -265,21 +265,24 @@ TEST_CASE("AudioEngine seam: per-ear sweep peaks reset per Complete -- the LEFT 
     CHECK (shownSweep2 > shownSweep1);       // sweep 2's verdict is distinct from (and not stuck on) sweep 1's
 }
 
-TEST_CASE("AudioEngine: a sustained loud sweep freezes the ClockBridge ratio, the gap releases it") {
+TEST_CASE("AudioEngine: the production FreezeGate freezes the ClockBridge ratio end-to-end, the gap releases it") {
+    // Exercises the REAL freeze trigger wired into the capture path (eb::freezeGateStep -> bridge.setSweepActive),
+    // not the dead session level-arm. processCaptureBlockForTest mirrors the live capture callback exactly.
     eb::AudioEngine e;
     e.prepareForTest (48000.0, 512);
-    std::vector<float> loud (512, 0.3f), mono (512, 0.0f), quiet (512, 0.0f);  // 0.3 > kSweepStartLinear (-24 dBFS)
+    std::vector<float> loud (512, 0.3f), mono (512, 0.0f), quiet (512, 0.0f);  // 0.3 ~ -10.5 dBFS, above the -24 dBFS gate
     CHECK_FALSE (e.bridgeSweepFrozen());
-    // A quiet floor settles the noise floor low + clears the warm-up; then a sustained loud RISE above
-    // floor*kArmRiseRatio for kArmSustainBlocks arms SweepActive -> the capture sync freezes the bridge.
-    for (int b = 0; b < eb::MeasurementSession::kArmWarmupBlocks + 2; ++b)
-        e.processCaptureBlockForTest (quiet.data(), quiet.data(), mono.data(), 512);
-    for (int b = 0; b < eb::MeasurementSession::kArmSustainBlocks; ++b)
+    // A few consecutive loud blocks (>= kFreezeAttackBlocks) arm the gate -> the bridge ratio freezes.
+    for (int b = 0; b < eb::kFreezeAttackBlocks + 2; ++b)
         e.processCaptureBlockForTest (loud.data(), loud.data(), mono.data(), 512);
     CHECK (e.bridgeSweepFrozen());
-    CHECK (e.sweepActive());
-    // Sustained silence completes the segment -> session leaves SweepActive -> the bridge releases.
-    for (int b = 0; b < 200; ++b) e.processCaptureBlockForTest (quiet.data(), quiet.data(), mono.data(), 512);
+    // The release HOLD (kFreezeReleaseSecs) bridges Dirac's quiet L<->R inter-sweep gap, so a SHORT silence must
+    // NOT release it -> one frozen ratio spans BOTH earcup sweeps (consistent interaural group delay).
+    const int holdBlocks = (int) (eb::kFreezeReleaseSecs * 48000.0 / 512.0);
+    for (int b = 0; b < holdBlocks / 2; ++b) e.processCaptureBlockForTest (quiet.data(), quiet.data(), mono.data(), 512);
+    CHECK (e.bridgeSweepFrozen());                                   // still frozen mid-gap
+    // Quiet sustained PAST the hold releases it, so the PI loop re-centers before the next measurement.
+    for (int b = 0; b < holdBlocks + 4; ++b) e.processCaptureBlockForTest (quiet.data(), quiet.data(), mono.data(), 512);
     CHECK_FALSE (e.bridgeSweepFrozen());
 }
 

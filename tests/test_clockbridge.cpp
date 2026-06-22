@@ -257,6 +257,42 @@ TEST_CASE("ClockBridge: freeze raises an emergency correction when drift outruns
     CHECK (raised);                                          // raw near-empty crossing forced a correction
 }
 
+TEST_CASE("ClockBridge: the running mean tracks the true ratio within a short run (cold-start regression guard)") {
+    // Regression guard for the cold-start trap: a FIXED slow EMA (alpha 0.001) lags ~1.0 for ~10 s, so a sweep
+    // soon after start() would freeze a stale ~1.0 carrying the full clock skew. The running-mean (1/n) alpha
+    // converges in a second or two, so after a SHORT off-nominal run avgRatioTrim_ already tracks the converged
+    // trim, not 1.0. A revert to a fixed slow EMA would leave avg near 1.0 and FAIL the discriminating check.
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 16384);
+    int u = 0, o = 0;
+    runBridge (cb, 48240.0, 48000.0, 997.0, 256, 256, 600, u, o);   // +0.5% capture drift -> the PI trims well off 1.0
+    const double inst = cb.currentRatio();        // the converged instantaneous ratio (off 1.0 by the drift)
+    const double avg  = cb.avgRatioTrim();
+    REQUIRE (std::abs (inst - 1.0) > 1.0e-3);                 // the drift genuinely moved the trim off nominal
+    CHECK (std::abs (avg - inst) < std::abs (avg - 1.0));     // the running mean tracked it (NOT lagging at ~1.0)
+}
+
+TEST_CASE("ClockBridge: the freeze snapshots the AVERAGED ratio, not the instantaneous PI value") {
+    // The fix's core (part 2): frozenRatio_ = nominal * avgRatioTrim_ (a running mean ~= the TRUE ratio), NOT the
+    // instantaneous ratioTrim that swings with the PI loop. After a STEP in the fill error the instantaneous trim
+    // jumps while the slow running mean barely moves, so the two diverge -> freezing must hold the AVERAGE. A
+    // regression of the snapshot to nominal*ratioTrim would freeze the jumped value and FAIL the two checks below.
+    eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 32768);    // nominal == 1.0 -> frozen == avgRatioTrim_ exactly
+    cb.primeToTarget();
+    std::vector<float> blk (256, 0.1f), out (256, 0.0f);
+    for (int i = 0; i < 1200; ++i) { cb.pushCapture (blk.data(), 256); cb.pullRender (out.data(), 256); }  // past 1/n -> slow EMA
+    // STEP the fill error: overfeed (2 pushes per pull) so the PI sharply raises the instantaneous ratioTrim while
+    // the slow EMA lags -> the two diverge.
+    for (int i = 0; i < 25; ++i) { cb.pushCapture (blk.data(), 256); cb.pushCapture (blk.data(), 256); cb.pullRender (out.data(), 256); }
+    const double inst = cb.currentRatio();        // instantaneous free ratio (= ratioTrim; nominal==1), jumped up
+    const double avg  = cb.avgRatioTrim();         // the lagging running mean
+    REQUIRE (std::abs (inst - avg) > 1.0e-6);      // they genuinely diverge here, so the freeze check discriminates
+    cb.setSweepActive (true);
+    cb.pushCapture (blk.data(), 256); cb.pullRender (out.data(), 256);   // first frozen pull snapshots
+    const double frozen = cb.currentRatio();
+    CHECK (frozen == avg);     // sourced from avgRatioTrim_ (the fix); reverting to nominal*ratioTrim would FAIL this
+    CHECK (frozen != inst);    // ... it would instead equal the jumped instantaneous value
+}
+
 TEST_CASE("ClockBridge: unfreezing resumes PI steering and recenters") {
     eb::ClockBridge cb; cb.prepare (48000.0, 48000.0, 1, 16384);
     cb.primeToTarget();

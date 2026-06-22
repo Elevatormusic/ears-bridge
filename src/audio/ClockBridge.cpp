@@ -12,7 +12,7 @@ void ClockBridge::prepare (double capRate, double renRate, int /*channels*/, int
     // Worst-case SRC needs ceil(ratio*numOut)+a few guard samples; size generously.
     srcInput.assign ((size_t) capacity, 0.0f);
     src.reset();
-    smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0; avgRatioTrim_ = 1.0;
+    smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0; avgRatioTrim_ = 1.0; avgCount_ = 0;
     sweepActive_.store (false); emergencyCorrection_.store (false);
     freezeArmed_ = false; frozenRatio_ = captureRate / juce::jmax (1.0, renderRate);
     underrunCount.store (0); overrunCount.store (0); droppedFrameCount.store (0);
@@ -26,7 +26,7 @@ void ClockBridge::reset() {
     fifo.reset();
     std::fill (ring.begin(), ring.end(), 0.0f);
     src.reset();
-    smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0; avgRatioTrim_ = 1.0;
+    smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0; avgRatioTrim_ = 1.0; avgCount_ = 0;
     sweepActive_.store (false); emergencyCorrection_.store (false);
     freezeArmed_ = false; frozenRatio_ = captureRate / juce::jmax (1.0, renderRate);
     underrunCount.store (0); overrunCount.store (0); droppedFrameCount.store (0);
@@ -96,7 +96,11 @@ int ClockBridge::pullRender (float* out, int numFrames) {
         integ = juce::jlimit (-0.02, 0.02, integ + 1.0e-4 * errFill);
         ratioTrim = juce::jlimit (0.97, 1.03, 1.0 + (2.0e-2 * errFill + integ));
         ratio = nominal * ratioTrim;
-        avgRatioTrim_ += 0.001 * (ratioTrim - avgRatioTrim_);   // slow EMA (~10 s) -> the true ratio for the freeze snapshot
+        // Running mean early (alpha 1/n), settling to a slow EMA (floor 0.001) once warm. The 1/n term makes
+        // avgRatioTrim_ converge to the true ratio within a second or two of free-running, so a sweep that arrives
+        // soon after start() snapshots the real ratio, not the stale 1.0 init (the cold-start ppm-skew trap).
+        const double a = juce::jmax (0.001, 1.0 / (double) (++avgCount_));
+        avgRatioTrim_ += a * (ratioTrim - avgRatioTrim_);
     }
     publishedRatio.store (ratio);                             // expose to currentRatio() (lock-free)
 

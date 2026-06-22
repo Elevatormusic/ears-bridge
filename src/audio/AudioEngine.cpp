@@ -744,7 +744,10 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
     lastInputPeakRMilli_.store ((int) std::lround (spkR * 1000.0f), std::memory_order_relaxed);
     session_.observeBlockPeak (pk);
     if (session_.consumeSweepStarted()) hm.resetMeasurementLatches();
-    bridge.setSweepActive (session_.sweepActive());                  // D6: mirror the capture-callback freeze sync
+    bridge.setSweepActive (eb::freezeGateStep (freezeGate_, pk, numSamples, captureRate_));  // D6: SAME gate as the
+                                                                     // real capture callback (so the seam + its tests
+                                                                     // exercise the production freeze trigger, not the
+                                                                     // dead session_ arm)
     hm.analyzeInputBlock (inL, inR, numSamples);                      // same analysis as the capture callback
     if (session_.sweepActive())                                      // SNR numerator (mirror the capture callback)
         hm.observeSweepPeak (spkL, spkR);                            // spkL/spkR computed unconditionally above
