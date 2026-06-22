@@ -26,3 +26,41 @@ TEST_CASE("averageFloorDb: power-mean of two channel floors, in dB") {
     CHECK_THAT (eb::averageFloorDb (0.01f, 0.01f), WithinAbs (-40.0f, 0.1f));   // equal -> -40 dBFS
     CHECK_THAT (eb::averageFloorDb (0.01f, 0.0f),  WithinAbs (-43.0f, 0.2f));   // one silent -> ~-3 dB
 }
+
+// ---- Task 2: NoiseFloorTracker ----
+#include "audio/NoiseFloorTracker.h"
+
+namespace {
+// feed `blocks` blocks of constant per-ear level at 10 ms each
+void feed (eb::NoiseFloorTracker& t, float lvlL, float lvlR, int blocks) {
+    for (int i = 0; i < blocks; ++i) t.observeBlock (lvlL, lvlR, 0.010);
+}
+}
+
+TEST_CASE("NoiseFloorTracker: invalid until a sustained quiet window, then baselines from silence") {
+    eb::NoiseFloorTracker t; t.prepare (48000.0, 480);
+    CHECK_FALSE (t.valid());
+    feed (t, 0.0040f, 0.0030f, 10);   // 100 ms quiet -- not yet sustained (need >=500 ms)
+    CHECK_FALSE (t.valid());
+    feed (t, 0.0040f, 0.0030f, 50);   // now >500 ms of quiet -> baseline captured
+    CHECK (t.valid());
+    CHECK_THAT (t.floorLinear (0), WithinAbs (0.0040f, 5e-4));
+    CHECK_THAT (t.floorLinear (1), WithinAbs (0.0030f, 5e-4));  // L/R independent
+}
+
+TEST_CASE("NoiseFloorTracker: a loud sweep does not corrupt the floor; gap refines it") {
+    eb::NoiseFloorTracker t; t.prepare (48000.0, 480);
+    feed (t, 0.0050f, 0.0050f, 60);   // pre-sweep silence -> baseline ~0.005
+    REQUIRE (t.valid());
+    feed (t, 0.4f, 0.4f, 60);         // a loud sweep -> NOT quiet -> floor unchanged
+    CHECK_THAT (t.floorLinear (0), WithinAbs (0.0050f, 1e-3));
+    feed (t, 0.0030f, 0.0030f, 60);   // inter-sweep gap, quieter -> floor refines downward (slowly)
+    CHECK (t.floorLinear (0) < 0.0050f);
+    CHECK (t.floorLinear (0) > 0.0030f);   // slow blend, not a jump to the new value
+}
+
+TEST_CASE("NoiseFloorTracker: averaged readout is the power-mean of the two channels") {
+    eb::NoiseFloorTracker t; t.prepare (48000.0, 480);
+    feed (t, 0.0100f, 0.0100f, 60);
+    CHECK_THAT (t.floorDbAveraged(), WithinAbs (-40.0f, 0.5f));
+}
