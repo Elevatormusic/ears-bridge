@@ -47,6 +47,11 @@ private:
     void onRightCalLoaded (const juce::File&);
     void onStartStop();
     void updateStatusLine();
+    // Write a status label only when its text OR colour actually changed (JUCE dontSendNotification, compare
+    // getText()/findColour first). updateStatusLine computes each line's FINAL (text,colour) ONCE per tick then
+    // commits it through this — NOTHING is cleared-then-conditionally-reset — so the line is persistent and the
+    // notes never flicker (HIG: reflect state persistently, never flash). Returns true iff it wrote.
+    static bool setLabelIfChanged (juce::Label& label, const juce::String& text, juce::Colour colour);
     void updateActiveEarIndicator (bool silent);   // AutoPerEar "capturing Left/Right" caption + meter accent
     void updateStartGate();          // enable Start only when a valid calibration generation is applied
     void updateDiracMicGainHint();   // refresh the "add ~+N dB on Dirac's Mic gain" caption from the live headroom
@@ -141,10 +146,16 @@ private:
     // the per-ear verdicts, and the line doesn't fro back and forth on a momentary dip.
     float        liveHeldLDb_ = -120.0f;              // peak-held, slowly-decaying L level (dBFS) for display
     float        liveHeldRDb_ = -120.0f;              // peak-held, slowly-decaying R level (dBFS) for display
-    int          sweepActiveTicks_ = 0;               // consecutive ticks with peakMax above the live gate (debounce)
+    int          sweepActiveTicks_ = 0;               // consecutive ticks with peakMax above the live gate (attack debounce)
+    int          sweepActiveReleaseTicks_ = 0;        // remaining held ticks after the level last cleared the gate (release HOLD)
     int          liveTextTick_ = 0;                   // counts down to the next live-text rebuild (~7 Hz cadence)
+    // Last RENDERED live-readout text/colour, re-emitted on the in-between (non-render) ticks so the live line
+    // and its reseat hint PERSIST instead of blinking between the ~7 Hz rebuilds (Bug B-1). Reset on Start/Stop.
+    juce::String liveHeldPrimary_, liveHeldSecond_;
+    juce::Colour liveHeldColour_;
     static constexpr float kLiveActiveGateDb   = -18.0f;  // peakMax above this = a sweep (room floor ~-30 sits below)
-    static constexpr int   kSweepActiveHoldTicks = 9;     // ~0.3 s at 30 Hz before the live line engages
+    static constexpr int   kSweepActiveHoldTicks = 9;     // ~0.3 s at 30 Hz before the live line engages (attack)
+    static constexpr int   kSweepActiveReleaseTicks = 45; // ~1.5 s at 30 Hz the live line stays engaged after the level dips (release)
     static constexpr float kLiveDecayDbPerTick = 0.4f;    // ~-12 dB/s decay of the held display value
     static constexpr int   kLiveTextEveryTicks = 4;       // rebuild the live text ~every 4 ticks (~7 Hz)
     // The rendered live-readout for one tick: the (held, throttled) status text split across the two status

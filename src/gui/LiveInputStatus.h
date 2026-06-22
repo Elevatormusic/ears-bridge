@@ -75,4 +75,45 @@ inline constexpr float kLiveImbalanceQuietDb = -15.0f;   // ...but only if the q
     return s;
 }
 
+// ---- Status-line PHASE state machine (pure; unit-tested without the GUI) -------------------------------
+//
+// updateStatusLine() picks ONE of four high-level phases each tick; the GUI then renders the chosen phase
+// with set-if-changed (no clear-then-reset) so the line is persistent and never flickers. Factored out here
+// as a pure function so the decision — especially "a captured grade must beat the pre-sweep waiting text"
+// (Bug A) and "a single sub-gate tick during a held sweep stays LiveSweep" (Bug B) — is directly testable.
+//
+//   Error     -> a hard, invalidating condition is latched (invalid capture / output-clip / low-SNR / 48k
+//                veto). The caller renders the SPECIFIC error text; it always wins.
+//   LiveSweep -> Dirac is audibly sweeping right now (the debounced+held sweep-active flag). Show the live
+//                per-channel readout. Wins over Captured/Waiting so the user sees the level move / catch a clip.
+//   Captured  -> a grade exists this run (an ear is GradedClean/GradedSuspect/ReferenceStale) and the sweep
+//                is NOT sounding -> show the PERSISTENT "captured - safe to run the next" confirmation + the
+//                per-ear verdict. This is the Bug-A fix: it beats Waiting once anything has graded.
+//   Waiting   -> Running, a reference is loaded, nothing has graded yet this run, the sweep isn't sounding ->
+//                the genuine pre-first-sweep "listening for the Dirac sweep" wait.
+enum class StatusPhase { Error, LiveSweep, Captured, Waiting };
+
+// running:      the engine is in the Running state (false -> the caller handles the non-running ladder itself).
+// hasGrade:     a per-ear reference is loaded AND at least one ear has a graded verdict this run.
+// sweepActive:  the debounced+release-held "the sweep is sounding now" flag (see sweepActiveWithHold).
+// anyHardError: an invalidating condition is latched (invalid capture / output-clip / low-SNR / 48k veto) —
+//               it must win over a "safe to run the next" confirmation (don't say safe over a clipped sweep).
+[[nodiscard]] inline StatusPhase statusPhase (bool running, bool hasGrade, bool sweepActive, bool anyHardError) {
+    if (! running)     return StatusPhase::Waiting;   // caller owns the non-running text; phase is a placeholder
+    if (anyHardError)  return StatusPhase::Error;     // a latched invalidating condition always wins
+    if (sweepActive)   return StatusPhase::LiveSweep;  // the sweep is sounding -> show the live readout
+    if (hasGrade)      return StatusPhase::Captured;   // Bug A: a captured grade beats the pre-sweep waiting text
+    return StatusPhase::Waiting;                       // pre-first-sweep wait
+}
+
+// Attack/release debounce for the sweep-active flag, as a PURE step so the release HOLD is unit-testable.
+// `release` is the countdown of remaining held ticks. When the live level is above the gate we re-arm the
+// counter to its full hold (attack is applied separately by the caller's consecutive-above count); when it
+// dips below the gate we DECREMENT rather than reset to 0, so the quiet L<->R inter-sweep gap and brief dips
+// don't flip the live readout off (Bug B-2). Returns the next countdown; "engaged" is next > 0.
+[[nodiscard]] inline int sweepActiveRelease (int release, bool aboveGate, int holdTicks) {
+    if (aboveGate) return holdTicks;                  // re-arm: hold for `holdTicks` more ticks after this
+    return release > 0 ? release - 1 : 0;             // dipped below: bleed the hold down, don't snap to 0
+}
+
 } // namespace eb
