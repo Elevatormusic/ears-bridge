@@ -144,8 +144,9 @@ private:
     // rebuilt at a reduced cadence (~7 Hz) from the held/rounded value so it reads steady, not flickering.
     // Sweep-active is debounced: peakMax must hold above the gate for ~0.3 s before the live line takes over
     // the per-ear verdicts, and the line doesn't fro back and forth on a momentary dip.
-    float        liveHeldLDb_ = -120.0f;              // peak-held, slowly-decaying L level (dBFS) for display
-    float        liveHeldRDb_ = -120.0f;              // peak-held, slowly-decaying R level (dBFS) for display
+    float        liveHeldLDb_ = -120.0f;              // running PEAK (dBFS) of the L input since this sweep engaged
+    float        liveHeldRDb_ = -120.0f;              // running PEAK (dBFS) of the R input since this sweep engaged
+    bool         liveWasActive_ = false;              // prior tick's sweep-active state -> reset the running max on the engage edge
     int          sweepActiveTicks_ = 0;               // consecutive ticks with peakMax above the live gate (attack debounce)
     int          sweepActiveReleaseTicks_ = 0;        // remaining held ticks after the level last cleared the gate (release HOLD)
     int          liveTextTick_ = 0;                   // counts down to the next live-text rebuild (~7 Hz cadence)
