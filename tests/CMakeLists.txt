@@ -12,6 +12,7 @@ add_executable(eb_tests
     test_clockbridge.cpp
     test_clockbridge_transport.cpp
     test_freezegate.cpp
+    test_noisefloor.cpp
     test_healthmonitor.cpp
     test_devicemanager.cpp
     test_audioengine.cpp
