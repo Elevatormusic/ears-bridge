@@ -23,6 +23,24 @@
 //      verified on-device, not in the unit suite.
 namespace eb {
 
+// ---- Pure per-channel decode (the testable core) -------------------------
+// detail:: holds the format-addressing primitive that backs the per-channel WASAPI
+// captures. It is pure (no platform deps) so the unit suite can drive every mix
+// format (32f / 16 / 24 / 32-int, mono) without a live endpoint.
+namespace detail {
+
+// Decode one packet's worth of interleaved mix-format bytes into SEPARATE per-channel
+// float vectors WITHOUT downmixing: channel 0 samples are APPENDED to outL, channel 1 to
+// outR (sample index = frame*channels + c, exactly like captureLoopback's mono decode and
+// the pancheck per-channel accumulator). A MONO endpoint (channels < 2) duplicates its single
+// channel into BOTH outL and outR so the per-ear grade path always sees two streams. This is
+// the no-downmix core that keeps Dirac's hard-panned L/R sweep separation intact for grading.
+void decodePacketPerChannel (const unsigned char* data, unsigned int frames, int channels,
+                             int bits, bool isFloat,
+                             std::vector<float>& outL, std::vector<float>& outR);
+
+} // namespace detail
+
 // ---- Pure validation (the testable core) ---------------------------------
 struct ReferenceValidation {
     bool         ok = false;
@@ -195,6 +213,37 @@ LoopbackCaptureResult captureLoopback (const juce::String& renderDeviceNameSubst
                                        double seconds,
                                        double expectedRate = 48000.0,
                                        const std::atomic<bool>* cancel = nullptr);
+
+// ---- Per-channel loopback capture (no downmix; Windows-only, stub elsewhere) ----
+// captureLoopback downmixes Dirac's render to MONO, which DESTROYS the ~104 dB L/R
+// separation the on-device pan check proved Dirac uses (the L measurement sweep plays on
+// channel 0 only, the R sweep on channel 1 only). For PER-EAR grading we must keep that
+// separation: ref_L = render channel 0, ref_R = render channel 1, no averaging. This is the
+// per-channel sibling of captureLoopback — IDENTICAL WASAPI setup (device-find, IMMDevice/
+// IAudioClient init, mix-format read, MIXER-TRANSPARENCY rate guard, AUDCLNT_STREAMFLAGS_LOOPBACK,
+// the SweepEndDetector arm + auto-stop-on-trailing-silence, the cooperative cancel) but decodes
+// each packet into samplesL / samplesR via detail::decodePacketPerChannel instead of a mono fold.
+//
+// AUTO-STOP keys off the COMBINED activity (the per-block max of |L| and |R|): because Dirac
+// hard-pans, one channel is SILENT while the other sweeps, so feeding the detector a single
+// channel would trail-stop in the active channel's quiet half and TRUNCATE the L-then-R sequence.
+// max(L,R) stays loud across the whole sequence so only the real trailing silence ends it.
+//
+// A MONO endpoint duplicates its one channel into both samplesL and samplesR. Must run off the
+// audio callback. Windows-only; a no-op stub returning { ok=false } on every other platform.
+struct StereoLoopbackResult {
+    bool               ok = false;
+    juce::String       reason;            // empty iff ok
+    bool               cancelled = false; // true iff aborted via the cancel token (a user-cancel, not a failure)
+    std::vector<float> samplesL, samplesR;// per-channel float samples (ch0 -> L, ch1 -> R; no downmix)
+    double             rate = 0.0;        // the endpoint mix-format rate actually captured
+    int                channels = 0;      // the endpoint mix-format channel count
+};
+
+StereoLoopbackResult captureLoopbackStereo (const juce::String& renderDeviceNameSubstring,
+                                            double seconds,
+                                            double expectedRate = 48000.0,
+                                            const std::atomic<bool>* cancel = nullptr);
 
 // ---- Per-channel pan-check capture (Windows-only; stub elsewhere) ---------
 // DIAGNOSTIC ONLY (eb_diag pancheck). captureLoopback downmixes Dirac's render to MONO,

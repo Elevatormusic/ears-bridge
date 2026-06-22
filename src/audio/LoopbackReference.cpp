@@ -136,6 +136,48 @@ RidgeMetrics analyseRidge (const float* x, int n, double /*rate*/) {
 } // namespace
 
 // ---------------------------------------------------------------------------
+// PURE per-channel decode (cross-platform; the testable core behind
+// captureLoopbackStereo). Mirrors decodePacketToMono's per-format sample
+// addressing (32f / 16 / 24 / 32-int) and the pancheck per-channel accumulator's
+// index = frame*channels + c, but APPENDS the FULL per-channel sample vectors
+// (ch0 -> outL, ch1 -> outR) instead of folding to mono or to block-RMS. A mono
+// endpoint (channels < 2) duplicates its single channel into both outputs.
+// ---------------------------------------------------------------------------
+namespace detail {
+
+void decodePacketPerChannel (const unsigned char* data, unsigned int frames, int channels,
+                             int bits, bool isFloat,
+                             std::vector<float>& outL, std::vector<float>& outR) {
+    const int ch = juce::jmax (1, channels);
+    const int cR = (ch >= 2) ? 1 : 0;   // mono endpoint -> R reads ch0 too (duplicate L into R)
+    auto push = [&] (auto sampleAt) {
+        for (unsigned int f = 0; f < frames; ++f) {
+            outL.push_back (sampleAt ((size_t) f * ch + 0));
+            outR.push_back (sampleAt ((size_t) f * ch + cR));
+        }
+    };
+    if (isFloat && bits == 32) {
+        auto* s = reinterpret_cast<const float*> (data);
+        push ([&] (size_t i) { return s[i]; });
+    } else if (bits == 16) {
+        auto* s = reinterpret_cast<const short*> (data);
+        push ([&] (size_t i) { return (float) s[i] / 32768.0f; });
+    } else if (bits == 24) {
+        push ([&] (size_t i) {
+            const unsigned char* p = data + i * 3;
+            int v = (p[0]) | (p[1] << 8) | (p[2] << 16);
+            if (v & 0x800000) v |= ~0xFFFFFF;            // sign-extend 24->32
+            return (float) v / 8388608.0f;
+        });
+    } else if (bits == 32) {                              // 32-bit signed PCM
+        auto* s = reinterpret_cast<const int*> (data);
+        push ([&] (size_t i) { return (float) s[i] / 2147483648.0f; });
+    }
+}
+
+} // namespace detail
+
+// ---------------------------------------------------------------------------
 // PURE validation
 // ---------------------------------------------------------------------------
 ReferenceValidation validateReferenceCapture (const float* samples, int n, double rate,
@@ -577,6 +619,198 @@ LoopbackCaptureResult captureLoopback (const juce::String& filter, double second
 }
 
 // ---------------------------------------------------------------------------
+// Per-channel loopback capture (no downmix) — the per-ear grading reference.
+// IDENTICAL WASAPI setup to captureLoopback (device-find, init, mix-format read,
+// mixer-transparency rate guard, loopback flag, SweepEndDetector auto-stop,
+// cooperative cancel); the ONLY differences are it decodes each packet into
+// samplesL/samplesR via detail::decodePacketPerChannel (no mono fold) and feeds the
+// end detector the per-block MAX of |L| and |R| so a hard-panned (one-channel-silent)
+// sequence isn't trailing-stopped mid-run.
+// ---------------------------------------------------------------------------
+StereoLoopbackResult captureLoopbackStereo (const juce::String& filter, double seconds, double expectedRate,
+                                            const std::atomic<bool>* cancel) {
+    StereoLoopbackResult res;
+
+    // Helper: a user-cancel result (distinct from a real failure so the GUI can show it neutrally).
+    auto cancelledNow = [&] { return cancel != nullptr && cancel->load (std::memory_order_relaxed); };
+
+    // Honour an already-set cancel BEFORE touching COM/WASAPI (also the headless-test path).
+    if (cancelledNow()) {
+        res.ok = false; res.cancelled = true; res.reason = "cancelled"; return res;
+    }
+
+    const HRESULT co = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
+    const bool weInited = SUCCEEDED (co);
+
+    auto fail = [&] (juce::String why) -> StereoLoopbackResult {
+        if (weInited) CoUninitialize();
+        res.ok = false; res.reason = std::move (why); return res;
+    };
+
+    IMMDeviceEnumerator* en = nullptr;
+    if (FAILED (CoCreateInstance (__uuidof (MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                  __uuidof (IMMDeviceEnumerator), (void**) &en)) || en == nullptr)
+        return fail ("no audio endpoint enumerator");
+
+    // Pick the render endpoint to loop back — identical name-driven selection to captureLoopback:
+    // empty -> system DEFAULT render endpoint; else prefer an EXACT FriendlyName match then a substring.
+    IMMDevice* match = nullptr; juce::String matchName;
+    if (filter.isEmpty()) {
+        if (SUCCEEDED (en->GetDefaultAudioEndpoint (eRender, eConsole, &match)) && match != nullptr) {
+            IPropertyStore* ps = nullptr; match->OpenPropertyStore (STGM_READ, &ps);
+            PROPVARIANT nm; PropVariantInit (&nm);
+            if (ps) ps->GetValue (PKEY_Device_FriendlyName, &nm);
+            matchName = (nm.vt == VT_LPWSTR && nm.pwszVal) ? juce::String (nm.pwszVal) : juce::String();
+            PropVariantClear (&nm); if (ps) ps->Release();
+        }
+    } else {
+        IMMDeviceCollection* coll = nullptr;
+        en->EnumAudioEndpoints (eRender, DEVICE_STATE_ACTIVE, &coll);
+        UINT count = 0; if (coll) coll->GetCount (&count);
+        IMMDevice* sub = nullptr; juce::String subName;   // best substring (contains) fallback
+        for (UINT i = 0; i < count; ++i) {
+            IMMDevice* dev = nullptr; coll->Item (i, &dev);
+            IPropertyStore* ps = nullptr; dev->OpenPropertyStore (STGM_READ, &ps);
+            PROPVARIANT nm; PropVariantInit (&nm);
+            if (ps) ps->GetValue (PKEY_Device_FriendlyName, &nm);
+            juce::String name = (nm.vt == VT_LPWSTR && nm.pwszVal) ? juce::String (nm.pwszVal) : juce::String();
+            PropVariantClear (&nm); if (ps) ps->Release();
+            if      (match == nullptr && name.equalsIgnoreCase   (filter)) match = dev, matchName = name;  // exact wins
+            else if (sub   == nullptr && name.containsIgnoreCase (filter)) sub   = dev, subName   = name;  // contains fallback
+            else                                                          dev->Release();
+        }
+        if (coll) coll->Release();
+        if (match == nullptr && sub != nullptr) { match = sub; matchName = subName; }   // no exact -> the contains match
+        else if (sub != nullptr)                  sub->Release();                       // had exact -> drop the spare
+    }
+    if (match == nullptr) { en->Release(); return fail (filter.isEmpty()
+        ? juce::String ("no default render endpoint found")
+        : ("no render endpoint matched \"" + filter + "\"")); }
+
+    auto releaseAndFail = [&] (juce::String why) -> StereoLoopbackResult {
+        match->Release(); en->Release(); return fail (std::move (why));
+    };
+
+    IAudioClient* ac = nullptr;
+    if (FAILED (match->Activate (__uuidof (IAudioClient), CLSCTX_ALL, nullptr, (void**) &ac)) || ac == nullptr)
+        return releaseAndFail ("could not activate the render endpoint");
+
+    WAVEFORMATEX* mix = nullptr;
+    if (FAILED (ac->GetMixFormat (&mix)) || mix == nullptr) {
+        ac->Release(); return releaseAndFail ("could not read the endpoint mix format");
+    }
+
+    const DWORD rate     = mix->nSamplesPerSec;
+    const WORD  channels = mix->nChannels;
+    const WORD  bits     = mix->wBitsPerSample;
+    bool isFloat = (mix->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
+    if (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix->cbSize >= 22) {
+        auto* wx = reinterpret_cast<WAVEFORMATEXTENSIBLE*> (mix);
+        isFloat = (wx->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+    }
+
+    res.rate     = (double) rate;
+    res.channels = (int) channels;
+
+    // MIXER TRANSPARENCY: the endpoint's shared mix rate must equal the expected rate, else the OS
+    // would resample Dirac's sweep before we capture it and we'd store a resampled reference. Reject up front.
+    if (expectedRate > 0.0 && (double) rate != expectedRate) {
+        CoTaskMemFree (mix); ac->Release();
+        return releaseAndFail ("endpoint mix rate is " + juce::String ((int) rate)
+                               + " Hz, not " + juce::String ((int) expectedRate)
+                               + " Hz - set the render device to " + juce::String ((int) expectedRate)
+                               + " Hz so the reference is captured without resampling");
+    }
+
+    const REFERENCE_TIME hnsBuffer = 10000000;   // 1 s
+    HRESULT hr = ac->Initialize (AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+                                 hnsBuffer, 0, mix, nullptr);
+    if (FAILED (hr)) {
+        CoTaskMemFree (mix); ac->Release();
+        return releaseAndFail ("loopback init failed (hr=0x"
+                               + juce::String::toHexString ((int) hr)
+                               + ") - the endpoint may be held in exclusive mode");
+    }
+
+    IAudioCaptureClient* cap = nullptr;
+    if (FAILED (ac->GetService (__uuidof (IAudioCaptureClient), (void**) &cap)) || cap == nullptr) {
+        CoTaskMemFree (mix); ac->Release();
+        return releaseAndFail ("could not obtain the capture client");
+    }
+
+    if (FAILED (ac->Start())) {
+        cap->Release(); CoTaskMemFree (mix); ac->Release();
+        return releaseAndFail ("could not start the loopback capture");
+    }
+
+    const size_t reserveFrames = (size_t) ((double) rate * juce::jmax (0.0, seconds));
+    res.samplesL.reserve (reserveFrames);
+    res.samplesR.reserve (reserveFrames);
+    long long nonSilent = 0, totalFrames = 0;
+
+    // END-OF-SWEEP AUTO-STOP (same contract as captureLoopback) — but driven by the COMBINED
+    // per-block activity (max of |L| and |R|). Because Dirac hard-pans, one channel is silent while
+    // the other sweeps; feeding a single channel would trail-stop in its quiet half and truncate the
+    // L-then-R sequence. max(L,R) stays loud across the whole sequence, so only the real trailing
+    // silence (both channels quiet) ends it.
+    SweepEndDetector endDet;
+    bool endedEarly = false;
+
+    bool wasCancelled = false;
+    const juce::int64 endMs = juce::Time::currentTimeMillis()
+                            + (juce::int64) (juce::jmax (0.0, seconds) * 1000.0);
+    while (juce::Time::currentTimeMillis() < endMs) {
+        // Cooperative cancel: break out and fall through to the clean Stop()+Release() below.
+        if (cancelledNow()) { wasCancelled = true; break; }
+        UINT32 packetFrames = 0;
+        if (FAILED (cap->GetNextPacketSize (&packetFrames))) break;
+        if (packetFrames == 0) { juce::Thread::sleep (5); continue; }
+        BYTE* data = nullptr; UINT32 got = 0; DWORD flags = 0;
+        if (FAILED (cap->GetBuffer (&data, &got, &flags, nullptr, nullptr))) break;
+        totalFrames += got;
+        const double chunkSeconds = rate > 0 ? (double) got / (double) rate : 0.0;
+        float chunkPeak = 0.0f;   // COMBINED: max of |L| and |R| over this packet
+        if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
+            res.samplesL.insert (res.samplesL.end(), (size_t) got, 0.0f);   // loopback silence -> zeros
+            res.samplesR.insert (res.samplesR.end(), (size_t) got, 0.0f);
+        } else {
+            const size_t before = res.samplesL.size();
+            detail::decodePacketPerChannel (data, got, (int) channels, (int) bits, isFloat,
+                                            res.samplesL, res.samplesR);
+            for (size_t i = before; i < res.samplesL.size(); ++i) {
+                // COMBINED activity = the larger of |L| and |R| (NOT std::max — the Windows
+                // headers pulled in above define a `max` macro that would break it here).
+                const float al = std::abs (res.samplesL[i]);
+                const float ar = std::abs (res.samplesR[i]);
+                const float a  = (al > ar) ? al : ar;
+                if (a > chunkPeak) chunkPeak = a;
+                if (a > 0.0001f) ++nonSilent;   // counts samples; only used as a >0 flag below
+            }
+        }
+        cap->ReleaseBuffer (got);
+
+        // Feed the COMBINED chunk peak to the end detector. Once it reports the sweep sequence has
+        // ended, stop — we've captured the whole L-then-R run plus the trailing silence.
+        if (endDet.update (chunkPeak, chunkSeconds)) { endedEarly = true; break; }
+    }
+    ac->Stop();
+    juce::ignoreUnused (endedEarly);
+
+    cap->Release(); CoTaskMemFree (mix); ac->Release(); match->Release(); en->Release();
+    if (weInited) CoUninitialize();
+
+    // A user-cancel wins over any silence/empty verdict: report it neutrally, not as a failure.
+    if (wasCancelled)
+        { res.ok = false; res.cancelled = true; res.reason = "cancelled"; return res; }
+
+    if (totalFrames <= 0 || nonSilent <= 0)
+        { res.ok = false; res.reason = "captured silence - nothing was playing on the render endpoint"; return res; }
+
+    res.ok = true;
+    return res;
+}
+
+// ---------------------------------------------------------------------------
 // Per-channel pan-check capture (eb_diag pancheck diagnostic).
 // ---------------------------------------------------------------------------
 namespace {
@@ -804,6 +1038,19 @@ LoopbackCaptureResult captureLoopback (const juce::String&, double, double,
         res.cancelled = true; res.reason = "cancelled"; return res;
     }
     res.reason = "loopback capture is only available on Windows";
+    return res;
+}
+
+StereoLoopbackResult captureLoopbackStereo (const juce::String&, double, double,
+                                            const std::atomic<bool>* cancel) {
+    StereoLoopbackResult res;
+    res.ok = false;
+    // Honour a pre-set cancel token here too, so the cancelled result is reported the
+    // same way on every platform (a user-cancel, not a "needs Windows" failure).
+    if (cancel != nullptr && cancel->load (std::memory_order_relaxed)) {
+        res.cancelled = true; res.reason = "cancelled"; return res;
+    }
+    res.reason = "not supported on this platform";
     return res;
 }
 
