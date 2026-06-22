@@ -1293,18 +1293,64 @@ void MainComponent::loadStoredReference() {
     // 48k-only (the capture asserted 48k), so the raw f32 samples read back at 48 kHz. A STALE reference
     // (Dirac's sweep changed since it was learned) is caught at grade time by the match-gate -> the
     // status reads "re-learn", never a false grade, so reloading a possibly-old reference is safe.
-    auto refFile = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                       .getChildFile ("EarsBridge").getChildFile ("reference.f32");
-    if (! refFile.existsAsFile()) return;
-    juce::MemoryBlock mb;
-    if (! refFile.loadFileAsData (mb)) return;
-    const int n = (int) (mb.getSize() / sizeof (float));
-    if (n < 48000) return;   // sanity: a real reference is many seconds long, not a stray short file
-    const auto* f = static_cast<const float*> (mb.getData());
-    loadedReference_.assign (f, f + n);
-    loadedReferenceRate_ = 48000.0;                  // v1: 48k-only
-    referenceStatePath_  = refFile.getFullPathName();
-    engine.setReferenceLoaded (true);
+    // Per-Ear Per-Channel Grading (Task 2): the reference is now stored PER CHANNEL as two files
+    // (reference_L.f32 + reference_R.f32). An old single mono reference.f32 CANNOT grade per-ear (it
+    // downmixed away Dirac's L/R separation), so we must NOT silently load it as a grade reference —
+    // that would mis-grade. classifyReferenceFiles encodes the three outcomes (PURE; unit-tested):
+    //   both present -> load; only the old mono (or one channel) -> force a RE-LEARN; nothing -> idle.
+    auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                   .getChildFile ("EarsBridge");
+    auto refL   = dir.getChildFile ("reference_L.f32");
+    auto refR   = dir.getChildFile ("reference_R.f32");
+    auto refOld = dir.getChildFile ("reference.f32");
+
+    // A channel is "present" only if it is a real (long-enough) reference, not a stray short/empty file —
+    // mirror the old sanity floor (a real reference is many seconds long, not a few stray samples).
+    auto longEnough = [] (const juce::File& f) {
+        return f.existsAsFile() && (f.getSize() / (juce::int64) sizeof (float)) >= 48000;
+    };
+    const bool hasL    = longEnough (refL);
+    const bool hasR    = longEnough (refR);
+    const bool hasMono = longEnough (refOld);
+
+    switch (eb::classifyReferenceFiles (hasL, hasR, hasMono)) {
+        case eb::ReferenceFilesState::PerChannel: {
+            juce::MemoryBlock mbL, mbR;
+            if (! refL.loadFileAsData (mbL) || ! refR.loadFileAsData (mbR)) return;
+            const int nL = (int) (mbL.getSize() / sizeof (float));
+            const int nR = (int) (mbR.getSize() / sizeof (float));
+            if (nL < 48000 || nR < 48000) return;   // re-check after the read (defensive)
+            const auto* fL = static_cast<const float*> (mbL.getData());
+            const auto* fR = static_cast<const float*> (mbR.getData());
+            loadedReferenceL_.assign (fL, fL + nL);
+            loadedReferenceR_.assign (fR, fR + nR);
+            loadedReferenceRateL_ = 48000.0;         // v1: 48k-only (the capture asserted 48k)
+            loadedReferenceRateR_ = 48000.0;
+            // TRANSITIONAL alias: keep the existing single-ring grade path (pollReferenceGrade) running on
+            // ref_L until Task 4 splits it into two per-ear pollers. loadedReference_/Rate_ track the LEFT.
+            loadedReference_     = loadedReferenceL_;
+            loadedReferenceRate_ = loadedReferenceRateL_;
+            referenceStatePath_  = refL.getFullPathName();
+            engine.setReferenceLoaded (true);
+            return;
+        }
+        case eb::ReferenceFilesState::ReLearnNeeded: {
+            // An old mono reference (or a half-written per-channel pair) is on disk. It cannot grade per-ear,
+            // so leave referenceLoaded FALSE and tell the user once: they must RE-LEARN. We do NOT auto-delete
+            // the old file here (only a successful re-learn replaces it) — a failed re-learn shouldn't lose it.
+            engine.setReferenceLoaded (false);
+            learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
+            learnRefResultLabel.setText ("Re-learn needed: the saved reference is the old mono format and "
+                                         "can't grade each ear. Learn a new one (Windows Audio).",
+                                         juce::dontSendNotification);
+            logLine (eb::DiagnosticLog::Level::Warn,
+                     "Reference reload: only an old mono reference found - per-ear grading needs a re-learn.");
+            return;
+        }
+        case eb::ReferenceFilesState::None:
+        default:
+            return;   // nothing learned yet; stay idle
+    }
 }
 
 void MainComponent::onLearnReference() {
@@ -1380,25 +1426,40 @@ void MainComponent::onLearnReference() {
     // has cleared learning_ — so the pointer stays valid for the duration of the capture.
     const std::atomic<bool>* cancel = &learnCancelRequested_;
     firPool->addJob ([safe, rate, renderTarget, cancel]() mutable {
-        // Capture the loopback, then validate the PURE core. The capture AUTO-STOPS the moment Dirac's
-        // sweep sequence ends (end-of-sweep detector inside captureLoopback); 35 s is only the MAXIMUM cap
-        // (bumped from 26 s so a longer-than-26 s config isn't truncated). renderTarget is the device Dirac
-        // plays the sweep to (from Dirac's settings). The cancel token lets a Cancel click abort promptly.
-        auto cap = eb::captureLoopback (renderTarget, 35.0, rate, cancel);   // Dirac's output render endpoint; 35 s = max cap
+        // Per-Ear Per-Channel Grading (Task 2): capture the loopback PER CHANNEL (no downmix), then validate
+        // EACH channel independently. Dirac HARD-PANS its measurement sweeps, so ref_L = render ch0 holds the
+        // LEFT sweep (with the RIGHT half silent) and ref_R = ch1 holds the RIGHT sweep — each channel contains
+        // exactly ONE sweep, so the existing single-sweep self-test (validateReferenceCapture) run PER CHANNEL
+        // finds that channel's sweep. A channel that fails to validate -> the learn fails, NAMING which ear, so
+        // we never store a half-bad per-ear reference. The capture AUTO-STOPS the moment Dirac's sweep sequence
+        // ends (end-of-sweep detector inside captureLoopbackStereo, keyed off max(|L|,|R|) so the L-then-R
+        // sequence stays whole); 35 s is only the MAXIMUM cap. The cancel token lets a Cancel click abort.
+        auto cap = eb::captureLoopbackStereo (renderTarget, 35.0, rate, cancel);   // Dirac's output render endpoint; 35 s = max cap
         juce::String resultMsg; bool ok = false; bool cancelled = cap.cancelled;
-        std::vector<float> samples; double capRate = rate;
+        std::vector<float> samplesL, samplesR; double capRate = rate;
         if (cap.cancelled) {
             resultMsg = "Learning cancelled.";
         } else if (! cap.ok) {
             resultMsg = "Capture failed: " + cap.reason;
         } else {
-            const auto v = eb::validateReferenceCapture (cap.samples.data(), (int) cap.samples.size(), cap.rate);
-            if (! v.ok) { resultMsg = "Rejected: " + v.reason; }
-            else        { ok = true; samples = std::move (cap.samples); capRate = cap.rate;
-                          resultMsg = "Reference learned (" + juce::String (samples.size() / capRate, 1)
-                                      + " s) - see tip to resume listening."; }
+            // Validate each channel on its own — each must contain a sweep. Name the failing ear precisely.
+            const auto vL = eb::validateReferenceCapture (cap.samplesL.data(), (int) cap.samplesL.size(), cap.rate);
+            const auto vR = eb::validateReferenceCapture (cap.samplesR.data(), (int) cap.samplesR.size(), cap.rate);
+            if (! vL.ok)      { resultMsg = "Rejected (Left ear): " + vL.reason; }
+            else if (! vR.ok) { resultMsg = "Rejected (Right ear): " + vR.reason; }
+            else {
+                ok = true;
+                samplesL = std::move (cap.samplesL);
+                samplesR = std::move (cap.samplesR);
+                capRate  = cap.rate;
+                resultMsg = "Reference learned - both ears captured (L "
+                            + juce::String (samplesL.size() / capRate, 1) + " s, R "
+                            + juce::String (samplesR.size() / capRate, 1) + " s) - see tip to resume listening.";
+            }
         }
-        juce::MessageManager::callAsync ([safe, ok, cancelled, resultMsg, samples = std::move (samples), capRate]() mutable {
+        juce::MessageManager::callAsync ([safe, ok, cancelled, resultMsg,
+                                          samplesL = std::move (samplesL), samplesR = std::move (samplesR),
+                                          capRate]() mutable {
             auto* mc = safe.getComponent();
             if (! mc) return;
             // Back to idle: restore the button to "Learn reference (Windows Audio)" and re-enable, so the
@@ -1418,18 +1479,28 @@ void MainComponent::onLearnReference() {
                 // The short rail label can't hold the full round-trip reminder, so park it in a tooltip.
                 mc->learnRefResultLabel.setTooltip ("Re-enable exclusive mode on your output device and set "
                                                     "Dirac back to ASIO to resume normal listening.");
-                // Store the reference + metadata on disk and mark it loaded so the engine grades against it.
-                auto md  = eb::makeReferenceMetadata (samples.data(), (int) samples.size(), capRate);
+                // Store BOTH channels on disk as reference_L.f32 / reference_R.f32 (raw f32, same format as the
+                // old single file) so the per-ear reference survives a restart. DELETE the obsolete mono
+                // reference.f32 if present — it would be mistaken for a valid reference on a future reload.
                 auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
                                .getChildFile ("EarsBridge");
                 dir.createDirectory();
-                auto refFile = dir.getChildFile ("reference.f32");
-                refFile.replaceWithData (samples.data(), samples.size() * sizeof (float));
-                mc->referenceStatePath_ = refFile.getFullPathName();
-                // Hold the reference IN MEMORY so pollReferenceGrade can deconvolve a measurement
-                // against it OFFLINE (it pairs this with the engine's captured response buffer).
-                mc->loadedReference_     = samples;     // copy (samples is moved-in but still readable here)
-                mc->loadedReferenceRate_ = capRate;
+                auto refL = dir.getChildFile ("reference_L.f32");
+                auto refR = dir.getChildFile ("reference_R.f32");
+                refL.replaceWithData (samplesL.data(), samplesL.size() * sizeof (float));
+                refR.replaceWithData (samplesR.data(), samplesR.size() * sizeof (float));
+                auto refOld = dir.getChildFile ("reference.f32");
+                if (refOld.existsAsFile()) refOld.deleteFile();   // obsolete mono ref -> remove on a successful re-learn
+                mc->referenceStatePath_ = refL.getFullPathName();
+                // Hold both channels IN MEMORY so the per-ear grade path (Task 4) can deconvolve each earcup
+                // against its own reference. TRANSITIONAL alias: keep the single-ring grade (pollReferenceGrade)
+                // running on ref_L until Task 4 splits it — loadedReference_/Rate_ track the LEFT.
+                mc->loadedReferenceL_     = samplesL;   // copy (moved-in but still readable here)
+                mc->loadedReferenceR_     = samplesR;
+                mc->loadedReferenceRateL_ = capRate;
+                mc->loadedReferenceRateR_ = capRate;
+                mc->loadedReference_      = mc->loadedReferenceL_;
+                mc->loadedReferenceRate_  = capRate;
                 mc->engine.setReferenceLoaded (true);
             }
         });

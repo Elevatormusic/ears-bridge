@@ -131,3 +131,28 @@ TEST_CASE("decodePacketPerChannel: successive packets APPEND (oldest-to-newest) 
     CHECK (L[0] == 0.1f); CHECK (L[1] == 0.2f);
     CHECK (R[0] == 0.9f); CHECK (R[1] == 0.8f);
 }
+
+// ---------------------------------------------------------------------------
+// Task 2 — the reload decision (classifyReferenceFiles). This is the PURE core behind
+// MainComponent::loadStoredReference: both per-channel files present -> loadable for per-ear
+// grading; only the OLD mono reference (or just one channel) -> force a RE-LEARN, never a false
+// grade; nothing present -> idle. (The file I/O itself is on-device, but the decision is testable.)
+// ---------------------------------------------------------------------------
+TEST_CASE("classifyReferenceFiles: both channels present -> loadable per-channel") {
+    CHECK (eb::classifyReferenceFiles (/*L*/ true, /*R*/ true, /*mono*/ false) == eb::ReferenceFilesState::PerChannel);
+    // A leftover old mono file alongside a valid pair is irrelevant — the pair wins.
+    CHECK (eb::classifyReferenceFiles (true, true, /*mono*/ true) == eb::ReferenceFilesState::PerChannel);
+}
+
+TEST_CASE("classifyReferenceFiles: only the old mono reference -> re-learn (not loadable, no false grade)") {
+    CHECK (eb::classifyReferenceFiles (/*L*/ false, /*R*/ false, /*mono*/ true) == eb::ReferenceFilesState::ReLearnNeeded);
+}
+
+TEST_CASE("classifyReferenceFiles: a half-written pair (one channel missing) -> re-learn") {
+    CHECK (eb::classifyReferenceFiles (/*L*/ true,  /*R*/ false, /*mono*/ false) == eb::ReferenceFilesState::ReLearnNeeded);
+    CHECK (eb::classifyReferenceFiles (/*L*/ false, /*R*/ true,  /*mono*/ false) == eb::ReferenceFilesState::ReLearnNeeded);
+}
+
+TEST_CASE("classifyReferenceFiles: nothing on disk -> none (stay idle)") {
+    CHECK (eb::classifyReferenceFiles (false, false, false) == eb::ReferenceFilesState::None);
+}
