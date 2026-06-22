@@ -108,6 +108,11 @@ public:
     // read only; the flag (health().flags & LowSnr) is the source of truth for WHETHER to warn.
     float completedSweepSnrDb() const noexcept;
 
+    // Noise-floor primitive: the measured ambient floor. Averaged (user-facing, dBFS at the EARS capsule;
+    // becomes dB SPL once the calibration feature applies the cal-file sense factor) + a validity gate.
+    float noiseFloorDbAveraged() const noexcept;
+    bool  noiseFloorValid()      const noexcept;
+
     // Match-window sweep-SNR fix: the GUI worker (pollReferenceGrade) computes the sweep-to-room-noise SNR from
     // the SAME match-aligned grade window — the path that ACTUALLY fires on a real Dirac log-sweep, unlike the
     // dead level arm — and forwards the result here. publishCompletedSweepSnrDb snapshots the dB so the existing

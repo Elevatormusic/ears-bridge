@@ -374,3 +374,15 @@ TEST_CASE("AudioEngine: applyCalibrationGeneration is a no-op while Running (eng
     CHECK (e.appliedGeneration() == 11);
     CHECK (e.calibrationDiagnostic().isEmpty());   // appliedGen_ (gen 11, valid) was not overwritten
 }
+
+// ---- Noise-floor primitive (Task 4): the engine feeds the tracker + exposes the measured floor ----
+TEST_CASE("AudioEngine: measured noise floor populates from quiet capture blocks") {
+    eb::AudioEngine eng;
+    eng.prepareForTest (48000.0, 480);
+    std::vector<float> q (480, 0.004f), mono (480, 0.0f);
+    CHECK_FALSE (eng.noiseFloorValid());
+    for (int i = 0; i < 60; ++i)                       // 60 * 480/48000 = 0.6 s of quiet -> baselines
+        eng.processCaptureBlockForTest (q.data(), q.data(), mono.data(), 480);
+    CHECK (eng.noiseFloorValid());
+    CHECK (eng.noiseFloorDbAveraged() < -24.0f);       // a real, quiet measured floor (~-48 dBFS)
+}
