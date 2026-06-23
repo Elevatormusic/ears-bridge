@@ -1,6 +1,7 @@
 #include "audio/AudioEngine.h"
 #include "gui/SnrStatus.h"   // SNR: pure evaluateSnr verdict (RT-safe; snrNote/String is GUI-side only)
 #include "audio/RefMonitor.h"   // Plan 5: RefMonState (the published-state enum; gradeMeasurement is GUI-worker-side)
+#include "audio/HardwareDiracDetect.h"   // sweepWasInternal / outputRendered (hardware-Dirac detect-and-degrade)
 #include <cmath>
 #include <cstring>   // std::memcpy (RT-safe response-buffer copy on the capture thread)
 namespace eb {
@@ -368,6 +369,20 @@ void AudioEngine::publishBaseRefState (RefMonState s) noexcept {
         lastMatchCoherMilli_[ear].store (0);
     }
     hm.publishRefGrade ((int) s, 0.0f, 0.0f);   // the combined snapshot the legacy status ladder still reads
+}
+
+void AudioEngine::setDiracHardwareProcessor (bool on) noexcept {
+    gradingOffHardware_.store (on, std::memory_order_relaxed);
+    // ON -> the calm GradingOffHardware on both ears (the GUI poll skips the loopback grade while active);
+    // OFF -> NotGraded so the next sweep re-grades. publishBaseRefState writes both ears + clears stale metrics.
+    publishBaseRefState (on ? RefMonState::GradingOffHardware : RefMonState::NotGraded);
+}
+
+void AudioEngine::updateHardwareDiracAutoDetect (bool micHeardSweep, float maxOutputRenderPeak,
+                                                 bool outputReadable, bool validMode) noexcept {
+    autoDetectedHardwareDirac_.store (
+        sweepWasInternal (micHeardSweep, outputReadable, outputRendered (maxOutputRenderPeak), validMode),
+        std::memory_order_relaxed);
 }
 
 void AudioEngine::setReferenceLoaded (bool loaded) noexcept {
