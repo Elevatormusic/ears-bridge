@@ -296,6 +296,8 @@ public:
     // left peak does NOT leak into the second earcup's sweep after resetSweepPeaks() runs per Complete).
     float maxSweepPeakLForTest() const noexcept { return hm.maxSweepPeakL(); }
     float maxSweepPeakRForTest() const noexcept { return hm.maxSweepPeakR(); }
+    float maxSweepPeakL() const noexcept { return hm.maxSweepPeakL(); }   // "the mic heard a sweep this run" signal
+    float maxSweepPeakR() const noexcept { return hm.maxSweepPeakR(); }   // (hardware-Dirac auto-detect; no grade needed)
 
     // D8: directly call hm.checkFormatChange with the given values, simulating a mid-run OS
     // format renegotiation, so tests can verify that AudioEngine::health() surfaces FormatChanged.
