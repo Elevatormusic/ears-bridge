@@ -57,6 +57,12 @@ struct GradePollResult {
     // POSITIVE dBFS (e.g. +1.6) — that is the whole point, so the GUI can say "clipped +1.6 dBFS, lower the
     // output". Floored at -120 dB for a silent span (no -inf/NaN). GUIDANCE only: it never invalidates the grade.
     float sweepPeakDb   = -120.0f;
+
+    // 3-color quality bands (valid only when didGrade). The headline `state` above is recomputed from these
+    // by aggregateVerdict: sweepSNR gates, THD escalates at red, IR-SNR is advisory (display only). GUIDANCE.
+    QualityBand sweepSnrBand = QualityBand::Unknown;
+    QualityBand irSnrBand    = QualityBand::Unknown;
+    QualityBand thdBand      = QualityBand::Unknown;
 };
 
 // The stateful grade-poll decision. Holds the two-poll debounce state; otherwise pure logic. NOT

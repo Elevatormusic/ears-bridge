@@ -179,6 +179,18 @@ GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winL
     }
     computeSweepSnr (window, winLen, alignOffset, refLen, g);
     g.sweepPeakDb = sweepPeakDb (window, winLen, alignOffset, refLen);   // raw input peak over the SAME sweep region
+    // Recompute the headline from the 3 metrics now that sweepSNR is known (Approach B). `matched` == it
+    // actually graded (packGrade set ReferenceStale iff the match-gate failed). sweepSNR gates; THD escalates
+    // only at red; IR-SNR is advisory (its band is reported, never gates).
+    {
+        const bool matched = (g.state != RefMonState::ReferenceStale);
+        const QualityVerdict v = aggregateVerdict (matched, g.sweepSnrDb, g.sweepSnrValid, g.irSnrDb, g.thdPercent);
+        g.state        = v.state;
+        g.sweepSnrBand = v.sweepSnrBand;
+        g.irSnrBand    = v.irSnrBand;
+        g.thdBand      = v.thdBand;
+        g.mismatch     = (g.state == RefMonState::ReferenceStale);
+    }
     return g;
 }
 
@@ -196,6 +208,18 @@ GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winL
     // Sweep-to-noise SNR from the SAME aligned window, reusing decide()'s alignOffset (no second xcorr). GUIDANCE.
     computeSweepSnr (window, winLen, alignOffset, refLen, g);
     g.sweepPeakDb = sweepPeakDb (window, winLen, alignOffset, refLen);   // raw input peak over the SAME sweep region
+    // Recompute the headline from the 3 metrics now that sweepSNR is known (Approach B). `matched` == it
+    // actually graded (packGrade set ReferenceStale iff the match-gate failed). sweepSNR gates; THD escalates
+    // only at red; IR-SNR is advisory (its band is reported, never gates).
+    {
+        const bool matched = (g.state != RefMonState::ReferenceStale);
+        const QualityVerdict v = aggregateVerdict (matched, g.sweepSnrDb, g.sweepSnrValid, g.irSnrDb, g.thdPercent);
+        g.state        = v.state;
+        g.sweepSnrBand = v.sweepSnrBand;
+        g.irSnrBand    = v.irSnrBand;
+        g.thdBand      = v.thdBand;
+        g.mismatch     = (g.state == RefMonState::ReferenceStale);
+    }
     return g;
 }
 
