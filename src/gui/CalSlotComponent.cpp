@@ -257,7 +257,9 @@ void CalSlotComponent::paint (juce::Graphics& g) {
         else            drawChip (g, header, juce::Justification::right, typeTag,
                                   Theme::infoBg(), Theme::infoText());
     } else {
-        drawChip (g, header, juce::Justification::right, "Required",
+        // Start is allowed with no cal (unity passthrough), so the cal is RECOMMENDED, not required. Keep the
+        // amber warn tint as a visible nudge: an uncalibrated measurement is not corrected for the EARS mic.
+        drawChip (g, header, juce::Justification::right, "Recommended",
                   Theme::warn().withAlpha (0.16f), Theme::warn());
     }
 
