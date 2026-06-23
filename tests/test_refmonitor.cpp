@@ -325,6 +325,10 @@ TEST_CASE ("qualityNote names the worst offender; IR-SNR advisory last", "[refmo
     CHECK (note (true, 5,  true, 60, 0.01f).find ("Noisy capture") != std::string::npos);
     CHECK (note (true, 30, true, 60, 12).find ("distortion") != std::string::npos);
     CHECK (note (true, 22, true, 60, 0.01f).find ("Marginal SNR") != std::string::npos);
+    // Both sweepSNR notes predict Dirac's "imprecise" verdict (low capture SNR -> phase correction dropped):
+    // a low-SNR grade is the bridge's early warning for it (research-confirmed 2026-06-23).
+    CHECK (note (true, 5,  true, 60, 0.01f).find ("imprecise") != std::string::npos);
+    CHECK (note (true, 22, true, 60, 0.01f).find ("imprecise") != std::string::npos);
     CHECK (note (true, 30, true, 30, 0.01f).find ("Weak impulse") != std::string::npos);
     CHECK (note (true, 30, true, 60, 0.01f).empty());
 }

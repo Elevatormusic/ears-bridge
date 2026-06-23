@@ -195,9 +195,12 @@ struct QualityVerdict {
 [[nodiscard]] inline juce::String qualityNote (const QualityVerdict& v) {
     if (v.state == RefMonState::ReferenceStale)
         return "Reference doesn't match your sweep - re-learn it.";
-    if (v.sweepSnrBand == QualityBand::Red)    return "Noisy capture - re-measure.";
+    // sweepSNR predicts Dirac's "imprecise" verdict: low capture SNR corrupts the excess-phase estimate, so
+    // Dirac drops the position from phase correction (research-confirmed; the fix is more SNR, not re-measuring
+    // blindly). Name the verdict so the grade is actionable.
+    if (v.sweepSnrBand == QualityBand::Red)    return "Noisy capture - Dirac will likely mark it imprecise; raise level or lower noise.";
     if (v.thdBand      == QualityBand::Red)    return "High distortion - check level/seal.";
-    if (v.sweepSnrBand == QualityBand::Orange) return "Marginal SNR - some noise; usable, consider re-measuring.";
+    if (v.sweepSnrBand == QualityBand::Orange) return "Marginal SNR - Dirac may mark it imprecise; raise level or lower noise.";
     if (v.irSnrBand    == QualityBand::Red)    return "Weak impulse response - possible time-variance or reference issue.";
     return {};   // all clear
 }
