@@ -32,6 +32,7 @@ add_executable(eb_tests
     test_statusphase.cpp
     test_signalchainview.cpp
     test_irquality.cpp
+    test_hysteresis.cpp
     test_refmonitor.cpp
     test_refmon_live.cpp
     test_graderings.cpp
