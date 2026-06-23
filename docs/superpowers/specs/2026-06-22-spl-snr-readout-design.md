@@ -49,11 +49,17 @@ SPL_capsule(dB) = dBFS − SensFactor + 94 − (DIP_gain − 18)
    - `snrDb < kSnrNoiseLimited` (~20 dB, ratify) → NoiseLimited ("the amp/room is your ceiling").
    - else → Healthy. (`kSnrHealthy` ~30 dB for the GUI accent.)
 4. **DIP-gain setting** — a small persisted "EARS gain" (default 18 dB; steps 0/6/12/18/24/30/36) the
-   user confirms; feeds `SplMath`. + the input-volume guard (read OS volume, warn if < max).
-5. **Readout** — a "Measurement quality" card (noise floor / last sweep / SNR in dB SPL + the verdict +
+   user confirms; feeds `SplMath`.
+5. **Input-volume read + guard** (read+guard chosen over caveat-first) — `platform/InputVolume.*` reads
+   the EARS input endpoint's master-volume scalar (0..1) via WASAPI `IAudioEndpointVolume` on Windows
+   (guarded like `EndpointUid`/`EndpointFormat`; a stub returning "unknown" elsewhere). Pure decision
+   `bool inputVolumeMaxedForSpl(float scalar, float tol = 0.01f)` → `scalar >= 1 - tol`. Read off the
+   audio thread (on prepare + a periodic poll, like `pollChainConfig`).
+6. **Readout** — a "Measurement quality" card (noise floor / last sweep / SNR in dB SPL + the verdict +
    advice) near the Input monitor. Pure presentation-model (like `SignalChainView`); the visual build
-   gets the **apple-hig** treatment. Shows SPL when `sensFactorDb` present + input-volume OK; otherwise
-   SNR-only with a one-line caveat.
+   gets the **apple-hig** treatment. SPL shown ONLY when `sensFactorDb` present AND the input volume reads
+   maxed; not-maxed → SNR-only + "set the EARS input level to 100% in Windows for SPL"; unknown
+   (macOS / unreadable) → SPL with a one-line caveat. SNR + verdict always shown (volume-independent).
 
 ## Data flow
 The engine already has the per-channel floor (#1 `measuredFloorLinear`), the sweep peak
@@ -72,9 +78,13 @@ int-milli idiom → the card reads them message-thread-side.
 - `SplMath`: `capsuleSplDb(dBFS=SensFactor, …, 18) == 94` (the anchor); the `−(DIP−18)` correction;
   `snrDb`. Hand-checked constants.
 - `MeasurementVerdict`: each boundary (clipped, !floorValid, below/above the SNR thresholds).
-- The card via the presentation-model pattern.
+- `inputVolumeMaxedForSpl`: 1.0 → true; 0.99 → true (tol); 0.9 → false; a negative "unknown" sentinel
+  handled by the caller (caveat path).
+- The card via the presentation-model pattern (SPL-shown vs SNR-only vs caveat states).
 
 ## Open / on-device ratification
-- The verdict SNR thresholds (`kSnrNoiseLimited` ~20, `kSnrHealthy` ~30) — synthetic; ratify on the rig.
-- Whether JUCE/WASAPI can read the EARS endpoint input volume on Windows for the max-volume guard (if
-  not, ship the caveat-only path first).
+- The verdict SNR thresholds **`kSnrNoiseLimited = 20`, `kSnrHealthy = 30`** (user-approved 2026-06-22) —
+  ratify on the rig but ship at these.
+- The WASAPI input-volume read is **Windows-only**; macOS falls back to the caveat-and-show path. (Read +
+  guard chosen over caveat-first.) The pure `inputVolumeMaxedForSpl` decision is fully unit-tested; the
+  WASAPI `IAudioEndpointVolume` read itself is hardware/manual (Windows), like the other `platform/` reads.
