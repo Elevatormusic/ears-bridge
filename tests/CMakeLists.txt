@@ -35,6 +35,7 @@ add_executable(eb_tests
     test_hysteresis.cpp
     test_gradesmoother.cpp
     test_hardwarediracdetect.cpp
+    test_resampler.cpp
     test_refmonitor.cpp
     test_refmon_live.cpp
     test_graderings.cpp
