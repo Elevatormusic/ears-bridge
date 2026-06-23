@@ -938,10 +938,14 @@ void MainComponent::updateStartGate() {
     const bool physicalOutput = isRealEarsInput()
                              && outputPicker.selectedDevice().has_value()
                              && ! outputPicker.selectedDevice()->isVirtualSink;
-    // #3: the advanced override relaxes ONLY the two policy gates (wrongMode, physicalOutput)
-    // for non-Dirac use cases. It NEVER bypasses haveDevs/haveCals (devices + applied calibration).
+    // No cal file loaded for EITHER ear -> the engine runs a neutral unity passthrough (clearLeftCalFir/
+    // clearRightCalFir restore unity), a valid-but-uncalibrated state. Allow Start (with a warning) rather
+    // than gating on it; a cal that IS loaded but not yet validly applied (half-built) still blocks via haveCals.
+    const bool noCalsLoaded = settings.leftCalPath().isEmpty() && settings.rightCalPath().isEmpty();
+    // #3: the advanced override relaxes ONLY the two policy gates (wrongMode, physicalOutput) for non-Dirac
+    // use cases. It NEVER bypasses haveDevs. The cal requirement is met by a valid applied cal OR no cal at all.
     const bool ready    = eb::startReady (haveDevs, haveCals, wrongMode, physicalOutput,
-                                          settings.advancedOverride());
+                                          settings.advancedOverride(), noCalsLoaded);
     startStop.setEnabled (running || ready);
     // Debug, on-change only (updateStartGate runs at 30 Hz): record WHETHER the gate is enabled and, when
     // disabled, the exact reason from the locals above — this is what explains a greyed-out Start button.
@@ -957,6 +961,7 @@ void MainComponent::updateStartGate() {
                        + " haveCals="       + (haveCals ? "1" : "0")
                        + " wrongMode="      + (wrongMode ? "1" : "0")
                        + " physicalOutput=" + (physicalOutput ? "1" : "0")
+                       + " noCalsLoaded="   + (noCalsLoaded ? "1" : "0")
                        + " override="       + (settings.advancedOverride() ? "1" : "0") + ")");
             }
         }
