@@ -40,6 +40,22 @@ public:
     double groupDelay() const noexcept { return (L_ - 1) / 2.0; }       // constant, frequency-independent
     const float* row (int p) const noexcept { return table_.data() + (size_t) p * L_; }   // p in [0, P]
 
+    // Produce one output sample at fractional input position readPhase (in capture samples). RT-safe,
+    // no alloc. CALLER guarantees input[floor(readPhase) - L/2 + 1 .. + L/2] are valid (L/2-1 left
+    // history, L/2 right). row in [0, P-1]; the guard row P keeps row+1 in-range with no special case.
+    float sampleAt (const float* input, double readPhase) const noexcept {
+        const int    n    = (int) std::floor (readPhase);
+        const double ph   = (readPhase - n) * kPhases;             // [0, P)
+        const int    row  = (int) ph;                              // [0, P-1]
+        const float  mu   = (float) (ph - row);
+        const float* a    = table_.data() + (size_t) row       * L_;
+        const float* b    = table_.data() + (size_t) (row + 1) * L_;   // guard row makes row+1 valid at row=P-1
+        const float* x    = input + (n - L_ / 2 + 1);
+        float sa = 0.0f, sb = 0.0f;                                // dual MAC: rows `row` and `row+1`
+        for (int k = 0; k < L_; ++k) { sa += a[k] * x[k]; sb += b[k] * x[k]; }
+        return sa + mu * (sb - sa);                                // linear inter-phase blend
+    }
+
 private:
     static double i0 (double x) noexcept {                     // modified Bessel I0 via the series sum
         double t = 1.0, sum = 1.0;                             // term_0 = 1
