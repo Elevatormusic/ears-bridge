@@ -1,9 +1,8 @@
 #pragma once
 #include <juce_core/juce_core.h>
+#include "audio/EngineTypes.h"   // eb::Ear (canonical home)
 
 namespace eb {
-
-enum class Ear { Left = 0, Right = 1 };
 
 enum class LrResult {
     Pending,        // not enough evidence yet
