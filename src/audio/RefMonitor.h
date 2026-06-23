@@ -110,7 +110,8 @@ enum class RefMonState {
     GradedClean,     // matched AND quality OK -> let the green "captured" branch show (verified)
     GradedMarginal,  // matched AND sweepSNR marginal (orange) -> usable, cautioned; blocks green
     GradedSuspect,   // matched AND low quality -> show irQualityNote (guidance warn)
-    NotGraded        // a reference is loaded but this run produced no gradeable measurement yet
+    NotGraded,       // a reference is loaded but this run produced no gradeable measurement yet
+    GradingOffHardware  // Dirac on a hardware box: no loopback reference -> grading off (calm/neutral, NOT a warn)
 };
 
 // Inputs to the transition: the bare booleans the engine/GUI can supply lock-free.
@@ -144,7 +145,8 @@ struct RefMonInputs {
 [[nodiscard]] inline bool refMonBlocksGreen (RefMonState s) noexcept {
     return s == RefMonState::NotLearned    || s == RefMonState::Learned
         || s == RefMonState::NotGraded     || s == RefMonState::ReferenceStale
-        || s == RefMonState::GradedMarginal || s == RefMonState::GradedSuspect;
+        || s == RefMonState::GradedMarginal || s == RefMonState::GradedSuspect
+        || s == RefMonState::GradingOffHardware;
 }
 
 // ---- 3-color verdict (pure): sweepSNR GATES; THD escalates only at RED; IR-SNR ADVISORY ----------

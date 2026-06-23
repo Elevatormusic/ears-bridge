@@ -328,3 +328,14 @@ TEST_CASE ("qualityNote names the worst offender; IR-SNR advisory last", "[refmo
     CHECK (note (true, 30, true, 30, 0.01f).find ("Weak impulse") != std::string::npos);
     CHECK (note (true, 30, true, 60, 0.01f).empty());
 }
+
+TEST_CASE ("GradingOffHardware: blocks green, neutral colour, never inferred", "[refmon][hwdirac]") {
+    // Hardware Dirac (DDRC-24 etc.): the box makes its own sweep -> no loopback reference -> grading off.
+    CHECK (refMonBlocksGreen (RefMonState::GradingOffHardware));   // no reference grade -> never reads green
+    CHECK (refMonColour (RefMonState::GradingOffHardware) == RefMonColour::Neutral);  // calm, NOT red/orange
+    CHECK (RefMonState::GradingOffHardware != RefMonState::GradedSuspect);            // distinct from a warn
+    // nextRefMonState NEVER returns it (published directly by the toggle path, never inferred from a grade):
+    for (bool a : {false,true}) for (bool b : {false,true})
+        for (bool c : {false,true}) for (bool d : {false,true})
+            CHECK (nextRefMonState ({a,b,c,d}) != RefMonState::GradingOffHardware);
+}
