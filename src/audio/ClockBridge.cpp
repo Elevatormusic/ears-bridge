@@ -9,9 +9,12 @@ void ClockBridge::prepare (double capRate, double renRate, int /*channels*/, int
     ring.assign ((size_t) capacity, 0.0f);
     fifo.setTotalSize (capacity);
     fifo.reset();
-    // Worst-case SRC needs ceil(ratio*numOut)+a few guard samples; size generously.
-    srcInput.assign ((size_t) capacity, 0.0f);
-    src.reset();
+    resampler_.prepare (captureRate, renderRate);
+    readPhase_ = resampler_.halfLength() - 1;            // first output centers on primed history
+    // Scratch must hold the worst-case needIn so the stateless FIR never reads OOB (even on starve):
+    // up to kMaxRatio*kMaxRenderBlock output span + the filter length.
+    srcInput.assign ((size_t) juce::jmax (capacity,
+                     (int) std::ceil (kMaxRatio * kMaxRenderBlock) + eb::PolyphaseResampler::kMaxLen + 8), 0.0f);
     smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0; avgRatioTrim_ = 1.0; avgCount_ = 0;
     sweepActive_.store (false); emergencyCorrection_.store (false);
     freezeArmed_ = false; frozenRatio_ = captureRate / juce::jmax (1.0, renderRate);
@@ -20,12 +23,16 @@ void ClockBridge::prepare (double capRate, double renRate, int /*channels*/, int
     publishedRatio.store (captureRate / juce::jmax (1.0, renderRate));
 }
 
-void ClockBridge::setRenderRate (double r) { renderRate = r; }
+void ClockBridge::setRenderRate (double r) {
+    renderRate = r;
+    resampler_.prepare (captureRate, renderRate);        // rebuild the prototype for the new ratio (setup thread)
+    readPhase_ = resampler_.halfLength() - 1;
+}
 
 void ClockBridge::reset() {
     fifo.reset();
     std::fill (ring.begin(), ring.end(), 0.0f);
-    src.reset();
+    readPhase_ = resampler_.halfLength() - 1;
     smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0; avgRatioTrim_ = 1.0; avgCount_ = 0;
     sweepActive_.store (false); emergencyCorrection_.store (false);
     freezeArmed_ = false; frozenRatio_ = captureRate / juce::jmax (1.0, renderRate);
@@ -104,26 +111,34 @@ int ClockBridge::pullRender (float* out, int numFrames) {
     }
     publishedRatio.store (ratio);                             // expose to currentRatio() (lock-free)
 
-    // Input samples the interpolator MAY need for numFrames outputs (upper bound).
-    int needIn = (int) std::ceil (ratio * numFrames) + 4;
+    // --- Windowed-sinc polyphase resample via the consumer-owned phase accumulator. ---
+    const double inc = ratio;                                  // nominal*ratioTrim (free) or frozenRatio_ (frozen)
+    const int    Lh  = resampler_.halfLength();
+    // Highest srcInput index the resampler reads for these numFrames outputs (= floor(last readPhase)+L/2).
+    int needIn = (int) std::floor (readPhase_ + (numFrames - 1) * inc) + Lh + 1;
     needIn = juce::jmin (needIn, (int) srcInput.size());
-    const int avail = fifo.getNumReady();
+    const int avail  = fifo.getNumReady();
     const int toRead = juce::jmin (needIn, avail);
 
-    // Peek toRead samples into the scratch buffer WITHOUT advancing the read pointer yet.
+    // Peek toRead samples into the scratch WITHOUT advancing the read pointer; the resampler needs the
+    // L/2-1 left history that stays in the FIFO between blocks (it is stateless).
     int s1, sz1, s2, sz2;
     fifo.prepareToRead (toRead, s1, sz1, s2, sz2);
-    if (sz1 > 0) juce::FloatVectorOperations::copy (srcInput.data(), ring.data() + s1, sz1);
+    if (sz1 > 0) juce::FloatVectorOperations::copy (srcInput.data(),       ring.data() + s1, sz1);
     if (sz2 > 0) juce::FloatVectorOperations::copy (srcInput.data() + sz1, ring.data() + s2, sz2);
+    if (toRead < needIn) {                                     // FIFO starved: zero-pad the tail the FIR reads
+        juce::FloatVectorOperations::clear (srcInput.data() + toRead, (int) srcInput.size() - toRead);
+        underrunCount.fetch_add (1);
+    }
 
-    if (toRead < needIn)
-        underrunCount.fetch_add (1);   // FIFO starved: interpolator zero-pads the tail (wrapAround = 0)
+    for (int j = 0; j < numFrames; ++j) { out[j] = resampler_.sampleAt (srcInput.data(), readPhase_); readPhase_ += inc; }
 
-    // process() RETURNS the actual number of input samples consumed (~ratio*numFrames, NOT toRead).
-    // Advance the FIFO by exactly that, so the stateful interpolator's input stays continuous and the
-    // FIFO drains at the true rate (advancing by toRead would skip samples and slowly empty the FIFO).
-    const int usedIn = src.process (ratio, srcInput.data(), out, numFrames, toRead, 0);
-    fifo.finishedRead (juce::jmin (usedIn, toRead));
+    // Retire only input fully behind the filter's left support; carry L/2-1 samples as history. This is the
+    // exact, deterministic replacement for the old stateful interpolator's returned usedIn.
+    int advance = (int) std::floor (readPhase_) - (Lh - 1);
+    advance = juce::jlimit (0, toRead, advance);
+    fifo.finishedRead (advance);
+    readPhase_ -= advance;
     return numFrames;
 }
 

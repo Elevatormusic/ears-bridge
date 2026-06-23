@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
+#include "audio/PolyphaseResampler.h"
 #include <atomic>
 #include <vector>
 namespace eb {
@@ -56,6 +57,7 @@ public:
     int    overruns()  const;   // count of overrun EVENTS (one per FIFO-full pushCapture); diagnostic
     long long droppedCaptureFrames() const;  // cumulative producer FRAMES dropped on FIFO-full
     double currentRatio() const;   // current trimmed capture:render resample ratio
+    double currentGroupDelay() const noexcept { return resampler_.groupDelay(); }   // constant resampler latency (samples)
     double avgRatioTrim() const noexcept { return avgRatioTrim_; }   // TEST: the running mean the freeze snapshots
 
 private:
@@ -64,10 +66,15 @@ private:
     std::vector<float> ring;            // capacity samples
     int capacity = 0;
 
-    // SRC consumer-side scratch + interpolator.
-    juce::LagrangeInterpolator src;
-    std::vector<float> srcInput;        // drained from FIFO, fed to interpolator
+    // SRC consumer-side scratch + measurement-grade windowed-sinc polyphase resampler. The resampler is
+    // STATELESS (vs the old stateful Lagrange) so ClockBridge owns the fractional read pointer readPhase_
+    // and retains L/2-1 history samples in the FIFO between blocks.
+    eb::PolyphaseResampler resampler_;
+    double readPhase_ = 0.0;            // fractional input position of the next output (consumer thread only)
+    std::vector<float> srcInput;        // peeked from FIFO, fed to the resampler
     double captureRate = 48000.0, renderRate = 48000.0;
+    static constexpr double kMaxRatio       = 4.0;      // 192k -> 48k, the worst-case input:output ratio
+    static constexpr int    kMaxRenderBlock = 8192;     // upper bound on pullRender numFrames (scratch sizing)
 
     // PI fill-control state (consumer thread only).
     double smoothedFill = 0.5;          // fraction
