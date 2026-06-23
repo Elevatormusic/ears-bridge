@@ -7,6 +7,8 @@
 #include "cal/CalibrationPairValidator.h"   // eb::validateCalibrationPair (P0-07)
 #include "audio/CalibrationGeneration.h"    // eb::CalibrationGeneration (generation lifecycle)
 #include "audio/RefMonitor.h"               // eb::RefMonState / gradeMeasurement / refMonBlocksGreen (Plan 5)
+#include "audio/HardwareDiracDetect.h"      // eb::sweepWasInternal / hardwareDiracSuggestion (hardware-Dirac)
+#include "platform/OutputActivity.h"        // eb::outputRenderPeakForName (is Dirac's PC output rendering?)
 #include "gui/SnrStatus.h"                  // eb::kMinSweepSnrDb (sweep-to-noise SNR threshold; match-window SNR fix)
 #include "gui/LiveInputStatus.h"            // eb::liveInputStatus (live per-channel in-sweep readout)
 #include "audio/LoopbackReference.h"        // eb::captureLoopback / validateReferenceCapture / readDiracDeviceType (Plan 5)
@@ -264,6 +266,20 @@ MainComponent::MainComponent() {
         updateStartGate();   // recompute Start enabled-ness + the status line for the new policy
     };
     railContent.addChildComponent (overrideToggle);
+    // Hardware-Dirac toggle: ON -> grading runs OFF the loopback (a hardware box generates its own sweep, so the
+    // loopback captures no reference). Persist + tell the engine (publishes GradingOffHardware + suppresses the
+    // grade) + suppress Learn-reference (nothing to learn). The auto-detect only SUGGESTS this toggle.
+    hwDiracToggle.setToggleState (settings.diracHardwareProcessor(), juce::dontSendNotification);
+    hwDiracToggle.onClick = [this] {
+        const bool on = hwDiracToggle.getToggleState();
+        logLine (eb::DiagnosticLog::Level::Info, juce::String ("Toggle: Dirac hardware processor=") + (on ? "on" : "off"));
+        settings.setDiracHardwareProcessor (on);
+        settings.flush();
+        engine.setDiracHardwareProcessor (on);   // publish GradingOffHardware / clear
+        learnRefButton.setEnabled (! on);        // a hardware box has no PC-render reference to learn
+    };
+    railContent.addChildComponent (hwDiracToggle);
+    if (settings.diracHardwareProcessor()) { engine.setDiracHardwareProcessor (true); learnRefButton.setEnabled (false); }
     styleEyebrow (firLenLabel, "FIR LENGTH");
     railContent.addChildComponent (firLenLabel);
     firLenBox.addItem ("Auto (scales with rate)", kFirLenAutoId);
@@ -851,6 +867,8 @@ void MainComponent::onStartStop() {
         // Task 4: re-arm BOTH per-ear grade pollers on Stop so a stale match from this run can't carry into
         // the next (each ear again needs two consecutive matched polls before its first grade).
         gradePollTick_ = 0; gradePollerL_.reset(); gradePollerR_.reset();
+        // Re-arm the hardware-Dirac auto-detect too: a fresh run must re-observe the output silence + mic sweep.
+        maxOutputRenderPeak_ = 0.0f; hwOutputReadable_ = false; hwDetectTick_ = 0;
         // Reset the live in-sweep readout state too, so a held level / sweep-active hold / live text from this
         // run can't bleed into the idle line after Stop (matches the Start-path reset).
         liveHeldLDb_ = liveHeldRDb_ = -120.0f;
@@ -1287,7 +1305,15 @@ void MainComponent::updateStatusLine() {
             // GradedMarginal = amber (usable, re-measure), GradedSuspect = red (noisy/distorted) — neither may
             // read as verified. "captured earcup" = Auto per-ear grades a SINGLE earcup per measurement (honesty).
             sCol = Theme::ok();
-            if (refState == eb::RefMonState::GradedClean) {
+            if (refState == eb::RefMonState::GradingOffHardware) {
+                // Hardware Dirac committed: no loopback reference -> grading off. Calm/neutral, not a warning.
+                msg  = "Sweep captured - reference grading off (hardware Dirac); per-ear calibration still active";
+                sCol = Theme::textDim();
+            } else if (engine.autoDetectedHardwareDirac() && ! settings.diracHardwareProcessor()) {
+                // Auto-detect SUGGESTION (never auto-applies): the box was detected; point to the Advanced toggle.
+                msg  = "Sweep captured - looks like a hardware Dirac processor; turn it on in Advanced to silence the grade";
+                sCol = Theme::textDim();
+            } else if (refState == eb::RefMonState::GradedClean) {
                 const int snr = juce::roundToInt (engine.refIrSnrDb());
                 const int thd = juce::roundToInt (engine.refThdPercent());
                 msg = "Sweep captured + verified against the reference (captured earcup) - IR-SNR "
@@ -1461,7 +1487,12 @@ void MainComponent::renderEarStatusLine (int ear, const char* prefix, juce::Labe
     juce::Colour col;
     juce::String tip;
 
-    if (state == eb::RefMonState::GradedClean) {
+    if (state == eb::RefMonState::GradingOffHardware) {
+        // Hardware Dirac: no loopback reference to grade against. CALM/neutral - NOT a warning, NOT green.
+        // Falls through the if-chain to the normal label application; the peak tail skips (not a graded state).
+        text = p + "grading off - hardware Dirac; per-ear calibration still active";
+        col  = Theme::textDim();
+    } else if (state == eb::RefMonState::GradedClean) {
         const int snr = juce::roundToInt (engine.refIrSnrDb    (ear));
         const int thd = juce::roundToInt (engine.refThdPercent (ear));
         text = p + "verified - IR-SNR " + juce::String (snr) + " dB, THD "
@@ -1801,6 +1832,26 @@ void MainComponent::pollReferenceGrade() {
     // other (a silent ring, or no sweep on that channel) never matches and stays at its base Learned state. A
     // silent ear can NEVER publish a clean grade or raise LowSnr: decide() returns not-matched on silence, so
     // gradeOneEar publishes nothing for it (the honesty gate).
+    // Hardware-Dirac (DDRC-24/SHD/Flex): the box makes its OWN sweep, so there is no loopback reference and no
+    // grade can run. Toggle ON -> grading already off (engine published GradingOffHardware); skip the grade.
+    if (engine.diracHardwareProcessorActive()) return;
+    // Toggle OFF + a measurement running -> AUTO-DETECT the box (suggest only). Throttled (~2 s) because the
+    // OutputActivity read is a COM device enumeration. This runs even with NO reference loaded (the hardware case),
+    // so it sits BEFORE the reference guards below.
+    if (engine.status() == eb::EngineStatus::Running && ++hwDetectTick_ >= kGradePollTicks) {
+        hwDetectTick_ = 0;
+        constexpr float kHwMicSweepFloor = 0.01f;   // ~-40 dBFS: above ambient, below a real sweep (PROVISIONAL)
+        const float peak = eb::outputRenderPeakForName (eb::readDiracOutputDeviceName());
+        if (peak >= 0.0f) { hwOutputReadable_ = true; maxOutputRenderPeak_ = juce::jmax (maxOutputRenderPeak_, peak); }
+        const bool micHeard  = juce::jmax (engine.maxSweepPeakL(), engine.maxSweepPeakR()) > kHwMicSweepFloor;
+        const bool validMode = eb::diracDeviceTypeIsWindowsAudio (eb::readDiracDeviceType());
+        engine.updateHardwareDiracAutoDetect (micHeard, maxOutputRenderPeak_, hwOutputReadable_, validMode);
+        if (engine.autoDetectedHardwareDirac())
+            logLine (eb::DiagnosticLog::Level::Info, juce::String ("Hardware-Dirac auto-detect: micHeard=")
+                + (micHeard ? "1" : "0") + " outRenderPeak=" + juce::String (maxOutputRenderPeak_, 4)
+                + " readable=" + (hwOutputReadable_ ? "1" : "0") + " validMode=" + (validMode ? "1" : "0") + " -> SUGGEST");
+    }
+
     if (! engine.referenceLoaded()) return;                              // nothing learned -> nothing to grade against
     if (loadedReferenceL_.empty() && loadedReferenceR_.empty()) return;  // no per-ear reference present
 
@@ -2278,6 +2329,7 @@ int MainComponent::layoutRail (int width) {
     openLogButton.setVisible (adv); exportLogButton.setVisible (adv);
     autoUpdateToggle.setVisible (adv);
     overrideToggle.setVisible (adv);   // #3: only reachable with Advanced expanded
+    hwDiracToggle.setVisible (adv);    // hardware-Dirac: only under Advanced (a deliberate, uncommon setup)
     if (adv) {
         rr.removeFromTop (4);
         complexPhaseToggle.setBounds (rr.removeFromTop (26));
@@ -2303,6 +2355,7 @@ int MainComponent::layoutRail (int width) {
         autoUpdateToggle.setBounds (rr.removeFromTop (26));
         rr.removeFromTop (6);
         overrideToggle.setBounds (rr.removeFromTop (26));
+        hwDiracToggle.setBounds (rr.removeFromTop (26));
     }
 
     // Total content height = the y just past the last placed control, plus the matching bottom gutter.

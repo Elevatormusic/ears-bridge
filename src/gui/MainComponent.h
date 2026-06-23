@@ -249,6 +249,11 @@ private:
     // #3: opt-in escape hatch from the Dirac-path Start gates (combine-mode + virtual output).
     // Nested inside Advanced so it takes a deliberate expand-and-tick; never bypasses cal/devices.
     juce::ToggleButton overrideToggle { "Allow non-Dirac use (skip combine-mode / output checks)" };
+    // Hardware-Dirac detect-and-degrade: the toggle commits "grading off"; the trackers feed the auto-detect.
+    juce::ToggleButton hwDiracToggle  { "Dirac runs on a hardware processor (DDRC-24 / SHD / Flex)" };
+    float maxOutputRenderPeak_ = 0.0f;   // max Dirac-output render peak seen this run (auto-detect)
+    bool  hwOutputReadable_    = false;  // whether OutputActivity read a real value this run (else can't confirm silence)
+    int   hwDetectTick_        = 0;      // throttle for the (COM-heavy) output-activity poll (~2 s, like the grade poll)
     juce::Label    firLenLabel; juce::ComboBox firLenBox;
     juce::Label    trimLabel;   juce::Slider trimSlider;
     // L/R check: drive a tone into the LEFT earcup; the engine reports whether L/R are wired right.
