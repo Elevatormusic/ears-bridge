@@ -150,7 +150,7 @@ struct MeasurementGrade {
     const std::vector<float> ir = deconvolve (reference, response, n);
     const std::vector<int>   harm = farinaHarmonicOffsets (n, sampleRate, f1, f2);
     g.quality = evaluateIr (ir.data(), (int) ir.size(), /*matched*/ true,
-                            minIrSnrDb, maxThdPct, harm);
+                            minIrSnrDb, maxThdPct, harm, sampleRate);
     g.state = g.quality.lowQuality ? RefMonState::GradedSuspect : RefMonState::GradedClean;
     return g;
 }
