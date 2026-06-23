@@ -206,6 +206,7 @@ private:
     // previous throttled poll's match result so two consecutive matched polls (~4 s of sustained match) confirm
     // the full sweep landed before grading. There is NO absolute level gate, and no silence/settled gate, here.
     int                gradePollTick_       = 0;      // 30 Hz tick counter for the ~2 s match-poll throttle
+    int                gradeEarToggle_      = 0;      // alternates which ear pollReferenceGrade tries first (fairness)
     static constexpr int kGradePollTicks    = 60;     // ~2 s at the 30 Hz GUI timer
     // The match + stable-match-debounce DECISION lives in a headless unit (eb::ReferenceGradePoller) so the
     // grade logic can be self-tested without the GUI/hardware (the "grade never fires" regression lived here).

@@ -96,6 +96,18 @@ public:
     GradePollResult decide (const float* window, int winLen,
                             const float* reference, int refLen);
 
+    // The HEAVY match-gate ONLY (cross-correlate align + referenceMatches), with NO debounce state touched — so it
+    // can run OFF the message thread (it is ~3 large FFTs over the whole 28 s window; running it on the GUI thread
+    // froze the app every poll). Fills coherence/mainLobe/matched/alignOffset; didGrade is left false. Static + pure.
+    // Pair it with applyDebounce() on the OWNING (message) thread: decide() == matchAlign() + applyDebounce().
+    static GradePollResult matchAlign (const float* window, int winLen,
+                                       const float* reference, int refLen);
+
+    // The CHEAP two-consecutive-matched-polls STABLE debounce (step 2 of poll()), applied to THIS poller's state.
+    // Pass matchAlign().matched; returns didGrade (the stable-match edge). MESSAGE-THREAD ONLY — it mutates the
+    // debounce, so it must not race a reset() on Start/Stop (which is also message-thread).
+    bool applyDebounce (bool matched);
+
     // The pure grade for a window decide() said to grade (no debounce state touched). Safe to call off-thread.
     // Returns the same state/quality fields poll() would have produced. Static: it is just gradeMeasurementWindow.
     // The two-arg `alignOffset` overload reuses the offset decide() already located (so the sweep is graded at

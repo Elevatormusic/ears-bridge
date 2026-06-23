@@ -22,33 +22,28 @@ bool windowIsFinite (const float* window, int n) noexcept {
 }
 } // namespace
 
-GradePollResult ReferenceGradePoller::decide (const float* window, int winLen,
-                                              const float* reference, int refLen) {
+GradePollResult ReferenceGradePoller::matchAlign (const float* window, int winLen,
+                                                  const float* reference, int refLen) {
     GradePollResult r;
 
-    // Guard: with no window or no reference there is nothing to grade against (mirrors the GUI's
-    // loadedReference_.empty() / got<=0 early returns). The match-gate cannot run -> not matched, no grade.
+    // Guard: with no window or no reference there is nothing to grade against. The match-gate cannot run.
     if (window == nullptr || reference == nullptr || winLen <= 0 || refLen <= 0)
         return r;
 
     // Fix 3 (safety): a NaN/Inf-bearing window must NOT match. referenceMatches can read coherence=1.0 from a
-    // degenerate window (restRms==0), so reject non-finite content up front -> not matched, no grade, no crash.
+    // degenerate window (restRms==0), so reject non-finite content up front -> not matched, no crash.
     if (! windowIsFinite (window, winLen)) {
         r.matched = false;
         r.coherence = 0.0f;
-        gradedThisSession_ = false;   // a non-match re-arms the session (same as a dropped match below)
-        lastPollMatched_   = false;
         return r;
     }
 
-    // 1) The DETECTOR. Fix 1 (align): the ring snapshot is OLDEST->NEWEST, so a just-finished sweep sits at the
-    //    END of the long window — OUTSIDE the reference-length PREFIX the old gate read (it matched window[0..],
-    //    coherence ~= 0 for a late sweep -> never graded, intermittently). Instead, FIRST cross-correlate the
-    //    reference against the WHOLE window to LOCATE the sweep (exactly as gradeMeasurementWindow does), then run
-    //    referenceMatches over the ALIGNED reference-length segment. The gate and the grader now agree on where
-    //    the sweep is. The located offset is carried in r.alignOffset so the grade reuses it (no second xcorr).
-    //    The coherence is published every poll (engine.setLastMatchCoherence) so the diagnostic log sees it.
-    //    There is NO absolute level gate.
+    // The DETECTOR. Fix 1 (align): the ring snapshot is OLDEST->NEWEST, so a just-finished sweep sits at the END
+    //    of the long window — OUTSIDE the reference-length PREFIX. FIRST cross-correlate the reference against the
+    //    WHOLE window to LOCATE the sweep (exactly as gradeMeasurementWindow does), then run referenceMatches over
+    //    the ALIGNED reference-length segment. The gate and the grader agree on where the sweep is. The located
+    //    offset is carried in r.alignOffset so the grade reuses it (no second xcorr). There is NO absolute level
+    //    gate. This is the HEAVY part (~3 large FFTs) — it runs OFF the message thread.
     int matchStart = 0, matchLen = std::min (refLen, winLen);
     if (winLen >= refLen) {
         const AlignResult a = crossCorrelateAlign (reference, refLen, window, winLen);
@@ -60,18 +55,32 @@ GradePollResult ReferenceGradePoller::decide (const float* window, int winLen,
     r.coherence = m.coherence;
     r.mainLobe  = m.mainLobeConcentration;   // the 2nd gate — surfaced for the diagnostic log
     r.matched   = m.matched;
+    return r;
+}
 
-    // 2) STABLE-MATCH debounce (exactly MainComponent::pollReferenceGrade): the match-gate runs FIRST. A
-    //    non-match re-arms the session so the next sweep can grade; a grade fires once when the match holds
-    //    across TWO consecutive throttled polls (so the sweep is fully captured, not still rising into the ring).
-    if (! m.matched) gradedThisSession_ = false;             // match dropped -> a fresh sweep may grade
-    const bool stableMatch = m.matched && lastPollMatched_;   // two matched polls in a row
-    lastPollMatched_ = m.matched;
-    if (! stableMatch || gradedThisSession_)                 // need a stable, not-yet-graded match
-        return r;
-    gradedThisSession_ = true;                               // latch: don't re-grade this match session
+bool ReferenceGradePoller::applyDebounce (bool matched) {
+    // STABLE-MATCH debounce (exactly MainComponent::pollReferenceGrade): a non-match re-arms the session so the
+    // next sweep can grade; a grade fires once when the match holds across TWO consecutive throttled polls (so the
+    // sweep is fully captured, not still rising into the ring). MESSAGE-THREAD ONLY (mutates the debounce state).
+    if (! matched) gradedThisSession_ = false;             // match dropped -> a fresh sweep may grade
+    const bool stableMatch = matched && lastPollMatched_;   // two matched polls in a row
+    lastPollMatched_ = matched;
+    if (! stableMatch || gradedThisSession_)                // need a stable, not-yet-graded match
+        return false;
+    gradedThisSession_ = true;                              // latch: don't re-grade this match session
+    return true;                                            // the stable-match edge: a grade SHOULD run now
+}
 
-    r.didGrade = true;   // the stable-match edge: a grade SHOULD run for this window now
+GradePollResult ReferenceGradePoller::decide (const float* window, int winLen,
+                                              const float* reference, int refLen) {
+    // The composition: heavy match-gate + cheap debounce. Preserved so poll() and the headless tests are
+    // unchanged; the GUI now calls matchAlign() (off-thread) + applyDebounce() (message thread) separately so the
+    // cross-correlation no longer freezes the UI. Null-guard leaves the debounce untouched (matches the old path,
+    // which returned before touching it).
+    if (window == nullptr || reference == nullptr || winLen <= 0 || refLen <= 0)
+        return GradePollResult{};
+    GradePollResult r = matchAlign (window, winLen, reference, refLen);
+    r.didGrade = applyDebounce (r.matched);
     return r;
 }
 
