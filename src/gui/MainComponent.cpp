@@ -1870,8 +1870,16 @@ void MainComponent::pollReferenceGrade() {
     // Grade LEFT vs ref_L; if it did not post a job this tick, grade RIGHT vs ref_R. Each is independent — both
     // run their own snapshot/rate-guard/decide/grade/publish. (If L posts a job, R grades next eligible tick; the
     // guard serializes them so only one off-thread grade is in flight at a time.)
-    if (gradeOneEar (0, gradePollerL_, loadedReferenceL_, loadedReferenceRateL_)) return;
-    gradeOneEar (1, gradePollerR_, loadedReferenceR_, loadedReferenceRateR_);
+    // Alternate which ear is tried FIRST each eligible poll. gradeOneEar now posts an OFF-THREAD match for the ear
+    // it handles and claims gradeInFlight_ (which serializes the two ears across polls), so without alternation the
+    // left ear would always win the guard and the right would never grade. Toggling keeps them fair.
+    if ((gradeEarToggle_ ^= 1) != 0) {
+        if (gradeOneEar (0, gradePollerL_, loadedReferenceL_, loadedReferenceRateL_)) return;
+        gradeOneEar (1, gradePollerR_, loadedReferenceR_, loadedReferenceRateR_);
+    } else {
+        if (gradeOneEar (1, gradePollerR_, loadedReferenceR_, loadedReferenceRateR_)) return;
+        gradeOneEar (0, gradePollerL_, loadedReferenceL_, loadedReferenceRateL_);
+    }
 }
 
 bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
@@ -1880,8 +1888,6 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
     // tick (so the caller can serialize the two ears under the single gradeInFlight_ guard). ear 0 = LEFT, 1 = RIGHT.
     if (reference.empty()) return false;                                 // that ear has no reference -> skip it
     if (! engine.gradingResponseReady (ear)) return false;              // no fresh ring window published for this ear
-
-    const char* earTag = (ear == 1) ? "R" : "L";
 
     // Copy the FULL rolling-ring WINDOW for THIS ear out of the engine into our own buffer (the allocation lives
     // here, not the engine). The window is leading silence/room noise + the sweep somewhere inside it; the worker
@@ -1903,33 +1909,42 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
         return false;
     }
 
-    // The DECISION (match-gate FIRST + the two-consecutive-matched-polls STABLE debounce) lives in the headless
-    // eb::ReferenceGradePoller so it can be self-tested without the GUI/hardware. decide() runs the cross-
-    // correlation match on the message thread (cheap) and returns whether THIS poll should grade; it does NOT run
-    // the heavy deconvolve+grade (that stays off-thread below). Publish THIS ear's coherence either way so the
-    // diagnostic log + the RefMon-change line see it. A SILENT ring fails the gate here -> matched=false ->
-    // didGrade=false -> nothing published (the silent-ear honesty gate).
-    const auto d = poller.decide (window.data(), (int) window.size(),
-                                  reference.data(), (int) reference.size());
-    engine.setLastMatchCoherence (ear, d.coherence);
-    logLine (eb::DiagnosticLog::Level::Debug,
-             juce::String ("GradePoll: ear=") + earTag
-             + " coher=" + juce::String (d.coherence, 3)
-             + " mainLobe=" + juce::String (d.mainLobe, 3)
-             + " matched=" + juce::String (d.matched ? "1" : "0")
-             + " align=" + juce::String (d.alignOffset)
-             + " winLen=" + juce::String ((int) window.size())
-             + " didGrade=" + juce::String (d.didGrade ? "1" : "0"));
-    if (! d.didGrade) return false;                                      // need a stable, not-yet-graded match
-
+    // The match-gate (cross-correlate align + referenceMatches) is ~3 large FFTs over the WHOLE 28 s window. It
+    // used to run here SYNCHRONOUSLY on the message thread every poll and froze the UI for ~0.5 s as the window
+    // grew. Move it OFF the message thread: claim the single in-flight guard, run matchAlign() on the firPool
+    // worker, then return to the message thread to apply the (cheap, stateful) two-poll debounce — so the poller
+    // debounce never races a Stop/reset(). If the debounce says grade, post the heavy deconvolve+grade (reusing
+    // matchAlign's alignOffset) on the worker; the existing publish block is unchanged.
     gradeInFlight_.store (true);
     juce::Component::SafePointer<MainComponent> safe (this);
     auto refCopy = reference;                          // copy for the worker (message-thread snapshot)
     const double rate = referenceRate;
-    const int refLen = (int) refCopy.size();
-    const int alignOffset = d.alignOffset;             // where decide() located the sweep (Fix 1: reuse it)
-    const float coherence = d.coherence;               // match-gate coherence — captured for the ratification log line
-    firPool->addJob ([safe, ear, refCopy = std::move (refCopy), window = std::move (window), rate, refLen, alignOffset, coherence]() mutable {
+    eb::ReferenceGradePoller* pollerPtr = &poller;     // owned by `this`; debounce applied on the message thread only
+    firPool->addJob ([safe, ear, refCopy = std::move (refCopy), window = std::move (window), rate, pollerPtr]() mutable {
+      // OFF-THREAD: the heavy match-gate ONLY (no debounce state touched here).
+      const eb::GradePollResult mr = eb::ReferenceGradePoller::matchAlign (
+          window.data(), (int) window.size(), refCopy.data(), (int) refCopy.size());
+      juce::MessageManager::callAsync (
+          [safe, ear, mr, refCopy = std::move (refCopy), window = std::move (window), rate, pollerPtr]() mutable {
+        auto* mc = safe.getComponent();
+        if (! mc) return;                              // component gone (app closing) -> guard lives on it; moot
+        mc->engine.setLastMatchCoherence (ear, mr.coherence);
+        // Debounce on the MESSAGE THREAD (no race with reset()): two consecutive matched polls -> grade.
+        const bool didGrade = pollerPtr->applyDebounce (mr.matched);
+        mc->logLine (eb::DiagnosticLog::Level::Debug,
+                     juce::String ("GradePoll: ear=") + (ear == 1 ? "R" : "L")
+                     + " coher=" + juce::String (mr.coherence, 3)
+                     + " mainLobe=" + juce::String (mr.mainLobe, 3)
+                     + " matched=" + juce::String (mr.matched ? "1" : "0")
+                     + " align=" + juce::String (mr.alignOffset)
+                     + " winLen=" + juce::String ((int) window.size())
+                     + " didGrade=" + juce::String (didGrade ? "1" : "0"));
+        if (! didGrade) { mc->gradeInFlight_.store (false); return; }   // no stable match -> release + done
+
+        const int   refLen      = (int) refCopy.size();
+        const int   alignOffset = mr.alignOffset;      // where matchAlign located the sweep (gate + grader agree)
+        const float coherence   = mr.coherence;        // captured for the ratification log line
+        mc->firPool->addJob ([safe, ear, refCopy = std::move (refCopy), window = std::move (window), rate, refLen, alignOffset, coherence]() mutable {
         // OFFLINE on the worker: the pure grade for the window decide() said to grade. gradeWindow() grades at the
         // SAME offset decide() located (Fix 1 — gate and grade agree; no second xcorr), re-runs the match-gate
         // FIRST there, then quality — a non-sweep segment fails the gate -> stale.
@@ -2005,6 +2020,8 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
             mc->gradeInFlight_.store (false);
         });
     });
+      });   // close the message-thread callAsync (setLastMatchCoherence + debounce + grade dispatch)
+    });     // close the off-thread matchAlign job
     return true;
 }
 

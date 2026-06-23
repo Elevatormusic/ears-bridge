@@ -704,3 +704,54 @@ TEST_CASE("ReferenceGradePoller: per-ear independence - L grades a convolved swe
     }
     CHECK_FALSE (rEverGraded);                          // the silent ear stays ungraded across the whole run
 }
+
+// --- decide() split: matchAlign (heavy, off-thread) + applyDebounce (cheap, message thread) ----------
+// The UI-freeze fix moves the heavy cross-correlation off the message thread. These pin that the split
+// reproduces decide() exactly: applyDebounce holds the two-poll debounce; matchAlign is pure (no state).
+
+TEST_CASE ("ReferenceGradePoller::applyDebounce - two-poll stable-match debounce, no FFT", "[poller][debounce]") {
+    eb::ReferenceGradePoller p;
+    CHECK_FALSE (p.applyDebounce (true));    // 1st matched poll: arm, no grade yet
+    CHECK       (p.applyDebounce (true));    // 2nd consecutive matched: grade fires (the stable edge)
+    CHECK_FALSE (p.applyDebounce (true));    // latched: one grade per match-session
+    CHECK_FALSE (p.applyDebounce (false));   // match drops: re-arm the session
+    CHECK_FALSE (p.applyDebounce (true));    // 1st matched again
+    CHECK       (p.applyDebounce (true));    // 2nd consecutive: grades again
+    p.reset();
+    CHECK_FALSE (p.applyDebounce (true));    // reset() clears the streak -> two more matches required
+    CHECK       (p.applyDebounce (true));
+}
+
+TEST_CASE ("ReferenceGradePoller::matchAlign - pure heavy match, locates the sweep, no debounce", "[poller][match]") {
+    const int sweepLen = 16384; const double fs = 48000.0;
+    std::vector<float> ref, win;
+    makeOffsetMeasurement (sweepLen, fs, /*offset*/ 40000, /*winLen*/ 96000, /*leadNoise*/ 0.001f, ref, win);
+
+    const auto a = eb::ReferenceGradePoller::matchAlign (win.data(), (int) win.size(), ref.data(), (int) ref.size());
+    const auto b = eb::ReferenceGradePoller::matchAlign (win.data(), (int) win.size(), ref.data(), (int) ref.size());
+    CHECK (a.matched);                                   // finds the planted sweep
+    CHECK_FALSE (a.didGrade);                            // matchAlign NEVER grades (debounce is separate)
+    CHECK (a.coherence == b.coherence);                 // pure/static: identical across calls (no state)
+    CHECK (a.alignOffset == b.alignOffset);
+    CHECK (std::abs (a.alignOffset - 40000) < 4000);    // located near the planted offset
+
+    std::vector<float> noise ((size_t) 96000, 0.0f); addNoise (noise, 0.05f, 7u);
+    CHECK_FALSE (eb::ReferenceGradePoller::matchAlign (noise.data(), (int) noise.size(),
+                                                       ref.data(), (int) ref.size()).matched);
+}
+
+TEST_CASE ("ReferenceGradePoller: decide() == matchAlign() + applyDebounce()", "[poller][match]") {
+    const int sweepLen = 16384; const double fs = 48000.0;
+    std::vector<float> ref, win;
+    makeOffsetMeasurement (sweepLen, fs, 40000, 96000, 0.001f, ref, win);
+
+    eb::ReferenceGradePoller viaDecide, viaSplit;
+    for (int poll = 0; poll < 3; ++poll) {               // drive both through the two-poll debounce edge
+        const auto d = viaDecide.decide (win.data(), (int) win.size(), ref.data(), (int) ref.size());
+        auto m = eb::ReferenceGradePoller::matchAlign (win.data(), (int) win.size(), ref.data(), (int) ref.size());
+        m.didGrade = viaSplit.applyDebounce (m.matched);
+        CHECK (d.matched    == m.matched);
+        CHECK (d.didGrade   == m.didGrade);              // grade fires on poll #2 for both, latched on #3
+        CHECK (d.alignOffset == m.alignOffset);
+    }
+}
