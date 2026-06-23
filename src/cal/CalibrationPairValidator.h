@@ -16,7 +16,8 @@ struct CalPairResult {
 //   1. minimum data density   — each file >= 8 points
 //   2. side not wrong         — left.side != Right, right.side != Left (Unknown allowed)
 //   3. serial match           — if both serials non-empty they must be equal
-//   4. type policy            — Heq blocked; Unknown blocked unless allowUnknownType
+//   4. type policy            — Unknown blocked unless allowUnknownType (HEQ/HPN/RAW all accepted; HEQ is
+//                               miniDSP's recommended Dirac headphone cal)
 //   5. per-file integrity      — all freqs > 0 and STRICTLY increasing; all spl/phase finite
 //   6. range coverage         — minFreqHz <= requiredLowHz and maxFreqHz >= requiredHighHz
 //

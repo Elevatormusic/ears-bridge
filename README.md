@@ -115,7 +115,7 @@ The whole path has to run in plain **Windows Audio** (shared / non-exclusive) at
 
 1. Plug in the EARS jig and open EARS Bridge.
 2. It **auto-selects** a connected EARS as the input and a standard VB-CABLE as the output — just confirm both are chosen. (If the EARS isn't listed at all, it isn't enumerating on USB — try a known-good **data** cable and a direct port.)
-3. Load each ear's **HPN** calibration file into the matching **Left** and **Right** slot (see [Calibration files](#calibration-files)).
+3. Load each ear's **HEQ** calibration file into the matching **Left** and **Right** slot (see [Calibration files](#calibration-files)).
 4. Leave the combine mode on **Auto per-ear (Dirac)** — it's the only mode that works with a Dirac measurement (see [Combine modes](#combine-modes)).
 5. Set the sample rate to **48000**.
 
@@ -154,10 +154,13 @@ Open the **Dirac Live Processor**, load the filter you just exported, and route 
 
 Each EARS capsule ships with its own calibration as an FRD text file. EARS Bridge applies the **inverse** of the loaded curve, removing the capsule's known response from what Dirac sees — the same convention REW uses when it subtracts a mic calibration.
 
-miniDSP supplies two variants per capsule:
+miniDSP supplies a few variants per capsule. For Dirac, use **HEQ** — it's what miniDSP now recommends:
 
-- **HPN** removes only the capsule's own response. This is the correct choice with Dirac, and the default.
-- **HEQ** also bakes in a headphone target. Loading it would double up with the target Dirac applies, so EARS Bridge flags HEQ files to prevent that.
+- **HEQ** — miniDSP's recommended calibration for headphone EQ, including with Dirac Live, and EARS Bridge's default. It has a mild bass boost built in, so when you design the filter in Dirac, start with a **flat target in the bass** and adjust to taste.
+- **HPN** — the older curve (not offered on the newer EARS Pro). It still works, but miniDSP now recommends HEQ.
+- **RAW** — the mic capsules with no compensation; miniDSP marks it unsupported. Use HEQ unless you specifically need RAW.
+
+EARS Bridge applies the calibration itself, so load it here — **not** also inside Dirac — or you'd correct twice.
 
 ## Combine modes
 

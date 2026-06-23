@@ -24,7 +24,7 @@ You are the gap-finder for EARS Bridge — **measurement software** where a sile
 For the change under review, walk each link and ask what can be **misconfigured, mismatched, or degraded**, and whether the change **handles it, detects it, or is silently wrong**:
 
 - **Rates / formats:** input rate ≠ output cable rate; cable set to the wrong channels (1 / 16) or bit-depth; shared vs exclusive mode; OS resampling under shared mode; a device that doesn't expose the requested format.
-- **Calibration:** swapped L/R; mismatched serials; wrong type (HEQ where HPN is needed); a file with no side marker; a half-installed / stale / in-flight cal reaching Start.
+- **Calibration:** swapped L/R; mismatched serials; wrong type (e.g. RAW where HEQ is needed); a file with no side marker; a half-installed / stale / in-flight cal reaching Start.
 - **Signal quality:** sweep level too low; **insufficient SNR — the sweep not clearly above the room noise floor**; clipping (input or output); a connected-but-silent input; non-finite samples poisoning the FIR.
 - **Timing / clocking:** the sweep mis-armed (on noise, or missed); FIFO starve / overrun; async-SRC drift retiming the sweep; the inter-sweep gap (left→right) mis-scoped.
 - **Devices:** hot-plug / device loss mid-run; a renamed endpoint; the wrong output (physical instead of the cable); Dirac holding the device exclusive.

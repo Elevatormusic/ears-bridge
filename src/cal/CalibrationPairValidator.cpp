@@ -53,12 +53,10 @@ CalPairResult validateCalibrationPair (const CalFile& left,
         && left.serial != right.serial)
         return { false, "Left/Right serial mismatch (" + left.serial + " vs " + right.serial + ")" };
 
-    // Rule 4: type policy.
-    for (const auto* f : { &left, &right })
-    {
-        if (f->type == CalType::Heq)
-            return { false, "HEQ calibration is not valid for Dirac — use HPN/RAW" };
-    }
+    // Rule 4: type policy. HEQ is miniDSP's RECOMMENDED Dirac headphone cal ("We suggest using the HEQ
+    // calibration file" — miniDSP's Dirac-Live headphone note), so it is NOT blocked: a type-name veto of a
+    // known-good type was wrong. HPN/RAW/HEQ all pass; only an UNIDENTIFIABLE type is gated (behind
+    // allowUnknownType). The real reject basis is the STRUCTURAL integrity below (Rules 5-6).
     if (! allowUnknownType)
     {
         for (const auto* f : { &left, &right })
