@@ -65,3 +65,32 @@ TEST_CASE("startReady: override can NOT bypass BOTH missing devs and cals") {
     CHECK_FALSE (eb::startReady (/*haveDevs*/false, /*haveCals*/false,
                                  /*wrongMode*/false, /*physicalOutput*/false, /*override*/true));
 }
+
+// --- noCalsLoaded: no cal file at all -> unity passthrough, Start allowed (uncalibrated) ------------
+
+TEST_CASE("startReady: NO cals loaded (unity passthrough) -> ready even though haveCals is false") {
+    // The user's case: removed both cals to measure uncalibrated. Engine runs a neutral unity FIR.
+    CHECK (eb::startReady (/*haveDevs*/true, /*haveCals*/false, /*wrongMode*/false,
+                           /*physicalOutput*/false, /*override*/false, /*noCalsLoaded*/true));
+}
+
+TEST_CASE("startReady: a cal LOADED but not yet applied (half-built) still BLOCKS") {
+    // haveCals=false because the generation isn't applied yet, AND noCalsLoaded=false because a file IS
+    // loaded -> blocked (a half-built/stale cal would corrupt capture). This is the protection we keep.
+    CHECK_FALSE (eb::startReady (true, /*haveCals*/false, false, false, /*override*/false,
+                                 /*noCalsLoaded*/false));
+}
+
+TEST_CASE("startReady: NO cals loaded still needs devices") {
+    CHECK_FALSE (eb::startReady (/*haveDevs*/false, false, false, false, false, /*noCalsLoaded*/true));
+}
+
+TEST_CASE("startReady: NO cals loaded still respects the policy gates without override") {
+    CHECK_FALSE (eb::startReady (true, false, /*wrongMode*/true, false, /*override*/false, /*noCalsLoaded*/true));
+    CHECK_FALSE (eb::startReady (true, false, false, /*physicalOutput*/true, /*override*/false, /*noCalsLoaded*/true));
+}
+
+TEST_CASE("startReady: NO cals loaded + override relaxes the policy gates") {
+    CHECK (eb::startReady (true, /*haveCals*/false, /*wrongMode*/true, /*physicalOutput*/true,
+                           /*override*/true, /*noCalsLoaded*/true));
+}
