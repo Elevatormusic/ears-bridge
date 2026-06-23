@@ -2,6 +2,7 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include "audio/EngineTypes.h"   // eb::Ear (canonical home; shared with LrVerify)
 
 // AutoPerEar hardening (P0-06) — the LEARNED sweep schedule.
 //
@@ -19,8 +20,6 @@
 // drives the per-ear routing from this schedule's TIMING, so the quiet sweep extremes are routed by the
 // clock, not by the faint mic envelope, and the trailing L is handled.
 namespace eb {
-
-enum class Ear { Left = 0, Right = 1 };
 
 struct SweepSegment {
     Ear    ear;            // which earcup Dirac drives during this segment
@@ -54,9 +53,12 @@ struct SweepSchedule {
     const int nb  = n / blk;   // whole blocks only
 
     auto rmsDb = [] (const float* x, int i0, int len) -> double {
-        double s = 0.0;
-        for (int i = i0; i < i0 + len; ++i) { const double v = (double) x[i]; s += v * v; }
-        const double rms = std::sqrt (s / (double) len);
+        double s = 0.0; int cnt = 0;
+        for (int i = i0; i < i0 + len; ++i) {                  // SKIP non-finite samples so one NaN/Inf can't
+            const double v = (double) x[i];                    // fracture a segment (verifier MINOR #2); clean
+            if (std::isfinite (v)) { s += v * v; ++cnt; }       // PCM loopback never has them, but be robust.
+        }
+        const double rms = cnt > 0 ? std::sqrt (s / (double) cnt) : 0.0;
         return rms > 1.0e-12 ? 20.0 * std::log10 (rms) : -240.0;
     };
 

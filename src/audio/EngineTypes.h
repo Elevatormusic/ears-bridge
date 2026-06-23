@@ -3,6 +3,8 @@
 namespace eb {
 
 enum class EarsModel  { Unknown, Ears, EarsPro };
+enum class Ear { Left = 0, Right = 1 };   // which earcup (0=L, 1=R); the single canonical home, shared by
+                                          // LrVerify and the AutoPerEar SweepSchedule/ScheduledEarRouter
 enum class EngineStatus { Stopped, Running, Error };
 
 // D5 / R18: the measurement-session phase, scoping validity to Dirac's sweep window (left earcup ->

@@ -84,6 +84,8 @@ TEST_CASE("extractSchedule: a sub-minSegment hard-panned blip is skipped", "[aut
     REQUIRE (s.segments.size() == 2);
     CHECK (s.segments[0].ear == Ear::Left);
     CHECK (s.segments[1].ear == Ear::Left);            // the R blip is gone; both survivors are L
+    REQUIRE (s.gapsSec.size() == 1);
+    CHECK_THAT (s.gapsSec[0], WithinAbs (2.0, 0.15));  // the gap SPANS the dropped blip (0.5 + 1.0 + 0.5), not double-counted
 }
 
 TEST_CASE("extractSchedule: durations are LEARNED, not hardcoded (3s and 6s configs both recover)", "[autoperear][schedule]") {
@@ -93,8 +95,25 @@ TEST_CASE("extractSchedule: durations are LEARNED, not hardcoded (3s and 6s conf
     auto s3 = run (L3, R3); auto s6 = run (L6, R6);
     REQUIRE (s3.segments.size() == 3);
     REQUIRE (s6.segments.size() == 3);
-    CHECK_THAT (s3.segments[0].durationSec, WithinAbs (3.0, 0.2));   // learned the short config
-    CHECK_THAT (s6.segments[0].durationSec, WithinAbs (6.0, 0.2));   // learned the long config
+    for (std::size_t i = 0; i < 3; ++i) {                            // EVERY segment learned, not just [0]
+        CHECK_THAT (s3.segments[i].durationSec, WithinAbs (3.0, 0.2));
+        CHECK_THAT (s6.segments[i].durationSec, WithinAbs (6.0, 0.2));
+    }
+}
+
+TEST_CASE("extractSchedule: non-block-aligned durations recover within tolerance (quantization)", "[autoperear][schedule]") {
+    std::vector<float> L, R;                            // 5.07 s / 0.53 s do NOT divide evenly by the 50 ms block
+    sweep (L, R, Ear::Left, 5.07); gap (L, R, 0.53);
+    sweep (L, R, Ear::Right, 5.07); gap (L, R, 0.53);
+    sweep (L, R, Ear::Left, 5.07);
+    auto s = run (L, R);
+    REQUIRE (s.segments.size() == 3);
+    CHECK (s.segments[0].ear == Ear::Left);
+    CHECK (s.segments[1].ear == Ear::Right);
+    CHECK (s.segments[2].ear == Ear::Left);
+    CHECK_THAT (s.segments[0].durationSec, WithinAbs (5.07, 0.15));  // block quantization absorbed by the tolerance
+    REQUIRE (s.gapsSec.size() == 2);
+    CHECK_THAT (s.gapsSec[0], WithinAbs (0.53, 0.15));
 }
 
 TEST_CASE("extractSchedule: a single segment / all-silent buffer is invalid (-> fallback)", "[autoperear][schedule]") {
