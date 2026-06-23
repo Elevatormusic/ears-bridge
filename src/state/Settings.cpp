@@ -16,6 +16,7 @@ namespace {
     constexpr const char* kComplex    = "complexPhase";
     constexpr const char* kAutoCheck  = "autoCheckUpdates";
     constexpr const char* kAdvOverride = "advancedOverride";
+    constexpr const char* kDiracHwProc = "diracHardwareProcessor";
 
     // ---- Field-value validation (Plan: harden settings load) ----------------------------
     // A key PRESENT with a garbage value (a stale rate from an old version, a hand-edited
@@ -138,6 +139,8 @@ void Settings::setAutoCheckUpdates (bool b) { file->setValue (kAutoCheck, b); }
 // Advanced AND tick the toggle to relax the two policy gates (never devices/calibration).
 bool Settings::advancedOverride() const { return file->getBoolValue (kAdvOverride, false); }
 void Settings::setAdvancedOverride (bool b) { file->setValue (kAdvOverride, b); }
+bool Settings::diracHardwareProcessor() const { return file->getBoolValue (kDiracHwProc, false); }
+void Settings::setDiracHardwareProcessor (bool b) { file->setValue (kDiracHwProc, b); }
 
 void Settings::flush() { file->saveIfNeeded(); }
 
