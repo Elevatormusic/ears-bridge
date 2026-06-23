@@ -219,6 +219,18 @@ public:
     float refIrSnrDb()    const noexcept { return refIrSnrDb    (0); }
     float refThdPercent() const noexcept { return refThdPercent (0); }
 
+    // ---- Hardware-Dirac detect-and-degrade -------------------------------------------------------
+    // The toggle (deterministic): ON -> publish the calm GradingOffHardware state on both ears + suppress
+    // the loopback grade (the GUI poll checks diracHardwareProcessorActive()); OFF -> back to NotGraded so
+    // the next sweep re-grades normally.
+    void setDiracHardwareProcessor (bool on) noexcept;
+    bool diracHardwareProcessorActive() const noexcept { return gradingOffHardware_.load (std::memory_order_relaxed); }
+    // Auto-detect (suggests only): recompute from this run's signals at the sweep-complete edge. The GUI poll
+    // supplies the live OutputActivity reads; pure cores decide. Kept here (not the GUI) so it is unit-testable.
+    void updateHardwareDiracAutoDetect (bool micHeardSweep, float maxOutputRenderPeak,
+                                        bool outputReadable, bool validMode) noexcept;
+    bool autoDetectedHardwareDirac() const noexcept { return autoDetectedHardwareDirac_.load (std::memory_order_relaxed); }
+
     // ---- Diagnostic getters (read-only, lock-free) — the GUI logs the detector's internals ----
     // lastInputBlockPeak(): the most recent capture block's input peak (max |sample| over L/R), stored on
     // the audio thread at the pk site (the *Milli_ fixed-point idiom). lastMatchCoherence(): the coherence
@@ -371,6 +383,8 @@ private:
     // GUI reads the quad lock-free. The COMBINED guidance (RefMismatch/RefLowQuality/LowSnr) still flows through
     // HealthMonitor so health()/cleanCapture see a bad ear; these per-ear stores feed the per-ear display (Task 5).
     std::atomic<int>  refMonStatePerEar_[2]     { { (int) 0 }, { (int) 0 } };   // RefMonState::NotLearned == 0
+    std::atomic<bool> gradingOffHardware_       { false };   // the toggle: grade suppressed, GradingOffHardware published
+    std::atomic<bool> autoDetectedHardwareDirac_{ false };   // the auto-detect SUGGESTION (never commits by itself)
     std::atomic<int>  refIrSnrDbMilliPerEar_[2] { { 0 }, { 0 } };
     std::atomic<int>  refThdPctMilliPerEar_[2]  { { 0 }, { 0 } };
     std::atomic<int>  refSweepSnrMilliPerEar_[2]{ { 0 }, { 0 } };

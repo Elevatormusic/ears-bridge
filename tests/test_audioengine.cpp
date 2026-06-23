@@ -386,3 +386,26 @@ TEST_CASE("AudioEngine: measured noise floor populates from quiet capture blocks
     CHECK (eng.noiseFloorValid());
     CHECK (eng.noiseFloorDbAveraged() < -24.0f);       // a real, quiet measured floor (~-48 dBFS)
 }
+
+TEST_CASE("AudioEngine: hardware-Dirac toggle publishes GradingOffHardware; auto-detect via injected signals", "[engine][hwdirac]") {
+    eb::AudioEngine e;
+    // The toggle (deterministic): ON -> calm GradingOffHardware on BOTH ears.
+    e.setDiracHardwareProcessor (true);
+    CHECK (e.diracHardwareProcessorActive());
+    CHECK ((eb::RefMonState) e.refMonState (0) == eb::RefMonState::GradingOffHardware);
+    CHECK ((eb::RefMonState) e.refMonState (1) == eb::RefMonState::GradingOffHardware);
+    // OFF -> back to a non-graded state (the next sweep re-grades).
+    e.setDiracHardwareProcessor (false);
+    CHECK_FALSE (e.diracHardwareProcessorActive());
+    CHECK ((eb::RefMonState) e.refMonState (0) != eb::RefMonState::GradingOffHardware);
+
+    // Auto-detect ("the tool": inject the signals a real run would feed from OutputActivity).
+    e.updateHardwareDiracAutoDetect (/*micHeard*/ true, /*maxOutputPeak*/ 0.0f, /*readable*/ true, /*validMode*/ true);
+    CHECK (e.autoDetectedHardwareDirac());                                   // the hardware-Dirac signature
+    e.updateHardwareDiracAutoDetect (true, 0.2f, true, true);
+    CHECK_FALSE (e.autoDetectedHardwareDirac());                            // software Dirac: the output DID render
+    e.updateHardwareDiracAutoDetect (true, -1.0f, false, true);
+    CHECK_FALSE (e.autoDetectedHardwareDirac());                            // unreadable -> never auto-detect
+    e.updateHardwareDiracAutoDetect (false, 0.0f, true, true);
+    CHECK_FALSE (e.autoDetectedHardwareDirac());                            // no mic sweep -> no
+}
