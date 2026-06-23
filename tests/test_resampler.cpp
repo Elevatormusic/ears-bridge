@@ -2,11 +2,80 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "audio/PolyphaseResampler.h"
+#include <juce_dsp/juce_dsp.h>
 #include <cmath>
 #include <vector>
+#include <algorithm>
 
 using Catch::Approx;
 using Catch::Matchers::WithinAbs;
+
+namespace {
+constexpr double kPi = juce::MathConstants<double>::pi;
+
+// Resample `in` at a FIXED ratio (input-samples-per-output) through our resampler, primed like
+// ClockBridge (readPhase starts at L/2-1). Stops before reading past the input.
+std::vector<float> resampleStream (eb::PolyphaseResampler& r, const std::vector<float>& in,
+                                   double ratio, int numOut) {
+    std::vector<float> out;
+    out.reserve ((size_t) numOut);
+    double phase = r.halfLength() - 1;
+    for (int j = 0; j < numOut; ++j) {
+        if ((int) std::floor (phase) + r.halfLength() >= (int) in.size()) break;
+        out.push_back (r.sampleAt (in.data(), phase));
+        phase += ratio;
+    }
+    return out;
+}
+
+std::vector<float> makeSine (int n, double f, double fs) {
+    std::vector<float> v ((size_t) n);
+    for (int i = 0; i < n; ++i) v[(size_t) i] = (float) std::sin (2.0 * kPi * f * i / fs);
+    return v;
+}
+
+// dB of a (single-tone) signal's amplitude relative to a unit sine, via RMS over the steady region
+// (sqrt(2)*RMS = amplitude). Grid-phase robust, no bin alignment needed.
+double rmsAmplitudeDb (const std::vector<float>& y, int skip) {
+    double s = 0.0; int n = 0;
+    for (int i = skip; i < (int) y.size() - skip; ++i) { s += (double) y[(size_t) i] * y[(size_t) i]; ++n; }
+    const double rms = std::sqrt (s / std::max (1, n));
+    return 20.0 * std::log10 (std::max (1e-12, rms * std::sqrt (2.0)));
+}
+} // namespace
+
+// ---- Task 4: passband flatness (48->48 drift) + Lagrange baseline-fail ---------------------------
+
+TEST_CASE ("resampler passband flat within 0.10 dB 20Hz-20kHz (48->48 drift)", "[resampler][passband]") {
+    const double fs = 48000.0, ratio = 10000.0 / 10001.0;     // near-unity drift exercises all 512 phases
+    eb::PolyphaseResampler r; r.prepare (48000.0, 48000.0);
+    const double tones[] = { 20, 50, 100, 500, 1000, 4000, 8000, 12000, 16000, 19000, 20000 };
+    const int N = 1 << 18;                                     // long enough that 20 Hz RMS is precise
+    double maxDev = 0.0;
+    for (double f : tones) {
+        auto in  = makeSine (N, f, fs);
+        auto out = resampleStream (r, in, ratio, N - r.length() - 4);
+        maxDev = std::max (maxDev, std::abs (rmsAmplitudeDb (out, 2048)));
+    }
+    INFO ("max passband deviation dB = " << maxDev);
+    CHECK (maxDev <= 0.10);                                    // SPEC gate
+}
+
+TEST_CASE ("BASELINE: juce::LagrangeInterpolator FAILS the passband gate", "[resampler][baseline]") {
+    const double fs = 48000.0, ratio = 10000.0 / 10001.0;
+    const double tones[] = { 8000, 12000, 16000, 19000, 20000 };
+    const int N = 1 << 18;
+    double maxDev = 0.0;
+    for (double f : tones) {
+        auto in = makeSine (N, f, fs);
+        juce::LagrangeInterpolator lag;
+        std::vector<float> out ((size_t) (N - 8));
+        lag.process (ratio, in.data(), out.data(), (int) out.size());
+        maxDev = std::max (maxDev, std::abs (rmsAmplitudeDb (out, 2048)));
+    }
+    INFO ("Lagrange max passband deviation dB = " << maxDev);
+    CHECK (maxDev > 0.10);                                     // proves the gate has teeth
+}
 
 // ---- Task 1: prepare() + the (P+1)xL Kaiser-windowed-sinc prototype table -------------------------
 
