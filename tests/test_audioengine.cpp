@@ -394,6 +394,13 @@ TEST_CASE("AudioEngine: hardware-Dirac toggle publishes GradingOffHardware; auto
     CHECK (e.diracHardwareProcessorActive());
     CHECK ((eb::RefMonState) e.refMonState (0) == eb::RefMonState::GradingOffHardware);
     CHECK ((eb::RefMonState) e.refMonState (1) == eb::RefMonState::GradingOffHardware);
+    // PERSISTENCE (the verifier's bug): a base-state publish (learn / start / sweep-complete edge) while the
+    // toggle is on must NOT revert the calm state. setReferenceLoaded publishes Learned/NotLearned via the same
+    // publishBaseRefState the capture paths use -> it must stay GradingOffHardware.
+    e.setReferenceLoaded (true);    // would publish Learned -> gated to GradingOffHardware
+    CHECK ((eb::RefMonState) e.refMonState (0) == eb::RefMonState::GradingOffHardware);
+    e.setReferenceLoaded (false);   // would publish NotLearned -> still GradingOffHardware
+    CHECK ((eb::RefMonState) e.refMonState (0) == eb::RefMonState::GradingOffHardware);
     // OFF -> back to a non-graded state (the next sweep re-grades).
     e.setDiracHardwareProcessor (false);
     CHECK_FALSE (e.diracHardwareProcessorActive());
