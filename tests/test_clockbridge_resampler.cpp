@@ -65,3 +65,34 @@ TEST_CASE ("ClockBridge: currentGroupDelay reports the resampler latency", "[clo
     eb::ClockBridge b; b.prepare (48000.0, 48000.0, 1, 1 << 14);
     CHECK (b.currentGroupDelay() == Approx (47.5));   // (L-1)/2 at unity
 }
+
+namespace {
+// Peak |y[i+1] - 2y[i] + y[i-1]| over [lo,hi): a click/step discontinuity spikes the 2nd difference far
+// above a smooth sine's (~amp*omega^2); a slope-only change (the freeze edge) does not.
+double secondDiffPeak (const std::vector<float>& y, int lo, int hi) {
+    double m = 0.0;
+    for (int i = std::max (1, lo); i < std::min ((int) y.size() - 1, hi); ++i)
+        m = std::max (m, std::abs ((double) y[(size_t) i + 1] - 2.0 * (double) y[(size_t) i] + (double) y[(size_t) i - 1]));
+    return m;
+}
+} // namespace
+
+TEST_CASE ("ClockBridge: click-free across the D6 freeze edge", "[clockbridge][resampler][continuity]") {
+    // Small capacity so the prime (0.5*capacity = 4096 silence) drains and the tone is actually flowing
+    // at the freeze edge (output block 40 = sample 10240, well past the 4096-sample prime latency).
+    eb::ClockBridge b; b.prepare (48000.0, 48000.0, 1, 1 << 13); b.primeToTarget();
+    const int F = 256; std::vector<float> in (F), out (F), cap;
+    for (int blk = 0; blk < 80; ++blk) {
+        for (int i = 0; i < F; ++i)
+            in[(size_t) i] = 0.5f * (float) std::sin (2.0 * 3.14159265358979 * 1000.0 * (blk * F + i) / 48000.0);
+        b.pushCapture (in.data(), F);
+        if (blk == 40) b.setSweepActive (true);                // engage the D6 freeze MID-STREAM (the edge)
+        b.pullRender (out.data(), F);
+        cap.insert (cap.end(), out.begin(), out.end());
+    }
+    const double base = secondDiffPeak (cap, 20 * F, 35 * F);          // steady-state tone, past the prime
+    const double edge = secondDiffPeak (cap, 40 * F - 8, 40 * F + 8);  // tight window around the freeze sample
+    INFO ("steady-state 2nd-diff=" << base << "  freeze-edge 2nd-diff=" << edge);
+    // readPhase_ persists across the swap (only inc's slope changes), so there is no step -> edge ~ baseline.
+    CHECK (edge <= base * 2.0 + 1e-3);
+}
