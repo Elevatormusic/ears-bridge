@@ -360,6 +360,10 @@ float AudioEngine::headroomAttenuationDb() const noexcept { return graph.headroo
 // later per-ear grade overwrites only the ear that graded; the other ear keeps the honest base state. Resets
 // each ear's coherence/sweep-SNR so a stale value never outlives a learn/start/stop. Lock-free atomic stores.
 void AudioEngine::publishBaseRefState (RefMonState s) noexcept {
+    // Hardware-Dirac committed: the calm GradingOffHardware state must PERSIST across every base-state publish
+    // (start() / the sweep-complete edge / the test seam), else a measurement would revert it to
+    // NotLearned/NotGraded. One central gate — when the toggle is on, every base state IS GradingOffHardware.
+    if (gradingOffHardware_.load (std::memory_order_relaxed)) s = RefMonState::GradingOffHardware;
     for (int ear = 0; ear < 2; ++ear) {
         refMonStatePerEar_[ear].store ((int) s);
         refIrSnrDbMilliPerEar_[ear].store (0);
