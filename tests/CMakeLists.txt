@@ -47,6 +47,7 @@ add_executable(eb_tests
     test_combinegate.cpp
     test_startgate.cpp
     test_sweepschedule.cpp
+    test_scheduledearrouter.cpp
     test_startnotes.cpp
     test_diagnosticlog.cpp)
 # Link the JUCE modules the test sources include directly, plus the recommended config flags,
