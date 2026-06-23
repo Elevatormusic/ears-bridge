@@ -124,6 +124,7 @@ endif()
 # macOS); the .mm carries the CoreAudio impl (Apple only). Lets a later task detect whether the OS
 # resampled the EARS capture stream (requested rate vs. endpoint mix rate); 0.0 means unverifiable.
 target_sources(eb_engine PRIVATE src/platform/EndpointFormat.cpp)     # Windows impl + non-Apple stub
+target_sources(eb_engine PRIVATE src/platform/OutputActivity.cpp)     # WASAPI render-peak read (hardware-Dirac detect); Windows impl + stub
 if(APPLE)
     target_sources(eb_engine PRIVATE src/platform/EndpointFormat_mac.mm)
     set_source_files_properties(src/platform/EndpointFormat_mac.mm
