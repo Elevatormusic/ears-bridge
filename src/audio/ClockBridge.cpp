@@ -111,34 +111,41 @@ int ClockBridge::pullRender (float* out, int numFrames) {
     }
     publishedRatio.store (ratio);                             // expose to currentRatio() (lock-free)
 
-    // --- Windowed-sinc polyphase resample via the consumer-owned phase accumulator. ---
+    // --- Windowed-sinc polyphase resample via the consumer-owned phase accumulator. Produced in chunks
+    // of at most kMaxRenderBlock so the FIR scratch (sized to that worst case) is never read out of bounds
+    // for ANY caller block size; readPhase_ carries continuously across chunks. The PI/freeze ratio above
+    // is computed once per call. Normal blocks (<= kMaxRenderBlock) run a single iteration. ---
     const double inc = ratio;                                  // nominal*ratioTrim (free) or frozenRatio_ (frozen)
     const int    Lh  = resampler_.halfLength();
-    // Highest srcInput index the resampler reads for these numFrames outputs (= floor(last readPhase)+L/2).
-    int needIn = (int) std::floor (readPhase_ + (numFrames - 1) * inc) + Lh + 1;
-    needIn = juce::jmin (needIn, (int) srcInput.size());
-    const int avail  = fifo.getNumReady();
-    const int toRead = juce::jmin (needIn, avail);
+    for (int done = 0; done < numFrames; ) {
+        const int chunk = juce::jmin (numFrames - done, kMaxRenderBlock);
+        // Highest srcInput index the resampler reads for these `chunk` outputs (= floor(last readPhase)+L/2).
+        int needIn = (int) std::floor (readPhase_ + (chunk - 1) * inc) + Lh + 1;
+        needIn = juce::jmin (needIn, (int) srcInput.size());
+        const int avail  = fifo.getNumReady();
+        const int toRead = juce::jmin (needIn, avail);
 
-    // Peek toRead samples into the scratch WITHOUT advancing the read pointer; the resampler needs the
-    // L/2-1 left history that stays in the FIFO between blocks (it is stateless).
-    int s1, sz1, s2, sz2;
-    fifo.prepareToRead (toRead, s1, sz1, s2, sz2);
-    if (sz1 > 0) juce::FloatVectorOperations::copy (srcInput.data(),       ring.data() + s1, sz1);
-    if (sz2 > 0) juce::FloatVectorOperations::copy (srcInput.data() + sz1, ring.data() + s2, sz2);
-    if (toRead < needIn) {                                     // FIFO starved: zero-pad the tail the FIR reads
-        juce::FloatVectorOperations::clear (srcInput.data() + toRead, (int) srcInput.size() - toRead);
-        underrunCount.fetch_add (1);
+        // Peek toRead samples into the scratch WITHOUT advancing the read pointer; the resampler needs the
+        // L/2-1 left history that stays in the FIFO between blocks (it is stateless).
+        int s1, sz1, s2, sz2;
+        fifo.prepareToRead (toRead, s1, sz1, s2, sz2);
+        if (sz1 > 0) juce::FloatVectorOperations::copy (srcInput.data(),       ring.data() + s1, sz1);
+        if (sz2 > 0) juce::FloatVectorOperations::copy (srcInput.data() + sz1, ring.data() + s2, sz2);
+        if (toRead < needIn) {                                 // FIFO starved: zero-pad the tail the FIR reads
+            juce::FloatVectorOperations::clear (srcInput.data() + toRead, (int) srcInput.size() - toRead);
+            underrunCount.fetch_add (1);
+        }
+
+        for (int j = 0; j < chunk; ++j) { out[done + j] = resampler_.sampleAt (srcInput.data(), readPhase_); readPhase_ += inc; }
+
+        // Retire only input fully behind the filter's left support; carry L/2-1 samples as history. This is
+        // the exact, deterministic replacement for the old stateful interpolator's returned usedIn.
+        int advance = (int) std::floor (readPhase_) - (Lh - 1);
+        advance = juce::jlimit (0, toRead, advance);
+        fifo.finishedRead (advance);
+        readPhase_ -= advance;
+        done += chunk;
     }
-
-    for (int j = 0; j < numFrames; ++j) { out[j] = resampler_.sampleAt (srcInput.data(), readPhase_); readPhase_ += inc; }
-
-    // Retire only input fully behind the filter's left support; carry L/2-1 samples as history. This is the
-    // exact, deterministic replacement for the old stateful interpolator's returned usedIn.
-    int advance = (int) std::floor (readPhase_) - (Lh - 1);
-    advance = juce::jlimit (0, toRead, advance);
-    fifo.finishedRead (advance);
-    readPhase_ -= advance;
     return numFrames;
 }
 
