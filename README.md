@@ -293,7 +293,9 @@ The behaviors that can only be confirmed against real Dirac and hardware — vir
 
 ## License
 
-No license has been declared yet. Until a `LICENSE` file is added, all rights are reserved by the repository owner.
+EARS Bridge is **source-available, not open source.** It is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) — you may read, build, and use it for any **noncommercial** purpose (personal use, hobby projects, research, education, charities, and other noncommercial organizations), but **commercial use is not granted.** All commercial rights are reserved by the copyright holder; contact the owner for a commercial license.
+
+Note: EARS Bridge depends on [JUCE](https://juce.com), which is separately licensed (GPL or a commercial JUCE license) — any redistribution or commercial use must also comply with JUCE's terms.
 
 ## Acknowledgements
 
