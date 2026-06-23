@@ -42,10 +42,21 @@ static const char* refMonStateName (int s) {
         case eb::RefMonState::Learned:        return "Learned";
         case eb::RefMonState::ReferenceStale: return "ReferenceStale";
         case eb::RefMonState::GradedClean:    return "GradedClean";
+        case eb::RefMonState::GradedMarginal: return "GradedMarginal";
         case eb::RefMonState::GradedSuspect:  return "GradedSuspect";
         case eb::RefMonState::NotGraded:      return "NotGraded";
     }
     return "?";
+}
+
+// One-char name for a QualityBand int (for the ratification GRADE COMPLETE log line). G/O/R = green/orange/red.
+static char bandChar (int b) {
+    switch ((eb::QualityBand) b) {
+        case eb::QualityBand::Green:  return 'G';
+        case eb::QualityBand::Orange: return 'O';
+        case eb::QualityBand::Red:    return 'R';
+        default:                      return '?';   // Unknown (no valid measurement)
+    }
 }
 
 // Linear amplitude -> dBFS string for a log line (clamped at a -120 dB floor so a silent block reads
@@ -1166,6 +1177,7 @@ void MainComponent::updateStatusLine() {
         auto isGraded = [this] (int ear) {
             const auto s = (eb::RefMonState) engine.refMonState (ear);
             return s == eb::RefMonState::GradedClean
+                || s == eb::RefMonState::GradedMarginal
                 || s == eb::RefMonState::GradedSuspect
                 || s == eb::RefMonState::ReferenceStale;
         };
@@ -1238,6 +1250,7 @@ void MainComponent::updateStatusLine() {
             // genuine pre-first-sweep wait) — only the cosmetic Listening<->Sweep-in-progress activity remains.
             const bool refEngaged = engine.referenceLoaded()
                                  && (eb::RefMonState) engine.refMonState() != eb::RefMonState::GradedClean
+                                 && (eb::RefMonState) engine.refMonState() != eb::RefMonState::GradedMarginal
                                  && (eb::RefMonState) engine.refMonState() != eb::RefMonState::GradedSuspect
                                  && (eb::RefMonState) engine.refMonState() != eb::RefMonState::ReferenceStale;
             // Cosmetic activity flag drives ONLY this text (never the grade): present -> the sweep is
@@ -1268,27 +1281,25 @@ void MainComponent::updateStatusLine() {
             // Sweep finished clean: an honest sweep-scoped all-clear (no dropouts / clipping seen during
             // the captured sweep), with the OS-resampled caveat when the input ran through OS SRC.
             const auto refState = (eb::RefMonState) engine.refMonState();
-            const bool graded   = refState == eb::RefMonState::GradedClean
-                               || refState == eb::RefMonState::GradedSuspect;   // both = matched + measured
             juce::String msg = "Sweep captured - no clipping or dropouts detected";
-            // Fix 2: a matched measurement reads "verified". While the cutoffs are unratified we append the
-            // IR-SNR/THD as INFO (neutral, in the ok-coloured line) rather than warning — a clean
-            // measurement (~13 dB) must never read as a warning, but the numbers stay visible for tuning.
-            // Fix 4 (honesty): in Auto per-ear the grade ring buffers only graph.activeEar()'s channel, so ONE
-            // measurement grades a SINGLE earcup. Say "captured earcup" so the green line does not imply the whole
-            // both-ear measurement is verified. (Per-ear grading is a separate design decision flagged for the
-            // user; here we only stop over-claiming.)
-            if (refState == eb::RefMonState::GradedClean)
-                msg = "Sweep captured + verified against the reference (captured earcup)";
-            else if (graded && ! eb::kIrThresholdsRatified) {
+            // The sweepSNR gate (ACTIVE) decides the headline: only GradedClean reads "verified" (green);
+            // GradedMarginal = amber (usable, re-measure), GradedSuspect = red (noisy/distorted) — neither may
+            // read as verified. "captured earcup" = Auto per-ear grades a SINGLE earcup per measurement (honesty).
+            sCol = Theme::ok();
+            if (refState == eb::RefMonState::GradedClean) {
                 const int snr = juce::roundToInt (engine.refIrSnrDb());
                 const int thd = juce::roundToInt (engine.refThdPercent());
-                msg = "Sweep captured + verified (captured earcup) - IR-SNR " + juce::String (snr) + " dB, THD "
-                    + juce::String (thd) + "% (calibration pending)";
+                msg = "Sweep captured + verified against the reference (captured earcup) - IR-SNR "
+                    + juce::String (snr) + " dB, THD " + juce::String (thd) + "% (calibration pending)";
+            } else if (refState == eb::RefMonState::GradedMarginal) {
+                msg  = "Sweep captured - marginal SNR; usable, consider re-measuring (captured earcup)";
+                sCol = Theme::warn();
+            } else if (refState == eb::RefMonState::GradedSuspect) {
+                msg  = "Sweep captured but flagged - noisy or distorted, re-measure (captured earcup)";
+                sCol = Theme::danger();
             }
             if (any (h.flags & HealthFlag::OsResampled)) msg += " (OS-resampled - approximate)";
             sText = msg;
-            sCol  = Theme::ok();
         } else if (silentTicks_ >= kSilentHoldTicks) {
             // "clean" only means no dropouts -- a connected-but-silent EARS reads clean too. After ~2 s
             // of genuinely below-floor input (debounced in timerCallback so normal gaps don't flicker),
@@ -1455,23 +1466,24 @@ void MainComponent::renderEarStatusLine (int ear, const char* prefix, juce::Labe
         text = p + "verified - IR-SNR " + juce::String (snr) + " dB, THD "
              + juce::String (thd) + "% (calibration pending)";
         col  = Theme::ok();
-    } else if (state == eb::RefMonState::GradedSuspect) {
+    } else if (state == eb::RefMonState::GradedMarginal || state == eb::RefMonState::GradedSuspect) {
+        // The sweepSNR gate (ACTIVE): GradedMarginal = orange (marginal noise, still usable); GradedSuspect =
+        // red (noisy capture or gross >10% distortion). Reconstruct THIS ear's bands from its published metrics
+        // so the note matches the headline verdict exactly (qualityNote). The IR-SNR/THD raw numbers remain
+        // calibration-pending, but the sweepSNR gate itself ships live.
         const int snr = juce::roundToInt (engine.refIrSnrDb    (ear));
         const int thd = juce::roundToInt (engine.refThdPercent (ear));
-        if (! eb::kIrThresholdsRatified) {
-            // Unratified: show the numbers as INFO, NOT a warn (a clean ~13 dB ESS would false-warn). Mirror
-            // the green branch's neutral tone so this never reads as a failed measurement.
-            text = p + "IR-SNR " + juce::String (snr) + " dB, THD "
-                 + juce::String (thd) + "% (calibration pending)";
-            col  = Theme::ok();
-        } else {
-            // Ratified: a real below-cutoff measurement -> warn.
-            text = p + "low quality - " + juce::String (snr) + " dB IR-SNR";
-            col  = Theme::warn();
-            tip  = "Graded against the reference: IR-SNR " + juce::String (snr) + " dB, distortion "
-                 + juce::String (thd) + "%. Below the clean cutoff - quieten the room or raise the level "
-                   "and re-measure.";
-        }
+        eb::QualityVerdict v;
+        v.state        = state;
+        v.sweepSnrBand = eb::classifySweepSnr (sweepSnr, sweepSnr != 0.0f);
+        v.irSnrBand    = eb::classifyIrSnr (engine.refIrSnrDb (ear));
+        v.thdBand      = eb::classifyThd (engine.refThdPercent (ear));
+        const juce::String note = eb::qualityNote (v);
+        text = p + (note.isNotEmpty() ? note : juce::String ("re-measure"));
+        col  = (state == eb::RefMonState::GradedMarginal) ? Theme::warn() : Theme::danger();
+        tip  = "Graded against the reference: sweep-SNR "
+             + (sweepSnr != 0.0f ? juce::String (sweepSnr, 0) + " dB" : juce::String ("n/a"))
+             + ", IR-SNR " + juce::String (snr) + " dB, distortion " + juce::String (thd) + "%.";
     } else if (state == eb::RefMonState::ReferenceStale) {
         // The match-gate failed for this ear -> there is nothing to grade; re-learn the reference.
         text = p + "re-learn the reference";
@@ -1496,7 +1508,8 @@ void MainComponent::renderEarStatusLine (int ear, const char* prefix, juce::Labe
     //   peak in [-12, -1)   -> fine: append a SHORT neutral " (peak -N dBFS)" to the existing verdict line.
     //   peak < -18 dBFS     -> low: append " (peak -N dBFS - low)" (the existing "level low" guidance owns the warn).
     //   peak in [-18, -12)  -> nothing appended (a healthy-enough level; keep the line short).
-    const bool graded   = state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedSuspect;
+    const bool graded   = state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedMarginal
+                       || state == eb::RefMonState::GradedSuspect;
     const float peakDb   = engine.referenceSweepPeakDb (ear);
     const bool peakKnown = graded && peakDb > -119.0f;   // a real published peak (not the silent/never-graded floor)
     juce::String peakTail;   // a short neutral info tail appended to the verdict line (fine / low cases)
@@ -1879,8 +1892,11 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
         // an overshoot reads positive). Always published (unlike the SNR, it has no valid/invalid gate — a peak is
         // always measurable); -120 means a silent span. The status line derives the clip-correction guidance from it.
         const float sweepPeak = g.sweepPeakDb;
+        const int snrBand = (int) g.sweepSnrBand;   // 3-color quality bands (sweepSNR gates; THD/IR-SNR advisory)
+        const int irBand  = (int) g.irSnrBand;
+        const int thdBand = (int) g.thdBand;
         juce::MessageManager::callAsync ([safe, ear, state, irSnr, thd, mismatch, lowQ, sweepSnr, snrValid, sweepPeak,
-                                          coherence, alignOffset, refLen, rate]() {
+                                          snrBand, irBand, thdBand, coherence, alignOffset, refLen, rate]() {
             auto* mc = safe.getComponent();
             if (! mc) return;
             // Publish THIS ear's verdict snapshot (the SNR lesson: trio published together); raise the guidance
@@ -1906,6 +1922,9 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
             mc->logLine (eb::DiagnosticLog::Level::Info,
                 juce::String ("GRADE COMPLETE: ear=") + (ear == 1 ? "R" : "L")
                 + " state=" + refMonStateName (state)
+                + " bands=snr:" + juce::String::charToString (bandChar (snrBand))
+                              + "/ir:" + juce::String::charToString (bandChar (irBand))
+                              + "/thd:" + juce::String::charToString (bandChar (thdBand))
                 + " IR-SNR=" + juce::String (irSnr, 1) + "dB"
                 + " THD=" + juce::String (thd, 2) + "%"
                 + " sweepSNR=" + (snrValid ? juce::String (sweepSnr, 1) + "dB" : juce::String ("n/a"))
