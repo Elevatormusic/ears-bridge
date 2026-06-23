@@ -28,6 +28,7 @@ public:
     bool         complexPhase() const; void setComplexPhase (bool);
     bool         autoCheckUpdates() const; void setAutoCheckUpdates (bool);
     bool         advancedOverride() const; void setAdvancedOverride (bool);
+    bool         diracHardwareProcessor() const; void setDiracHardwareProcessor (bool);
 
     void flush();   // force the PropertiesFile to disk immediately
 

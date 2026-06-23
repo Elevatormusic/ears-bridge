@@ -62,6 +62,19 @@ TEST_CASE("Settings round-trips every field through a PropertiesFile") {
     dir.deleteRecursively();
 }
 
+TEST_CASE("Settings: diracHardwareProcessor defaults false and round-trips", "[settings]") {
+    auto dir = makeTempDir();
+    {
+        eb::Settings s (dir);
+        CHECK_FALSE (s.diracHardwareProcessor());   // default off
+        s.setDiracHardwareProcessor (true);
+        s.flush();                                  // force write-through
+    }
+    eb::Settings reloaded (dir);
+    CHECK (reloaded.diracHardwareProcessor());      // persisted across a reload
+    dir.deleteRecursively();
+}
+
 TEST_CASE("Settings returns sane defaults on a fresh store") {
     auto dir = makeTempDir();
     eb::Settings s (dir);
