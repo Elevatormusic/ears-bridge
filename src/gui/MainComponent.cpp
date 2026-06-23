@@ -45,6 +45,7 @@ static const char* refMonStateName (int s) {
         case eb::RefMonState::GradedMarginal: return "GradedMarginal";
         case eb::RefMonState::GradedSuspect:  return "GradedSuspect";
         case eb::RefMonState::NotGraded:      return "NotGraded";
+        case eb::RefMonState::GradingOffHardware: return "GradingOffHardware";
     }
     return "?";
 }
