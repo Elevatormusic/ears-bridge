@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "audio/AudioEngine.h"
+#include "audio/ClockBridge.h"
 #include <vector>
 #include <cmath>
 #include <limits>
@@ -196,5 +197,23 @@ TEST_CASE("AudioEngine callbacks: buffering the response into the rolling ring i
     g_countAllocs.store (false);
 
     INFO ("alloc count in 500 ring-write capture blocks = " << g_allocCount.load());
+    CHECK (g_allocCount.load() == 0);
+}
+
+// ASRC T7: the windowed-sinc resample on the consumer hot path must be allocation-free for EVERY rate
+// pair and in the frozen state (the table is built at prepare() on the setup thread; pullRender only MACs).
+TEST_CASE("ClockBridge::pullRender is allocation-free (4x downsample + frozen)") {
+    eb::ClockBridge b; b.prepare (96000.0, 48000.0, 1, 1 << 16); b.primeToTarget();   // 4:1-ish (2x here)
+    std::vector<float> in (2048, 0.1f), out (512);
+    for (int i = 0; i < 16; ++i) { b.pushCapture (in.data(), 2048); b.pullRender (out.data(), 512); }   // warm
+    b.setSweepActive (true);                                   // exercise the frozen-ratio path too
+    for (int i = 0; i < 8;  ++i) { b.pushCapture (in.data(), 2048); b.pullRender (out.data(), 512); }
+
+    g_allocCount.store (0);
+    g_countAllocs.store (true);
+    for (int i = 0; i < 500; ++i) { b.pushCapture (in.data(), 2048); b.pullRender (out.data(), 512); }
+    g_countAllocs.store (false);
+
+    INFO ("alloc count in 500 pullRender blocks (downsample + frozen) = " << g_allocCount.load());
     CHECK (g_allocCount.load() == 0);
 }
