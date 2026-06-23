@@ -537,6 +537,7 @@ const char* stateName (eb::RefMonState s) {
         case eb::RefMonState::Learned:        return "Learned";
         case eb::RefMonState::ReferenceStale: return "ReferenceStale";
         case eb::RefMonState::GradedClean:    return "GradedClean";
+        case eb::RefMonState::GradedMarginal: return "GradedMarginal";
         case eb::RefMonState::GradedSuspect:  return "GradedSuspect";
         case eb::RefMonState::NotGraded:      return "NotGraded";
     }
@@ -602,7 +603,10 @@ PollSummary runScenario (Trace& trace, const std::string& name,
 }
 
 bool gradedClean (const PollSummary& s) {
+    // "graded" = matched + measured (not stale): Clean / Marginal / Suspect all count (the sweepSNR gate can
+    // legitimately grade a synthetic clean LATE-sweep as GradedMarginal depending on its noise region).
     return s.anyGraded && (s.gradeState == eb::RefMonState::GradedClean
+                        || s.gradeState == eb::RefMonState::GradedMarginal
                         || s.gradeState == eb::RefMonState::GradedSuspect);
 }
 
