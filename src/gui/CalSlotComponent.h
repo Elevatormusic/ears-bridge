@@ -11,7 +11,8 @@ namespace eb {
 // One per-ear calibration card ("Left ear" / "Right ear"). Empty, it shows a dashed
 // drop zone (drag a .txt/.frd file or click to browse) and a "Required" badge; loaded,
 // it shows the parsed FR thumbnail, the filename + serial, a type badge (HPN/HEQ), and a
-// "Replace" button. HEQ files surface as an amber badge (double-target risk, spec §3.7).
+// "Replace" button. HEQ is miniDSP's recommended Dirac cal (calm note); RAW surfaces as an amber
+// badge (mic-only, miniDSP-unsupported).
 // Fires onCalLoaded with the absolute path when a valid cal is parsed.
 class CalSlotComponent : public juce::Component,
                          public juce::FileDragAndDropTarget {
@@ -53,7 +54,7 @@ private:
     CurveThumbnail thumbnail;
     std::optional<eb::CalFile> cal;
     juce::String typeTag;       // "HPN" / "HEQ" / ...
-    bool heqWarning = false;
+    bool rawCaution = false;
     bool dragHover = false;
     std::unique_ptr<juce::FileChooser> chooser;
 

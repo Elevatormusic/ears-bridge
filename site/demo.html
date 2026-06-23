@@ -140,7 +140,7 @@
     <div class="eb-pane">
       <h2 class="eb-eyebrow">Calibration</h2>
       <section class="eb-card">
-        <div class="eb-card-h"><i class="ti ti-ear" aria-hidden="true"></i><h3 class="name">Left ear</h3><span class="eb-spacer"></span><span class="eb-info">HPN</span></div>
+        <div class="eb-card-h"><i class="ti ti-ear" aria-hidden="true"></i><h3 class="name">Left ear</h3><span class="eb-spacer"></span><span class="eb-info">HEQ</span></div>
         <svg class="eb-plot" viewBox="0 0 420 148" preserveAspectRatio="none" role="img" aria-label="Left ear response in decibels versus frequency in hertz, roughly flat with a cut near 4 kHz">
           <line x1="44" y1="38" x2="408" y2="38" stroke="var(--grid)"/><line x1="44" y1="72" x2="408" y2="72" stroke="var(--grid)"/><line x1="44" y1="106" x2="408" y2="106" stroke="var(--grid)"/>
           <line x1="120" y1="20" x2="120" y2="124" stroke="var(--grid)"/><line x1="236" y1="20" x2="236" y2="124" stroke="var(--grid)"/><line x1="344" y1="20" x2="344" y2="124" stroke="var(--grid)"/>
@@ -148,7 +148,7 @@
           <text class="eb-axis" x="44" y="16">dB</text><text class="eb-axis" x="40" y="42" text-anchor="end">+6</text><text class="eb-axis" x="40" y="76" text-anchor="end">0</text><text class="eb-axis" x="40" y="110" text-anchor="end">−6</text>
           <text class="eb-axis" x="120" y="140" text-anchor="middle">100</text><text class="eb-axis" x="236" y="140" text-anchor="middle">1k</text><text class="eb-axis" x="344" y="140" text-anchor="middle">10k</text><text class="eb-axis" x="404" y="140" text-anchor="end">Hz</text>
         </svg>
-        <div class="eb-meta"><span class="eb-fname">L_HPN.txt · serial 000-0000</span><button class="eb-btn" type="button" aria-label="Replace left-ear calibration file"><i class="ti ti-folder-open" aria-hidden="true"></i>Replace…</button></div>
+        <div class="eb-meta"><span class="eb-fname">L_HEQ.txt · serial 000-0000</span><button class="eb-btn" type="button" aria-label="Replace left-ear calibration file"><i class="ti ti-folder-open" aria-hidden="true"></i>Replace…</button></div>
       </section>
       <section class="eb-card">
         <div class="eb-card-h"><i class="ti ti-ear" aria-hidden="true"></i><h3 class="name">Right ear</h3><span class="eb-spacer"></span><span class="eb-req" id="rightTag">Required to start</span></div>
@@ -161,7 +161,7 @@
             <text class="eb-axis" x="44" y="16">dB</text><text class="eb-axis" x="40" y="76" text-anchor="end">0</text>
             <text class="eb-axis" x="120" y="140" text-anchor="middle">100</text><text class="eb-axis" x="236" y="140" text-anchor="middle">1k</text><text class="eb-axis" x="344" y="140" text-anchor="middle">10k</text><text class="eb-axis" x="404" y="140" text-anchor="end">Hz</text>
           </svg>
-          <div class="eb-meta"><span class="eb-fname">R_HPN.txt · serial 000-0000</span><button class="eb-btn" type="button" aria-label="Replace right-ear calibration file"><i class="ti ti-folder-open" aria-hidden="true"></i>Replace…</button></div>
+          <div class="eb-meta"><span class="eb-fname">R_HEQ.txt · serial 000-0000</span><button class="eb-btn" type="button" aria-label="Replace right-ear calibration file"><i class="ti ti-folder-open" aria-hidden="true"></i>Replace…</button></div>
         </div>
       </section>
       <section class="eb-monitor">
@@ -195,7 +195,7 @@
     this.hidden = true;
     var loaded = document.getElementById('rightLoaded'); loaded.hidden = false;
     var svg = loaded.querySelector('.eb-plot'); if(!reduce){ svg.classList.add('draw'); }
-    var tag = document.getElementById('rightTag'); tag.className = 'eb-info'; tag.textContent = 'HPN';
+    var tag = document.getElementById('rightTag'); tag.className = 'eb-info'; tag.textContent = 'HEQ';
     refresh();
   });
   start.addEventListener('click', function(){ if(start.disabled) return; running = !running; refresh(); updateActiveEar(); });

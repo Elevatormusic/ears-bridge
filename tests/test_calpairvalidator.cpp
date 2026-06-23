@@ -57,12 +57,13 @@ TEST_CASE("CalPairValidator: serial mismatch is rejected") {
     auto R = mk (CalSide::Right, "111-1111", CalType::Hpn);
     CHECK_FALSE (eb::validateCalibrationPair (L, R, eb::FirMode::MinPhaseMagnitude).valid);
 }
-TEST_CASE("CalPairValidator: HEQ is blocked for Dirac") {
+TEST_CASE("CalPairValidator: HEQ is accepted for Dirac (miniDSP's recommended headphone cal)") {
+    // miniDSP's own "Using Dirac Live to tune headphones" note: "We suggest using the HEQ calibration
+    // file." HEQ is the RECOMMENDED Dirac cal, not an invalid one -> a well-formed HEQ pair is valid.
     auto L = mk (CalSide::Left,  "000-0000", CalType::Heq);
     auto R = mk (CalSide::Right, "000-0000", CalType::Heq);
     auto r = eb::validateCalibrationPair (L, R, eb::FirMode::MinPhaseMagnitude);
-    CHECK_FALSE (r.valid);
-    CHECK (r.reason.containsIgnoreCase ("HEQ"));
+    CHECK (r.valid);
 }
 TEST_CASE("CalPairValidator: Unknown type blocked unless override; Unknown SIDE allowed") {
     auto L = mk (CalSide::Unknown, "000-0000", CalType::Unknown);

@@ -134,22 +134,34 @@ bool CalSlotComponent::loadFromFile (const juce::File& file) {
 void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File& file) {
     cal = parsed;
     typeTag = typeName (parsed.type);
-    heqWarning = (parsed.type == eb::CalType::Heq);
+    rawCaution = (parsed.type == eb::CalType::Raw);
     fileLabel.setText (file.getFileName()
                        + "  -  serial " + (parsed.serial.isNotEmpty() ? parsed.serial : juce::String ("?")),
                        juce::dontSendNotification);
-    // Explain the two cal-type hazards that otherwise load silently behind only a tiny chip.
+    // Per-type guidance. miniDSP recommends HEQ for Dirac headphone EQ ("We suggest using the HEQ
+    // calibration file"), so HEQ is a calm INFO note, not a warning. HPN = legacy info; RAW = caution
+    // (mic-only, miniDSP-unsupported); Unknown = caution (unidentified).
     if (parsed.type == eb::CalType::Heq) {
+        errorLabel.setColour (juce::Label::textColourId, Theme::textDim());
+        errorLabel.setText ("Recommended for Dirac. HEQ has a mild bass boost built in - in Dirac, start "
+                            "with a flat target in the bass, then adjust to taste.", juce::dontSendNotification);
+        errorLabel.setVisible (true);
+    } else if (parsed.type == eb::CalType::Hpn) {
+        errorLabel.setColour (juce::Label::textColourId, Theme::textDim());
+        errorLabel.setText ("HPN is miniDSP's older curve (not offered on EARS Pro). It works, but HEQ is "
+                            "now recommended for headphone EQ.", juce::dontSendNotification);
+        errorLabel.setVisible (true);
+    } else if (parsed.type == eb::CalType::Raw) {
         errorLabel.setColour (juce::Label::textColourId, Theme::warn());
-        errorLabel.setText ("HEQ bakes in a headphone target - for Dirac load the HPN (or RAW) file, "
-                            "or you'll double-correct.", juce::dontSendNotification);
+        errorLabel.setText ("RAW is mic-capsule-only with no compensation (miniDSP marks it unsupported). "
+                            "Use HEQ for Dirac unless you specifically need RAW.", juce::dontSendNotification);
         errorLabel.setVisible (true);
     } else if (parsed.type == eb::CalType::Unknown) {
         errorLabel.setColour (juce::Label::textColourId, Theme::warn());
-        errorLabel.setText ("Couldn't identify this calibration type - confirm it's the right HPN file.",
+        errorLabel.setText ("Couldn't identify this calibration type - confirm it's an EARS HEQ file.",
                             juce::dontSendNotification);
         errorLabel.setVisible (true);
-    } else {
+    } else {   // Idf (in-ear) - no headphone guidance note
         errorLabel.setText ({}, juce::dontSendNotification);
         errorLabel.setVisible (false);
     }
@@ -165,7 +177,7 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
 void CalSlotComponent::clearCal() {
     cal = std::nullopt;
     typeTag = {};
-    heqWarning = false;
+    rawCaution = false;
     fileLabel.setText ({}, juce::dontSendNotification);
     errorLabel.setText ({}, juce::dontSendNotification);
     problemLabel.setText ({}, juce::dontSendNotification);
@@ -252,7 +264,7 @@ void CalSlotComponent::paint (juce::Graphics& g) {
 
     // Status badge (right).
     if (cal) {
-        if (heqWarning) drawChip (g, header, juce::Justification::right, "HEQ",
+        if (rawCaution) drawChip (g, header, juce::Justification::right, "RAW",
                                   Theme::warn().withAlpha (0.18f), Theme::warn());
         else            drawChip (g, header, juce::Justification::right, typeTag,
                                   Theme::infoBg(), Theme::infoText());

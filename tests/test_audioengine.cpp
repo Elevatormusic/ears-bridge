@@ -324,11 +324,11 @@ TEST_CASE("AudioEngine: calibrationApplied requires a valid generation with matc
     CHECK_FALSE (e.calibrationApplied());
 
     // An INVALID generation never reads as applied even if ids match.
-    eb::CalibrationGeneration bad; bad.id = 9; bad.valid = false; bad.diagnostic = "HEQ blocked";
+    eb::CalibrationGeneration bad; bad.id = 9; bad.valid = false; bad.diagnostic = "Unknown calibration type";
     e.setRequestedGeneration (9);
     e.applyCalibrationGeneration (bad);
     CHECK_FALSE (e.calibrationApplied());
-    CHECK (e.calibrationDiagnostic().containsIgnoreCase ("HEQ"));
+    CHECK (e.calibrationDiagnostic().containsIgnoreCase ("Unknown"));
 }
 
 TEST_CASE("AudioEngine: reconfigAllowed() reflects the live-capture (Running) state") {
