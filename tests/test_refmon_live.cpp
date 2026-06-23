@@ -636,25 +636,26 @@ TEST_CASE("Task 2 diag getter: lastInputBlockPeak() reflects the driven block pe
 }
 
 // ==================================================================================================
-// 8. Fix 2: the IR thresholds stay PROVISIONAL (unratified) so a clean measurement is info-only.
+// 8. Fix 2: the IR thresholds stay PROVISIONAL (unratified); a clean measurement now grades CLEAN
+//    (the redefined headphone IR-SNR — it falsely read "suspect" before the metric fix).
 // ==================================================================================================
 TEST_CASE("Fix 2: the IR thresholds are PROVISIONAL (unratified) so a clean measurement is info-only") {
     CHECK_FALSE (eb::kIrThresholdsRatified);
 }
 
-TEST_CASE("Fix 2: a clean measurement's PURE verdict is lowQuality at the default cutoff, but the gate makes it info-only") {
+TEST_CASE("Fix 2: a clean measurement grades CLEAN at the default cutoff (redefined headphone IR-SNR)") {
     const int    n  = 1 << 15;
     const double fs = 48000.0;
     std::vector<float> ref, resp;
     makeCleanMeasurement (n, fs, ref, resp);
     const int m = (int) resp.size();
 
-    auto g = eb::gradeMeasurement (ref.data(), resp.data(), m, fs);   // default kMinIrSnrDb = 20 dB
+    auto g = eb::gradeMeasurement (ref.data(), resp.data(), m, fs);   // default kMinIrSnrDb = 6 dB
     CHECK (g.match.matched);
-    CHECK (g.state == eb::RefMonState::GradedSuspect);
-    CHECK (g.quality.lowQuality);
-    CHECK (g.quality.irSnrDb > 5.0f);
-    CHECK_FALSE (eb::kIrThresholdsRatified);
+    CHECK (g.state == eb::RefMonState::GradedClean);   // the FIX: a clean measurement now clears the cutoff
+    CHECK_FALSE (g.quality.lowQuality);
+    CHECK (g.quality.irSnrDb > eb::kMinIrSnrDb);        // reads ABOVE the default cutoff (was falsely below)
+    CHECK_FALSE (eb::kIrThresholdsRatified);            // thresholds still provisional (unratified)
 }
 
 TEST_CASE("Fix 2: a mismatch STILL produces the re-learn gate verdict (the gate is always valid)") {

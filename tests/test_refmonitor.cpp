@@ -167,10 +167,10 @@ static void makeCleanMeasurement (int sweepLen, double fs,
 }
 
 TEST_CASE("gradeMeasurement: a matching ESS + a clean IR -> GradedClean (logic path), valid quality") {
-    // A real deconvolved ESS clears ~13 dB IR-SNR / ~0 THD even for a clean impulse — it does NOT clear
-    // the synthetic 20 dB provisional cutoff (an on-device-ratification item; see the report). So the
-    // CLEAN logic path is pinned at a threshold the clean case clears (10 dB), and the suspect path below
-    // uses the default 20 dB on the SAME clean data to prove the matched->suspect branch.
+    // The redefined IR-SNR (a few-ms gate + per-sample mean power) reads a clean deconvolved ESS solidly
+    // above the default 6 dB cutoff (the headphone-IR fix). The CLEAN logic path is pinned at a clearly-
+    // cleared threshold (10 dB); the suspect path below forces the matched->suspect branch with a high
+    // cutoff on the SAME clean data.
     const int    n  = 1 << 15;        // 32768
     const double fs = 48000.0;
     std::vector<float> ref, resp;
@@ -187,17 +187,18 @@ TEST_CASE("gradeMeasurement: a matching ESS + a clean IR -> GradedClean (logic p
     CHECK_FALSE (refMonBlocksGreen (g.state));     // green is allowed for this verdict only
 }
 
-TEST_CASE("gradeMeasurement: matched but BELOW the (provisional) IR-SNR cutoff -> GradedSuspect") {
-    // Same clean data, the DEFAULT 20 dB provisional cutoff: the real ESS deconvolution (~13 dB) does not
-    // clear it, so it grades SUSPECT — proving the matched->suspect branch AND honestly documenting that
-    // the provisional threshold currently flags a clean measurement (the on-device ratification gap).
+TEST_CASE("gradeMeasurement: matched but BELOW the IR-SNR cutoff -> GradedSuspect") {
+    // The redefined metric means a CLEAN measurement now reads ABOVE the default 6 dB cutoff (the
+    // headphone-IR fix), so we force the matched->suspect branch with a deliberately high cutoff that no
+    // real measurement clears, instead of relying on a clean measurement falsely reading low.
     const int    n  = 1 << 15;
     const double fs = 48000.0;
     std::vector<float> ref, resp;
     makeCleanMeasurement (n, fs, ref, resp);
     const int m = (int) resp.size();
 
-    auto g = gradeMeasurement (ref.data(), resp.data(), m, fs);   // default kMinIrSnrDb = 20 dB
+    auto g = gradeMeasurement (ref.data(), resp.data(), m, fs, 20.0, 20000.0,
+                               /*minIrSnrDb*/ 100.0f, /*maxThdPct*/ 5.0f);   // a cutoff nothing clears
     CHECK (g.match.matched);
     CHECK (g.state == RefMonState::GradedSuspect);
     CHECK (g.quality.lowQuality);

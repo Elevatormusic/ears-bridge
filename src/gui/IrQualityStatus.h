@@ -15,10 +15,10 @@ namespace eb {
 // reference doesn't match this sweep, so there is nothing to grade and the note says
 // "re-learn", NOT a quality number. (Grading a non-match would be dishonest.)
 //
-//   IR-SNR — the main-impulse peak energy (a short window around the max-|sample| index)
-//            vs the IR "noise tail" energy (the IR away from the main peak AND away from
-//            the harmonic-distortion spots, so distortion can't masquerade as noise):
-//            irSnrDb = 10*log10(peakWindowEnergy / tailEnergy).
+//   IR-SNR — the MEAN POWER of the IR's real span (a few-ms gate around the peak — a headphone IR is
+//            SPREAD, not a single tap) vs the MEAN POWER of the clean region (away from the gate AND from
+//            the harmonic-distortion spots, so distortion can't masquerade as noise). Per-sample, each
+//            window over its OWN count (Huszty & Sakamoto): irSnrDb = 10*log10(signalMean / noiseMean).
 //   THD   — for an exponential-sine-sweep (Farina) deconvolution, the k-th harmonic impulse
 //            lands at a known offset BEFORE the linear (main) impulse: dt_k = T*ln(k)/ln(w2/w1)
 //            seconds. In the circular IR those negative-time spots wrap to (peakIdx - dt_k + n)
@@ -32,10 +32,14 @@ namespace eb {
 //  - RELATIVE IR quality, not an absolute/calibrated dB or a certified THD figure — guidance.
 //  - GUIDANCE / non-invalidating — it never flips cleanCapture; it surfaces the numbers only.
 
-// PROVISIONAL — on-device ratification needed.
-static constexpr float kMinIrSnrDb = 20.0f;
+// PROVISIONAL — on-device ratification needed. Was 20 (the OLD +/-2-sample metric); the mean-power
+// IR-SNR of a clean SPREAD headphone IR reads solidly positive, so 6 dB is a conservative clean floor.
+static constexpr float kMinIrSnrDb = 6.0f;
 // PROVISIONAL — on-device ratification needed.
 static constexpr float kMaxThdPct  = 5.0f;
+// Signal-gate span (post-peak decay) + pre-margin (onset / short pre-ring), in ms. PROVISIONAL.
+static constexpr double kSignalGateMs = 8.0;
+static constexpr double kPreMarginMs  = 0.5;
 
 // PROVISIONAL — on-device ratification gate (review fix). FALSE until the IR-SNR/THD cutoffs are
 // ratified on real hardware. A clean deconvolved ESS reads only ~13 dB IR-SNR (see test_refmonitor.cpp
@@ -63,7 +67,8 @@ struct IrQuality {
 [[nodiscard]] inline IrQuality evaluateIr (const float* ir, int n, bool matched,
                                            float minIrSnrDb = kMinIrSnrDb,
                                            float maxThdPct  = kMaxThdPct,
-                                           const std::vector<int>& harmonicOffsetsSamples = {}) {
+                                           const std::vector<int>& harmonicOffsetsSamples = {},
+                                           double sampleRate = 48000.0) {
     IrQuality q;
     q.matched = matched;
     if (ir == nullptr || n <= 0) return q;
@@ -76,14 +81,20 @@ struct IrQuality {
         if (m > peakMag) { peakMag = m; peakIdx = i; }
     }
 
-    // A short window around the main peak holds the "impulse" energy. +/-2 samples
-    // (the regularized main lobe is a few taps wide; see the recover-IR test tolerance).
-    constexpr int kPeakHalfWidth = 2;
-    auto inPeakWindow = [&] (int i) { return std::abs (i - peakIdx) <= kPeakHalfWidth; };
+    // Signal = the IR's real span around the peak. A headphone IR is SPREAD over a few ms (not a single
+    // tap), so the signal is a ms-based gate: a small pre-margin (onset / short pre-ring) + a post-peak
+    // decay span. ms-based so it scales with rate; circular; clamped to n.
+    const int signalSpan = juce::jlimit (1, n, (int) std::lround (kSignalGateMs * sampleRate / 1000.0));
+    const int preMargin  = juce::jlimit (0, n, (int) std::lround (kPreMarginMs  * sampleRate / 1000.0));
+    auto inSignalGate = [&] (int i) {
+        int d = i - peakIdx;                          // shortest circular signed distance
+        if (d >  n / 2) d -= n;
+        if (d < -n / 2) d += n;
+        return d >= -preMargin && d <= signalSpan;
+    };
 
-    // The harmonic spots wrap to (peakIdx - off + n) % n in the circular IR. Mark a small
-    // window around each so we (a) measure their energy for THD and (b) EXCLUDE them from the
-    // noise tail (so distortion does not inflate the "noise" and depress the IR-SNR twice).
+    // The harmonic spots wrap to (peakIdx - off + n) % n in the circular IR. Exclude them from BOTH the
+    // signal AND the noise (distortion is neither) so they can't masquerade as noise and depress the SNR.
     constexpr int kHarmHalfWidth = 2;
     auto inAnyHarmonic = [&] (int i) {
         for (int off : harmonicOffsetsSamples) {
@@ -95,18 +106,21 @@ struct IrQuality {
         return false;
     };
 
-    // --- energies ---------------------------------------------------------------
-    double peakEnergy = 0.0, tailEnergy = 0.0, harmEnergy = 0.0;
+    // --- per-sample MEAN-power energies (signal / noise each divided by its OWN sample count) ---
+    double signalEnergy = 0.0, noiseEnergy = 0.0, harmEnergy = 0.0;
+    long   signalCount  = 0,   noiseCount  = 0;
     for (int i = 0; i < n; ++i) {
         const double e = (double) ir[i] * ir[i];
-        if (inPeakWindow (i))        peakEnergy += e;
-        else if (inAnyHarmonic (i))  harmEnergy += e;   // distortion: not peak, not noise
-        else                         tailEnergy += e;   // the noise tail (excludes peak + harmonics)
+        if (inSignalGate (i))       { signalEnergy += e; ++signalCount; }
+        else if (inAnyHarmonic (i))   harmEnergy   += e;   // distortion: not signal, not noise
+        else                        { noiseEnergy  += e; ++noiseCount; }
     }
 
-    const double tiny = 1.0e-20;   // floors the ratio so a silent tail can't produce +inf/NaN
-    q.irSnrDb    = 10.0f * (float) std::log10 ((peakEnergy + tiny) / (tailEnergy + tiny));
-    q.thdPercent = 100.0f * (float) std::sqrt (harmEnergy / (peakEnergy + tiny));
+    const double tiny = 1.0e-20;
+    const double signalMean = signalEnergy / (double) juce::jmax (1L, signalCount);
+    const double noiseMean  = (noiseCount > 0) ? noiseEnergy / (double) noiseCount : tiny;
+    q.irSnrDb    = 10.0f * (float) std::log10 ((signalMean + tiny) / (noiseMean + tiny));
+    q.thdPercent = 100.0f * (float) std::sqrt (harmEnergy / (signalEnergy + tiny));
 
     // lowQuality only when we actually graded (matched). Honest: don't grade a non-match.
     q.lowQuality = matched && (q.irSnrDb < minIrSnrDb || q.thdPercent > maxThdPct);
