@@ -9,6 +9,8 @@
 #include "gui/CalSlotComponent.h"
 #include "gui/LevelMeter.h"
 #include "gui/RateMenu.h"
+#include "gui/GradeMetricDotsView.h"   // eb::GradeMetricDotsView (3-color per-metric quality dots)
+#include "gui/GradeBandSmoother.h"     // eb::GradeBandSmoother (per-ear anti-flicker band smoothing)
 #include "net/UpdateChecker.h"
 #include "diag/DiagnosticLog.h"     // eb::DiagnosticLog (Task 1 of the match-detection + diagnostic-logging build)
 #include "audio/DeviceConfigCheck.h"  // eb::checkChainConfig (48k-everywhere chain-config check)
@@ -229,6 +231,9 @@ private:
     // "R:"). renderEarStatusLine() builds one ear's text+colour; renderPerEarStatusLines() drives both.
     juce::Label statusLine;
     juce::Label statusLineR;
+    // 3-color per-metric quality dots (SNR/IR/THD) under each ear's status line, fed by a per-ear band smoother.
+    eb::GradeMetricDotsView gradeDotsL_, gradeDotsR_;
+    eb::GradeBandSmoother    smootherL_, smootherR_;
     // Per-Ear Per-Channel Grading (Task 5): set both per-ear lines from each ear's published state+metrics.
     // Called only from the Running + reference-loaded path in updateStatusLine (the hard/global ladder above
     // it has precedence and blanks statusLineR). Pure DISPLAY — reads the ear-indexed engine getters, never
