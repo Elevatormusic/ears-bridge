@@ -125,6 +125,8 @@ MainComponent::MainComponent() {
     statusLineR.setFont (juce::Font (juce::FontOptions (12.0f)));
     statusLineR.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (statusLineR);
+    addAndMakeVisible (gradeDotsL_);
+    addAndMakeVisible (gradeDotsR_);
 
     // Update link: hidden until a newer release is found; opens the release page in the browser.
     updateLink.setColour (juce::HyperlinkButton::textColourId, Theme::accent());
@@ -896,6 +898,7 @@ void MainComponent::onStartStop() {
             // match (two consecutive matched polls) grades exactly once.
             gradePollTick_ = 0; gradePollerL_.reset(); gradePollerR_.reset(); lastListenTextLogged_.clear();
             maxOutputRenderPeak_ = 0.0f; hwOutputReadable_ = false; hwDetectTick_ = 0;   // fresh hardware-Dirac auto-detect
+            gradeDotsL_.clear(); gradeDotsR_.clear(); smootherL_.reset(); smootherR_.reset();   // fresh quality dots each run
             // Surface a silent format downgrade: WASAPI shared mode can grant a different rate/depth
             // than the user selected, which would otherwise resample with no indication. The split:
             // genuine cautions (a real resample, an unverifiable rail) go on preflightLabel (yellow);
@@ -1955,6 +1958,16 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
             // Publish THIS ear's verdict snapshot (the SNR lesson: trio published together); raise the guidance
             // flag matching the verdict. NEITHER flag invalidates the capture (they are guidance only).
             mc->engine.publishReferenceGrade (ear, state, irSnr, thd, mismatch, lowQ);
+            // 3-color quality dots: smooth THIS ear's bands across consecutive grades (anti-flicker) and show
+            // them under that ear's status line. The raw dB/% is shown beside each dot (never colour alone).
+            {
+                auto& sm = (ear == 1) ? mc->smootherR_ : mc->smootherL_;
+                auto& dv = (ear == 1) ? mc->gradeDotsR_ : mc->gradeDotsL_;
+                const auto bands = sm.update (sweepSnr, snrValid, irSnr, thd);
+                dv.setMetrics (bands.sweepSnr, snrValid ? juce::String (juce::roundToInt (sweepSnr)) + " dB" : juce::String(),
+                               bands.irSnr,    juce::String (juce::roundToInt (irSnr)) + " dB",
+                               bands.thd,      juce::String (thd, thd < 1.0f ? 2 : 1) + "%");
+            }
             // Match-window sweep-SNR fix: publish THIS ear's sweep SNR and raise the GUIDANCE LowSnr flag when the
             // sweep ran too close to the room floor. Match-gate already passed (we only get here when g.didGrade),
             // so a non-sweep / silent ear never reaches this -> a silent ear NEVER raises LowSnr. GUIDANCE only.
@@ -2384,9 +2397,11 @@ void MainComponent::resized() {
         // the pair sits where the single line used to. statusLine = upper (L), statusLineR = lower (R). When
         // only one message shows (the hard/global ladder), statusLineR is blanked so the upper line reads as
         // the single status line did. Same right-justification + width as before, so neither line truncates.
-        auto stack = x.withSizeKeepingCentre (x.getWidth(), 36);
+        auto stack = x.withSizeKeepingCentre (x.getWidth(), 68);
         statusLine.setBounds  (stack.removeFromTop (18));
+        gradeDotsL_.setBounds (stack.removeFromTop (16));
         statusLineR.setBounds (stack.removeFromTop (18));
+        gradeDotsR_.setBounds (stack.removeFromTop (16));
     }
 
     // --- Version footnote (pinned bottom-right, below both panes) ---
