@@ -50,6 +50,53 @@ namespace eb {
     return offsets;
 }
 
+// ---- 3-color measurement-quality bands (pure; PROVISIONAL thresholds) -----
+// sweepSNR is the TRUST GATE (Dirac "20 dB good" + REW; on-device clean 22-36 / noisy 5-18). IR-SNR +
+// THD are ADVISORY (see aggregateVerdict). Thresholds are on-device-informed, not literature: Müller &
+// Massarani show ESS deconvolution is noise-IMMUNE, so IR-SNR can't sense capture noise -> sweepSNR gates.
+enum class QualityBand { Unknown, Green, Orange, Red };
+
+static constexpr float kSweepSnrGoodDb = 25.0f;   // >= -> green
+static constexpr float kSweepSnrBadDb  = 18.0f;   // <  -> red ; [18,25) -> orange
+static constexpr float kIrSnrGoodDb    = 50.0f;   // anchored to the 54-66 dB clean band (mean-power-gate INR)
+static constexpr float kIrSnrBadDb     = 35.0f;
+static constexpr float kThdGoodPct     = 3.0f;    // relaxed from 1% (LF driver THD is legitimately a few %)
+static constexpr float kThdBadPct      = 10.0f;   // > -> clipping territory (REW)
+
+// Ascending edge arrays + hysteresis margins for the GUI's BandHysteresis (audio/Hysteresis.h) smoothing.
+// The classifiers below are the canonical hard boundary; the smoothed GUI band agrees except at the exact
+// edge value, which a measured float never lands on.
+static constexpr float kSweepSnrEdges[] = { kSweepSnrBadDb, kSweepSnrGoodDb };   // {18,25}: 0=Red 1=Orange 2=Green
+static constexpr float kIrSnrEdges[]    = { kIrSnrBadDb, kIrSnrGoodDb };         // {35,50}: 0=Red 1=Orange 2=Green
+static constexpr float kThdEdges[]      = { kThdGoodPct, kThdBadPct };           // {3,10}:  0=Green 1=Orange 2=Red
+static constexpr float kSnrHystDb       = 1.0f;
+static constexpr float kThdHystPct      = 0.5f;
+
+[[nodiscard]] inline QualityBand classifySweepSnr (float db, bool valid) noexcept {
+    if (! valid)               return QualityBand::Unknown;   // unmeasurable -> never penalize
+    if (db >= kSweepSnrGoodDb) return QualityBand::Green;
+    if (db <  kSweepSnrBadDb)  return QualityBand::Red;
+    return QualityBand::Orange;
+}
+[[nodiscard]] inline QualityBand classifyIrSnr (float db) noexcept {
+    if (db >= kIrSnrGoodDb) return QualityBand::Green;
+    if (db <  kIrSnrBadDb)  return QualityBand::Red;
+    return QualityBand::Orange;
+}
+[[nodiscard]] inline QualityBand classifyThd (float pct) noexcept {
+    if (pct <= kThdGoodPct) return QualityBand::Green;
+    if (pct >  kThdBadPct)  return QualityBand::Red;
+    return QualityBand::Orange;
+}
+
+// Map a BandHysteresis index (0..2) to a QualityBand. SNR metrics: higher index = better; THD: reversed.
+[[nodiscard]] inline QualityBand snrBandFromIndex (int i) noexcept {
+    return i <= 0 ? QualityBand::Red : (i == 1 ? QualityBand::Orange : QualityBand::Green);
+}
+[[nodiscard]] inline QualityBand thdBandFromIndex (int i) noexcept {
+    return i <= 0 ? QualityBand::Green : (i == 1 ? QualityBand::Orange : QualityBand::Red);
+}
+
 // ---- The workflow state machine (pure) -----------------------------------
 // The honest precedence is: NO reference -> never green; reference present but the
 // match-gate FAILED -> "re-learn", never a quality number; matched + low quality ->
@@ -61,6 +108,7 @@ enum class RefMonState {
     Learned,         // a reference is loaded, but no measurement has been graded against it yet
     ReferenceStale,  // a measurement ran but the match-gate FAILED -> "doesn't match - re-learn"
     GradedClean,     // matched AND quality OK -> let the green "captured" branch show (verified)
+    GradedMarginal,  // matched AND sweepSNR marginal (orange) -> usable, cautioned; blocks green
     GradedSuspect,   // matched AND low quality -> show irQualityNote (guidance warn)
     NotGraded        // a reference is loaded but this run produced no gradeable measurement yet
 };
@@ -94,9 +142,62 @@ struct RefMonInputs {
 // True iff the state is one a user must NOT read as a clean/green capture. The GUI ladder asserts on
 // this so a refactor can never let "captured" show over a not-graded / mismatched / suspect state.
 [[nodiscard]] inline bool refMonBlocksGreen (RefMonState s) noexcept {
-    return s == RefMonState::NotLearned || s == RefMonState::Learned
-        || s == RefMonState::NotGraded  || s == RefMonState::ReferenceStale
-        || s == RefMonState::GradedSuspect;
+    return s == RefMonState::NotLearned    || s == RefMonState::Learned
+        || s == RefMonState::NotGraded     || s == RefMonState::ReferenceStale
+        || s == RefMonState::GradedMarginal || s == RefMonState::GradedSuspect;
+}
+
+// ---- 3-color verdict (pure): sweepSNR GATES; THD escalates only at RED; IR-SNR ADVISORY ----------
+// The traffic light. GradedClean=green, GradedMarginal=orange, GradedSuspect=red; everything else
+// (not-learned / loaded / not-graded / re-learn) is Neutral with its own copy.
+enum class RefMonColour { Neutral, Green, Orange, Red };
+[[nodiscard]] inline RefMonColour refMonColour (RefMonState s) noexcept {
+    switch (s) {
+        case RefMonState::GradedClean:    return RefMonColour::Green;
+        case RefMonState::GradedMarginal: return RefMonColour::Orange;
+        case RefMonState::GradedSuspect:  return RefMonColour::Red;
+        default:                          return RefMonColour::Neutral;
+    }
+}
+
+struct QualityVerdict {
+    RefMonState state        = RefMonState::NotGraded;
+    QualityBand sweepSnrBand = QualityBand::Unknown;
+    QualityBand irSnrBand    = QualityBand::Unknown;   // display only — never gates the headline
+    QualityBand thdBand      = QualityBand::Unknown;
+};
+
+// Combine the three metrics into the headline state. Match-gate FIRST (a non-match is "re-learn", never a
+// quality number). Then sweepSNR drives the headline; THD escalates ONLY at red (Farina makes THD
+// non-corrupting, so mild THD must not veto); IR-SNR is advisory (its band is reported, never gates).
+// An Unknown sweepSNR (no usable noise region) never penalizes -> stays Clean.
+[[nodiscard]] inline QualityVerdict aggregateVerdict (bool matched, float sweepSnrDb, bool sweepSnrValid,
+                                                      float irSnrDb, float thdPct) noexcept {
+    QualityVerdict v;
+    if (! matched) { v.state = RefMonState::ReferenceStale; return v; }   // gate first; bands stay Unknown
+
+    v.sweepSnrBand = classifySweepSnr (sweepSnrDb, sweepSnrValid);
+    v.irSnrBand    = classifyIrSnr (irSnrDb);     // advisory readout only
+    v.thdBand      = classifyThd (thdPct);
+
+    RefMonState s = RefMonState::GradedClean;
+    if (v.sweepSnrBand == QualityBand::Orange) s = RefMonState::GradedMarginal;
+    if (v.sweepSnrBand == QualityBand::Red)    s = RefMonState::GradedSuspect;
+    if (v.thdBand      == QualityBand::Red)    s = RefMonState::GradedSuspect;   // worst-wins escalate
+    v.state = s;
+    return v;
+}
+
+// GUI status string for the verdict (builds a juce::String — message-thread only; mirrors irQualityNote).
+// Precedence = worst gating offender first; the advisory IR-SNR note shows only when nothing else fired.
+[[nodiscard]] inline juce::String qualityNote (const QualityVerdict& v) {
+    if (v.state == RefMonState::ReferenceStale)
+        return "Reference doesn't match your sweep - re-learn it.";
+    if (v.sweepSnrBand == QualityBand::Red)    return "Noisy capture - re-measure.";
+    if (v.thdBand      == QualityBand::Red)    return "High distortion - check level/seal.";
+    if (v.sweepSnrBand == QualityBand::Orange) return "Marginal SNR - some noise; usable, consider re-measuring.";
+    if (v.irSnrBand    == QualityBand::Red)    return "Weak impulse response - possible time-variance or reference issue.";
+    return {};   // all clear
 }
 
 // ---- Per-measurement grading (pure; the engine's worker calls this) -------

@@ -23,6 +23,14 @@ using eb::refMonBlocksGreen;
 using eb::gradeMeasurement;
 using eb::RefMonState;
 using eb::RefMonInputs;
+using eb::QualityBand;
+using eb::RefMonColour;
+using eb::classifySweepSnr;
+using eb::classifyIrSnr;
+using eb::classifyThd;
+using eb::refMonColour;
+using eb::aggregateVerdict;
+using eb::qualityNote;
 
 static constexpr double kPi = 3.14159265358979323846;
 
@@ -240,4 +248,83 @@ TEST_CASE("gradeMeasurement: null/empty inputs -> ReferenceStale (never green on
     auto g = gradeMeasurement (nullptr, nullptr, 0, 48000.0);
     CHECK (g.state == RefMonState::ReferenceStale);
     CHECK (refMonBlocksGreen (g.state));
+}
+
+// ============================================================================
+// 3-color measurement-quality grade (2026-06-22): sweepSNR gates, THD escalates
+// at red, IR-SNR advisory. Fixtures = the on-device values.
+// ============================================================================
+
+TEST_CASE ("QualityBand classifiers map on-device values", "[refmon][bands]") {
+    // sweepSNR: green >=25, red <18, orange [18,25). Clean 22-36, noisy 5-18.
+    CHECK (classifySweepSnr (5.0f,  true)  == QualityBand::Red);
+    CHECK (classifySweepSnr (16.7f, true)  == QualityBand::Red);
+    CHECK (classifySweepSnr (18.0f, true)  == QualityBand::Orange);   // not < 18
+    CHECK (classifySweepSnr (22.0f, true)  == QualityBand::Orange);
+    CHECK (classifySweepSnr (25.0f, true)  == QualityBand::Green);    // >= 25
+    CHECK (classifySweepSnr (36.0f, true)  == QualityBand::Green);
+    CHECK (classifySweepSnr (5.0f,  false) == QualityBand::Unknown);  // invalid -> never penalize
+    // IR-SNR: green >=50, red <35, orange [35,50). Clean 54-66.
+    CHECK (classifyIrSnr (66.0f) == QualityBand::Green);
+    CHECK (classifyIrSnr (50.0f) == QualityBand::Green);
+    CHECK (classifyIrSnr (40.0f) == QualityBand::Orange);
+    CHECK (classifyIrSnr (35.0f) == QualityBand::Orange);             // not < 35
+    CHECK (classifyIrSnr (30.0f) == QualityBand::Red);
+    // THD: green <=3, red >10, orange (3,10].
+    CHECK (classifyThd (0.01f) == QualityBand::Green);
+    CHECK (classifyThd (3.0f)  == QualityBand::Green);                // <= 3
+    CHECK (classifyThd (6.0f)  == QualityBand::Orange);
+    CHECK (classifyThd (10.0f) == QualityBand::Orange);              // not > 10
+    CHECK (classifyThd (12.0f) == QualityBand::Red);
+}
+
+TEST_CASE ("GradedMarginal + refMonColour mapping", "[refmon][colour]") {
+    CHECK (refMonColour (RefMonState::GradedClean)    == RefMonColour::Green);
+    CHECK (refMonColour (RefMonState::GradedMarginal) == RefMonColour::Orange);
+    CHECK (refMonColour (RefMonState::GradedSuspect)  == RefMonColour::Red);
+    CHECK (refMonColour (RefMonState::ReferenceStale) == RefMonColour::Neutral);
+    CHECK (refMonColour (RefMonState::NotLearned)     == RefMonColour::Neutral);
+    CHECK (refMonBlocksGreen (RefMonState::GradedMarginal));   // orange blocks green too
+    CHECK (refMonBlocksGreen (RefMonState::GradedSuspect));
+    CHECK_FALSE (refMonBlocksGreen (RefMonState::GradedClean));
+}
+
+TEST_CASE ("aggregateVerdict: sweepSNR gates, THD escalates at red, IR-SNR never gates", "[refmon][verdict]") {
+    auto V = [] (bool m, float snr, bool valid, float ir, float thd) {
+        return aggregateVerdict (m, snr, valid, ir, thd);
+    };
+    CHECK (V (false, 30, true, 60, 0).state == RefMonState::ReferenceStale);   // gate first
+    CHECK (V (false, 30, true, 60, 0).sweepSnrBand == QualityBand::Unknown);
+    CHECK (V (true, 28, true, 60, 0.01f).state == RefMonState::GradedClean);    // all green
+    CHECK (V (true, 22, true, 60, 0.01f).state == RefMonState::GradedMarginal); // snr orange
+    CHECK (V (true, 5,  true, 56, 0.01f).state == RefMonState::GradedSuspect);  // snr red
+    CHECK (V (true, 30, true, 60, 12).state    == RefMonState::GradedSuspect);  // THD red escalates
+    CHECK (V (true, 30, true, 60, 6).state     == RefMonState::GradedClean);    // THD orange does NOT
+    CHECK (V (true, 30, true, 30, 0.01f).state == RefMonState::GradedClean);    // IR-SNR red never gates
+    CHECK (V (true, 30, true, 30, 0.01f).irSnrBand == QualityBand::Red);        // but its band shows red
+    CHECK (V (true, 5, false, 60, 0.01f).state == RefMonState::GradedClean);    // invalid snr -> no penalty
+    CHECK (V (true, 5, false, 60, 0.01f).sweepSnrBand == QualityBand::Unknown);
+}
+
+TEST_CASE ("aggregateVerdict honesty invariant: never GradedClean when sweepSNR or THD is red", "[refmon][verdict]") {
+    for (float snr : { 5.0f, 16.7f, 18.0f, 22.0f, 28.0f, 36.0f })
+        for (float thd : { 0.01f, 6.0f, 12.0f })
+            for (float ir : { 30.0f, 60.0f }) {
+                auto v = aggregateVerdict (true, snr, true, ir, thd);
+                const bool snrRed = classifySweepSnr (snr, true) == QualityBand::Red;
+                const bool thdRed = classifyThd (thd) == QualityBand::Red;
+                if (snrRed || thdRed) CHECK (v.state != RefMonState::GradedClean);
+            }
+}
+
+TEST_CASE ("qualityNote names the worst offender; IR-SNR advisory last", "[refmon][note]") {
+    auto note = [] (bool m, float snr, bool v, float ir, float thd) {
+        return qualityNote (aggregateVerdict (m, snr, v, ir, thd)).toStdString();
+    };
+    CHECK (note (false, 30, true, 60, 0).find ("re-learn") != std::string::npos);
+    CHECK (note (true, 5,  true, 60, 0.01f).find ("Noisy capture") != std::string::npos);
+    CHECK (note (true, 30, true, 60, 12).find ("distortion") != std::string::npos);
+    CHECK (note (true, 22, true, 60, 0.01f).find ("Marginal SNR") != std::string::npos);
+    CHECK (note (true, 30, true, 30, 0.01f).find ("Weak impulse") != std::string::npos);
+    CHECK (note (true, 30, true, 60, 0.01f).empty());
 }
