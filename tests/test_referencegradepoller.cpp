@@ -322,6 +322,25 @@ TEST_CASE("ReferenceGradePoller: empty window or reference never grades") {
     CHECK_FALSE (r1.didGrade);
 }
 
+// 3-color gate (2026-06-22): gradeWindow recomputes the headline via aggregateVerdict and carries the bands.
+TEST_CASE("ReferenceGradePoller: gradeWindow populates quality bands; state matches aggregateVerdict", "[poller][bands]") {
+    const int    sweepLen = 1 << 15;
+    const double fs = 48000.0;
+    std::vector<float> ref, resp;
+    makeCleanMeasurement (sweepLen, fs, ref, resp);
+    scaleToPeak (resp, 0.0562f);
+    auto g = eb::ReferenceGradePoller::gradeWindow (resp.data(), (int) resp.size(),
+                                                    ref.data(), (int) ref.size(), fs);
+    REQUIRE (g.didGrade);
+    // The recomputed headline is exactly aggregateVerdict on the result's own metric values.
+    const auto v = eb::aggregateVerdict (g.state != RefMonState::ReferenceStale,
+                                         g.sweepSnrDb, g.sweepSnrValid, g.irSnrDb, g.thdPercent);
+    CHECK (g.state        == v.state);
+    CHECK (g.sweepSnrBand == v.sweepSnrBand);
+    CHECK (g.irSnrBand    == v.irSnrBand);
+    CHECK (g.thdBand      == v.thdBand);
+}
+
 // ==================================================================================================
 // NEG-1 (catches Fix 1): the sweep is placed LATE — in the final third of a long window, past refLen — with
 // leading room noise filling the silence. The OLD gate matched only window[0..refLen) (the prefix), so it read
