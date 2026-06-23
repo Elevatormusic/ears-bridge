@@ -11,6 +11,7 @@ add_executable(eb_tests
     test_modeldetect.cpp
     test_clockbridge.cpp
     test_clockbridge_transport.cpp
+    test_clockbridge_resampler.cpp
     test_freezegate.cpp
     test_noisefloor.cpp
     test_healthmonitor.cpp
