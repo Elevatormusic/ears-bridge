@@ -73,35 +73,33 @@ private:
     }
 
     void buildTable() {
-        const int    L = L_, P = kPhases, Ltot = L * P;
-        const double cIdx = (Ltot - 1) / 2.0;                  // prototype center (in prototype samples)
+        const int    L = L_, P = kPhases;
         const double i0b  = i0 (kBeta);
+        const double half = L / 2.0;                           // Kaiser window half-width (taps)
         table_.assign ((size_t) (P + 1) * L, 0.0f);
 
-        // Rows 0..P-1: row(p)[k] = proto[k*P + p], proto[i] = fc * sinc(fc*arg) * kaiser(i), arg in INPUT
-        // samples = (i - center)/P. Each row is normalized to sum 1.0 (unity DC gain, no per-mu ripple).
-        for (int p = 0; p < P; ++p) {
+        // Build P+1 rows. Row p is the windowed-sinc fractional-delay filter for frac = p/P: it reads the
+        // input at continuous position n + frac, i.e. coeff[k] multiplies input[n - L/2 + 1 + k] with
+        // coeff[k] = fc * sinc(fc * (frac + L/2 - 1 - k)) * kaiser(k centered on the sinc). The sinc center
+        // sits at tap kc = (L/2 - 1) + frac, so the read lands exactly at n + frac (NOT n + 0.999 - frac).
+        // Row P (frac = 1.0) is the natural guard row: it reads input[n+1], continuous with row 0 of n+1
+        // (so the row/row+1 blend never needs a special case at the wrap). Each row normalized to sum 1.0.
+        for (int p = 0; p <= P; ++p) {
             float* c = table_.data() + (size_t) p * L;
+            const double frac = (double) p / P;                // p/P in [0, 1]
+            const double kc   = (L / 2 - 1) + frac;            // sinc center tap (= where arg == 0)
             double sum = 0.0;
             for (int k = 0; k < L; ++k) {
-                const int    i   = k * P + p;
-                const double arg = (i - cIdx) / P;
-                const double r   = (2.0 * i / (Ltot - 1)) - 1.0;                 // in [-1, 1]
-                const double w   = i0 (kBeta * std::sqrt (juce::jmax (0.0, 1.0 - r * r))) / i0b;
+                const double arg = frac + (L / 2 - 1) - k;     // kc - k  (input-sample offset, +frac forward)
+                const double wp  = (k - kc) / half;            // normalized window position ~ [-1, 1]
+                const double w   = i0 (kBeta * std::sqrt (juce::jmax (0.0, 1.0 - wp * wp))) / i0b;
                 const double h   = fc_ * sinc (fc_ * arg) * w;
                 c[k] = (float) h;
                 sum += h;
             }
-            const float g = (float) (1.0 / juce::jmax (1e-12, sum));            // per-row DC normalization
+            const float g = (float) (1.0 / juce::jmax (1e-12, sum));   // per-row DC normalization (risk #5)
             for (int k = 0; k < L; ++k) c[k] *= g;
         }
-
-        // Guard row P: c[P][k] = c[0][k-1] (phase-0 coefficients advanced one input tap; c[P][0] = 0).
-        // Lets the linear blend between row and row+1 stay in-range with NO special case at row = P-1.
-        const float* g0 = table_.data();                       // row 0 (already normalized)
-        float*       gP = table_.data() + (size_t) P * L;
-        gP[0] = 0.0f;
-        for (int k = 1; k < L; ++k) gP[k] = g0[k - 1];
     }
 
     std::vector<float> table_;     // (P+1) * L_ contiguous floats; rebuilt on prepare()
