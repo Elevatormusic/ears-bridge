@@ -48,6 +48,19 @@ TEST_CASE ("ClockBridge: a tone resampled at unity stays bounded + non-garbage",
     CHECK (peak < 1.1);     // and is not amplified/garbage
 }
 
+TEST_CASE ("ClockBridge: a block larger than kMaxRenderBlock is chunked (no OOB)", "[clockbridge][resampler]") {
+    eb::ClockBridge b; b.prepare (96000.0, 48000.0, 1, 1 << 18); b.primeToTarget();   // 2x downsample
+    const int F = 12000;                                        // > kMaxRenderBlock (8192)
+    std::vector<float> in (48000, 0.2f), out ((size_t) F);      // DC; plenty of capture for the big block
+    for (int blk = 0; blk < 6; ++blk) {
+        b.pushCapture (in.data(), (int) in.size());
+        REQUIRE (b.pullRender (out.data(), F) == F);            // fills the whole oversized block via chunks
+    }
+    double mx = 0.0;
+    for (float s : out) mx = std::max (mx, std::abs ((double) s));
+    CHECK (mx < 0.5);                                           // DC passed through (~0.2), bounded, no garbage
+}
+
 TEST_CASE ("ClockBridge: currentGroupDelay reports the resampler latency", "[clockbridge][resampler]") {
     eb::ClockBridge b; b.prepare (48000.0, 48000.0, 1, 1 << 14);
     CHECK (b.currentGroupDelay() == Approx (47.5));   // (L-1)/2 at unity
