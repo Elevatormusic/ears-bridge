@@ -24,7 +24,9 @@ namespace eb {
     for (int i = 0; i < nEdges; ++i)
         if (value >= edges[i]) raw = i + 1;
 
-    if (prevBand < 0 || raw == prevBand) return raw;
+    if (prevBand < 0) return raw;                     // no history -> the raw hard band
+    if (prevBand > nEdges) prevBand = nEdges;         // guard: an out-of-range prevBand must not index past edges[]
+    if (raw == prevBand) return raw;
 
     if (raw > prevBand)   // moving UP: clear the edge ABOVE prevBand (edges[prevBand]) by +margin, else hold
         return (value >= edges[prevBand] + margin) ? raw : prevBand;

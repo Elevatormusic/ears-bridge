@@ -40,6 +40,10 @@ TEST_CASE ("hysteresisBand: degenerate inputs are safe", "[hysteresis]") {
     const float one[] = { 5.0f };
     CHECK (eb::hysteresisBand (10.0f, one, 1, -1, 1.0f) == 1);
     CHECK (eb::hysteresisBand (1.0f,  one, 1, -1, 1.0f) == 0);
+    // Out-of-range prevBand must NOT index past edges[] (clamped to nEdges) — no OOB read.
+    const float edges[] = { 18.0f, 25.0f };
+    CHECK (eb::hysteresisBand (1.0f,  edges, 2, 3,  1.0f) == 0);
+    CHECK (eb::hysteresisBand (30.0f, edges, 2, 99, 1.0f) == 2);
 }
 
 TEST_CASE ("BandHysteresis stateful wrapper smooths a flickering sequence", "[hysteresis]") {
