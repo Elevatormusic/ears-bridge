@@ -333,3 +333,43 @@ TEST_CASE("ProcessingGraph::process sanitizes non-finite input and reports it") 
     CHECK_FALSE (g.process (l2.data(), r.data(), out2.data(), 8));
     for (float v : out2) CHECK (std::isfinite (v));
 }
+
+TEST_CASE("ProcessingGraph AutoPerEar consumes the schedule router (activeEar follows L,R,L)", "[autoperear]") {
+    const int N = 480;   // 10 ms blocks at 48 kHz
+    eb::ProcessingGraph g; g.prepare (48000.0, N);
+    g.setFir (0, unitImpulse (8)); g.setFir (1, unitImpulse (8));
+    g.setCombineMode (eb::CombineMode::AutoPerEar);
+    eb::SweepSchedule s;                                   // a short [L,R,L] burst (0.5 s segments, 0.2 s gaps)
+    s.segments = { { eb::Ear::Left, 0.5 }, { eb::Ear::Right, 0.5 }, { eb::Ear::Left, 0.5 } };
+    s.gapsSec  = { 0.2, 0.2 };
+    s.valid = true;
+    g.setSweepSchedule (s);
+
+    std::vector<float> L (N), R (N), out (N);
+    auto push = [&] (float aL, float aR, double sec) {
+        for (int i = 0; i < N; ++i) { L[i] = aL; R[i] = aR; }
+        for (int b = 0, n = (int) std::lround (sec / 0.01); b < n; ++b)
+            g.process (L.data(), R.data(), out.data(), N);
+    };
+    push (0.0001f, 0.0001f, 0.2);              // idle / pre-position
+    push (0.3f,    0.0001f, 0.5);              // L sweep (hard-panned)
+    CHECK (g.activeEar() == 0);
+    push (0.0001f, 0.0001f, 0.2);              // gap
+    push (0.0001f, 0.3f,    0.5);              // R sweep
+    CHECK (g.activeEar() == 1);
+    push (0.0001f, 0.0001f, 0.2);              // gap
+    push (0.3f,    0.0001f, 0.5);              // trailing L
+    CHECK (g.activeEar() == 0);                // routed BACK to L via the schedule (the bug-fix)
+    CHECK_FALSE (g.autoEarAmbiguous());        // a clean on-schedule run is not ambiguous
+}
+
+TEST_CASE("ProcessingGraph AutoPerEar with NO schedule falls back to the louder-ear envelope", "[autoperear]") {
+    const int N = 480;
+    eb::ProcessingGraph g; g.prepare (48000.0, N);
+    g.setFir (0, unitImpulse (8)); g.setFir (1, unitImpulse (8));
+    g.setCombineMode (eb::CombineMode::AutoPerEar);        // no setSweepSchedule -> hasSchedule()==false -> fallback
+    std::vector<float> L (N, 0.0001f), R (N, 0.3f), out (N);   // R clearly louder
+    for (int b = 0; b < 40; ++b) g.process (L.data(), R.data(), out.data(), N);
+    CHECK (g.activeEar() == 1);                            // the envelope picked the louder ear
+    CHECK_FALSE (g.autoEarAmbiguous());                    // the fallback never flags ambiguity
+}

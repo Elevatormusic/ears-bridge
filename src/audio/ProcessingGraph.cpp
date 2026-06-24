@@ -10,6 +10,7 @@ void ProcessingGraph::prepare (double sampleRate, int maxBlockSize) {
     convL.prepare (spec); convR.prepare (spec);
     scratch.setSize (2, maxBlockSize);
     envL_ = envR_ = 0.0f; activeEar_.store (0, std::memory_order_relaxed);   // fresh AutoPerEar state
+    router_.reset(); autoEarAmbiguous_.store (false, std::memory_order_relaxed);
     relCoeff_ = std::exp (-(float) maxBlockSize / (float) (sampleRate * 0.08));  // ~80 ms release, off-thread
     lastMode_ = combine.load();
 }
@@ -68,6 +69,12 @@ bool ProcessingGraph::convolutionsLoaded (int taps) const {
 
 void ProcessingGraph::setCombineMode (CombineMode mode) {
     combine.store ((int) mode);
+}
+
+void ProcessingGraph::setSweepSchedule (const SweepSchedule& schedule) {
+    // Message thread, while STOPPED. router_ copies the schedule; the audio thread only READS it in process(),
+    // so install before Start (same sole-writer discipline as setFir) - never swap the schedule mid-run.
+    router_.loadSchedule (schedule);
 }
 
 // Max magnitude of the IR's transfer function, |H(f)| = max_k |FFT(ir)[k]|. For a (near-)sinusoidal
@@ -148,29 +155,37 @@ bool ProcessingGraph::process (const float* inL, const float* inR,
         case CombineMode::Average:
             for (int i = 0; i < numSamples; ++i) outMono[i] = 0.5f * (l[i] + r[i]); break;
         case CombineMode::AutoPerEar: {
-            // Per-ear measurement: Dirac drives ONE earcup at a time during its L/R sweep, so follow
-            // whichever earcup is currently sounding (the louder RAW mic = the directly-driven ear)
-            // and output ONLY that ear's calibrated mic. Each sweep is then a clean single arrival
-            // with no open-back leakage summed in. Detect on the RAW input (inL/inR) so per-ear FIR
+            // Per-ear measurement: Dirac drives ONE earcup at a time, so feed ONLY the directly-driven ear's
+            // calibrated mic (no open-back leakage summed in). Detect on the RAW input (inL/inR) so per-ear FIR
             // gain differences don't bias the choice; output the post-FIR l/r.
             float pkL = 0.0f, pkR = 0.0f;
             for (int i = 0; i < numSamples; ++i) { pkL = juce::jmax (pkL, std::abs (inL[i])); pkR = juce::jmax (pkR, std::abs (inR[i])); }
-            const float rel = (numSamples == maxBlock) ? relCoeff_   // precomputed; avoid exp() on the hot path
-                            : std::exp (-(float) numSamples / (float) (sr * 0.08));   // exact for a rare short block
-            envL_ = juce::jmax (pkL, envL_ * rel);   // fast attack, slow release -> quick onset detection
-            envR_ = juce::jmax (pkR, envR_ * rel);
             const int prev = activeEar_.load (std::memory_order_relaxed);
-            int ear = prev;
-            // Only reconsider when something is clearly above the noise floor; otherwise HOLD through
-            // the inter-sweep silence. Switch only when the OTHER ear is >= 2x (6 dB) louder, so
-            // open-back leakage into the far mic can't flip the choice mid-sweep.
-            if (envL_ > 0.0032f || envR_ > 0.0032f) {            // ~ -50 dBFS gate
-                if (ear == 0) { if (envR_ > envL_ * 2.0f) ear = 1; }
-                else          { if (envL_ > envR_ * 2.0f) ear = 0; }
+            int  ear = prev;
+            bool hardSwitch = false;   // schedule path: switches land in the inter-sweep GAP (silence) -> hard + click-free
+            if (router_.hasSchedule()) {
+                // PRIMARY: drive the ear from the learned schedule's clock - covers the quiet sweep extremes the
+                // envelope misses + the trailing L. floorLin=0 -> the router's default ~-50 dBFS gate (== the fallback).
+                const RouterOut o = router_.process (pkL, pkR, 0.0f, (double) numSamples / sr);
+                ear = o.ear;
+                autoEarAmbiguous_.store (o.ambiguous, std::memory_order_relaxed);
+                hardSwitch = true;
+            } else {
+                // FALLBACK (no schedule learned / macOS): the mic-envelope router - HOLD through the inter-sweep
+                // silence; switch only when the OTHER ear is >= 2x (6 dB) louder so leakage can't flip it mid-sweep.
+                const float rel = (numSamples == maxBlock) ? relCoeff_   // precomputed; avoid exp() on the hot path
+                                : std::exp (-(float) numSamples / (float) (sr * 0.08));   // exact for a rare short block
+                envL_ = juce::jmax (pkL, envL_ * rel);
+                envR_ = juce::jmax (pkR, envR_ * rel);
+                if (envL_ > 0.0032f || envR_ > 0.0032f) {            // ~ -50 dBFS gate
+                    if (ear == 0) { if (envR_ > envL_ * 2.0f) ear = 1; }
+                    else          { if (envL_ > envR_ * 2.0f) ear = 0; }
+                }
+                autoEarAmbiguous_.store (false, std::memory_order_relaxed);   // the envelope path has no ambiguity signal
             }
             if (ear != prev) activeEar_.store (ear, std::memory_order_relaxed);   // publish for the GUI
             const float* cur = (ear == 0) ? l : r;
-            if (ear != prev) {                                   // crossfade old->new across this block (anti-click)
+            if (ear != prev && ! hardSwitch) {                   // crossfade old->new (anti-click) ONLY in the envelope fallback
                 const float* old = (prev == 0) ? l : r;
                 const float inv = 1.0f / (float) juce::jmax (1, numSamples);
                 for (int i = 0; i < numSamples; ++i) { const float t = (float) i * inv; outMono[i] = old[i] * (1.0f - t) + cur[i] * t; }
@@ -203,6 +218,7 @@ bool ProcessingGraph::process (const float* inL, const float* inR,
 void ProcessingGraph::reset() {
     convL.reset(); convR.reset();
     envL_ = envR_ = 0.0f; activeEar_.store (0, std::memory_order_relaxed);
+    router_.reset(); autoEarAmbiguous_.store (false, std::memory_order_relaxed);
     lastMode_ = combine.load();
 }
 

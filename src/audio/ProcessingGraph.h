@@ -2,6 +2,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
 #include "audio/CombineMode.h"
+#include "audio/ScheduledEarRouter.h"   // schedule-driven AutoPerEar routing (+ eb::SweepSchedule)
 #include <atomic>
 #include <cmath>
 namespace eb {
@@ -29,6 +30,9 @@ public:
     // post-install (the tests settle by processing, mirroring the audio thread).
     bool convolutionsLoaded (int taps) const;
     void setCombineMode (CombineMode mode);
+    // Install the learned AutoPerEar schedule. MESSAGE THREAD, while STOPPED (single-writer vs the audio-thread
+    // read in process()); an invalid/empty schedule -> the mic-envelope fallback. See ScheduledEarRouter.
+    void setSweepSchedule (const SweepSchedule& schedule);
     void setOutputGain (float linear);   // applied to the mono output (the "Output trim" control)
     // Returns true if it replaced any non-finite sample (in the input scratch before convolution, or in
     // the output before the clamp), so the audio callback can flag a FIR-produced non-finite. Sanitizing
@@ -41,6 +45,10 @@ public:
     // Published lock-free for the GUI's "active side" indicator. Meaningful only while AutoPerEar is the
     // live mode with signal present; the GUI gates on mode + level.
     int activeEar() const noexcept { return activeEar_.load (std::memory_order_relaxed); }
+
+    // AutoPerEar: did the live schedule-driven routing flag the current segment AMBIGUOUS (off-schedule)?
+    // Lock-free; the grade/GUI reads it to fail an ambiguous measurement. Always false in the envelope fallback.
+    bool autoEarAmbiguous() const noexcept { return autoEarAmbiguous_.load (std::memory_order_relaxed); }
 
     // How much (>= 0 dB) the auto makeup-headroom is attenuating the output, i.e. -20*log10(headroomGain).
     // headroomGain is <= 1 (it only ever cuts), so this is always >= 0 dB; 0 when no attenuation (unity
@@ -80,6 +88,8 @@ private:
     // envelopes so the mode can follow whichever earcup Dirac is currently sweeping.
     float envL_ = 0.0f, envR_ = 0.0f;
     std::atomic<int> activeEar_ { 0 };   // 0 = left mic, 1 = right mic (published for the GUI indicator)
+    ScheduledEarRouter router_;          // schedule-driven AutoPerEar; hasSchedule()==false -> the envelope fallback
+    std::atomic<bool> autoEarAmbiguous_ { false };   // the router's per-segment ambiguity (published for the grade/GUI)
     float relCoeff_ = 0.0f; // AutoPerEar envelope-release coefficient, precomputed in prepare() (no per-block exp)
     int   lastMode_ = (int) CombineMode::AutoPerEar;   // detect a live combine-mode change to re-arm AutoPerEar cleanly
 };
