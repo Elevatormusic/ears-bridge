@@ -46,10 +46,14 @@ public:
     // noise floor (NoiseFloorTracker::floorLinear, max-of-ears or per-ear); blockSec = block duration.
     RouterOut process (float peakL, float peakR, float floorLin, double blockSec) noexcept {
         if (! has_) return { ear_, false };
-        const float pL    = std::abs (peakL), pR = std::abs (peakR);
-        const float peak  = std::max (pL, pR);
-        const float eff   = (floorLin >= kMinFloorLin) ? floorLin : kDefaultFloorLin;   // guard an unlearned floor
-        const bool  loud  = peak > eff * kOnsetMargin;
+        if (! std::isfinite (blockSec) || blockSec < 0.0) blockSec = 0.0;   // a non-finite/negative host blockSec must not poison tSeg_
+        const float pL      = std::abs (peakL), pR = std::abs (peakR);
+        const float peak    = std::max (pL, pR);
+        const float minPeak = std::min (pL, pR);
+        const float eff     = (floorLin >= kMinFloorLin) ? floorLin : kDefaultFloorLin;   // guard an unlearned floor
+        // ARM only on a HARD-PANNED loud block (one ear clearly louder) - mirrors extractSchedule's pan test so a
+        // non-panned pre-sweep stereo LEVEL TONE above the onset gate cannot falsely start the schedule clock.
+        const bool  loud  = (peak > eff * kOnsetMargin) && (peak > minPeak * kPanRatio);
         const bool  quiet = peak < eff * kGapMargin;
         const int   segN  = (int) schedule_.segments.size();
 
@@ -57,15 +61,15 @@ public:
             case State::Idle:
                 ear_ = (int) schedule_.segments[0].ear;                 // pre-position the first ear
                 ambiguous_ = false;
-                if (loud) { loudAccum_ += blockSec; if (loudAccum_ >= kArmSec) startSegment (0); }
-                else        loudAccum_ = 0.0;
+                armIfLoud (0, loud, blockSec);
                 break;
 
             case State::InSegment: {
                 ear_ = (int) schedule_.segments[segIdx_].ear;           // PREDICTIVE: route the schedule's ear regardless of level
                 tSeg_ += blockSec;
-                const double dur   = schedule_.segments[segIdx_].durationSec;
-                const bool   durOk = tSeg_ >= dur * (1.0 - kEndGuardTol);
+                const double dur      = schedule_.segments[segIdx_].durationSec;
+                const bool   durOk    = tSeg_ >= dur * (1.0 - kEndGuardTol);
+                const double effDwell = gapConfirmSec (segIdx_);   // confirm the gap after a fraction of the LEARNED gap (short gaps followable)
                 quietAccum_ = quiet ? quietAccum_ + blockSec : 0.0;
 
                 if (tSeg_ > dur * (1.0 + kDriftTol)) ambiguous_ = true;  // ran long past schedule with no gap (drift/fused)
@@ -81,8 +85,9 @@ public:
                     else invertAccum_ = 0.0;
                 } else invertAccum_ = 0.0;
 
-                // Duration-guard transition: end ONLY when the scheduled duration has ~elapsed AND a real gap (sustained quiet).
-                if (durOk && quietAccum_ >= kDwellSec) {
+                // Duration-guard transition: end ONLY when the scheduled duration has ~elapsed AND a real gap (sustained
+                // quiet for effDwell, which follows the LEARNED gap so a config with short gaps still transitions in time).
+                if (durOk && quietAccum_ >= effDwell) {
                     if (segIdx_ + 1 < segN) { state_ = State::InGap; loudAccum_ = 0.0; ear_ = (int) schedule_.segments[segIdx_ + 1].ear; }
                     else                    { state_ = State::Idle;  loudAccum_ = 0.0; }   // last segment done -> ready for the next position
                 }
@@ -91,8 +96,7 @@ public:
 
             case State::InGap:
                 ear_ = (int) schedule_.segments[segIdx_ + 1].ear;       // pre-positioned to the next ear (LF onset lands here)
-                if (loud) { loudAccum_ += blockSec; if (loudAccum_ >= kArmSec) startSegment (segIdx_ + 1); }
-                else        loudAccum_ = 0.0;
+                armIfLoud (segIdx_ + 1, loud, blockSec);
                 break;
         }
         return { ear_, ambiguous_ };
@@ -109,6 +113,18 @@ private:
         ambiguous_ = false;                                             // fresh segment -> fresh verdict
         ear_ = (int) schedule_.segments[i].ear;
     }
+    // Arm `targetSeg` after kArmSec of sustained hard-panned loud (shared by the Idle and InGap states).
+    void armIfLoud (int targetSeg, bool loud, double blockSec) noexcept {
+        if (loud) { loudAccum_ += blockSec; if (loudAccum_ >= kArmSec) startSegment (targetSeg); }
+        else        loudAccum_ = 0.0;
+    }
+    // Sustained-quiet time to confirm the gap AFTER segment i: a fraction of the LEARNED gap, clamped to
+    // [kMinDwellSec, kDwellSec], so a config with SHORT gaps is still followable. A segment with no following
+    // gap entry (the last one) -> the full kDwellSec.
+    double gapConfirmSec (int i) const noexcept {
+        if (i < 0 || i >= (int) schedule_.gapsSec.size()) return kDwellSec;
+        return std::clamp (schedule_.gapsSec[(std::size_t) i] * kGapDwellFrac, kMinDwellSec, (double) kDwellSec);
+    }
 
     SweepSchedule schedule_;
     bool   has_      = false;
@@ -118,14 +134,21 @@ private:
     double tSeg_ = 0.0, loudAccum_ = 0.0, quietAccum_ = 0.0, invertAccum_ = 0.0;
     bool   ambiguous_ = false;
 
-    // Tuning (DEFERRED on-device ratification; synthetic defaults). loud := peak > floor*4 (+12 dB);
-    // quiet := peak < floor*2 (+6 dB); the band between is "active, not a gap" (a quiet-but-above-floor tail).
+    // Tuning (DEFERRED on-device ratification; synthetic defaults). loud := hard-panned AND peak > floor*4
+    // (+12 dB); quiet := peak < floor*2 (+6 dB); the band between is "active, not a gap".
+    // The L/R-SEPARATION constants (kDefaultFloorLin, kPanRatio, kInvertMargin) describe the SAME physical
+    // decision as ProcessingGraph's envelope AutoPerEar gate (0.0032f floor, 2.0f switch ratio) and LrVerify's
+    // active/ratio gates. When the wiring task makes this router SUBSUME that envelope path, fold them into ONE
+    // shared home so they cannot diverge (review findings #4/#9).
     static constexpr float  kMinFloorLin     = 1.0e-5f;   // below this, treat floorLin as unlearned
-    static constexpr float  kDefaultFloorLin = 0.003f;    // ~-50 dBFS assumed floor until the tracker learns one
+    static constexpr float  kDefaultFloorLin = 0.0032f;   // ~-50 dBFS fallback floor (matches ProcessingGraph's gate)
     static constexpr float  kOnsetMargin     = 4.0f;
     static constexpr float  kGapMargin       = 2.0f;
+    static constexpr float  kPanRatio        = 3.0f;      // a SWEEP block is hard-panned: louder ear > 3x (~+10 dB) the other
     static constexpr double kArmSec          = 0.05;      // sustained loud to start the schedule clock
-    static constexpr double kDwellSec        = 0.15;      // sustained quiet to confirm a gap
+    static constexpr double kDwellSec        = 0.15;      // MAX sustained quiet to confirm a gap (+ the premature-gap floor)
+    static constexpr double kMinDwellSec     = 0.03;      // MIN, so a short LEARNED gap is still confirmable
+    static constexpr double kGapDwellFrac    = 0.4;       // confirm a gap after this fraction of the learned gap
     static constexpr double kEndGuardTol     = 0.15;      // hold the ear until >= 85% of the scheduled duration
     static constexpr double kDriftTol        = 0.30;      // tSeg > 130% of schedule -> ambiguous
     static constexpr float  kInvertMargin    = 2.0f;      // wrong ear louder by 2x ...

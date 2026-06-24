@@ -51,4 +51,21 @@ constexpr float kFloorRiseFactor = 0.1f;      // UP moves use alpha*this -> floo
     return 20.0f * std::log10 (std::sqrt (std::max (p, tiny)));
 }
 
+// RMS of a sample span [first, last), SKIPPING non-finite samples (a single NaN/Inf must not poison the
+// estimate). Returns 0 for an empty / all-non-finite span. Pure; the offline SweepSchedule learner uses it.
+[[nodiscard]] inline double rmsLinearOver (const float* x, int first, int last) noexcept {
+    if (x == nullptr || last <= first) return 0.0;
+    double s = 0.0; int cnt = 0;
+    for (int i = first; i < last; ++i) {
+        const double v = (double) x[i];
+        if (std::isfinite (v)) { s += v * v; ++cnt; }
+    }
+    return cnt > 0 ? std::sqrt (s / (double) cnt) : 0.0;
+}
+
+// Linear amplitude -> dBFS, floored at floorDb for a (near-)zero input (no -inf / NaN).
+[[nodiscard]] inline double linToDb (double lin, double floorDb = -240.0) noexcept {
+    return lin > 1.0e-12 ? 20.0 * std::log10 (lin) : floorDb;
+}
+
 } // namespace eb

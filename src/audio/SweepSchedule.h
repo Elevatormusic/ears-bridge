@@ -2,7 +2,8 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
-#include "audio/EngineTypes.h"   // eb::Ear (canonical home; shared with LrVerify)
+#include "audio/EngineTypes.h"     // eb::Ear (canonical home; shared with LrVerify)
+#include "audio/NoiseFloorMath.h"  // eb::rmsLinearOver / linToDb (shared block-RMS + dB math)
 
 // AutoPerEar hardening (P0-06) — the LEARNED sweep schedule.
 //
@@ -28,9 +29,9 @@ struct SweepSegment {
 
 struct SweepSchedule {
     std::vector<SweepSegment> segments;       // in time order, e.g. [L, R, L]
-    std::vector<double>       gapsSec;        // gap AFTER segment[i]; size == max(0, segments.size()-1)
+    std::vector<double>       gapsSec;        // gap AFTER segment[i]; size == max(0, segments.size()-1).
+                                              // The router uses this (its dwell adapts to the learned gap length).
     bool   valid          = false;            // true iff >= 2 segments were recovered (else: mic-envelope fallback)
-    double totalActiveSec = 0.0;              // sum of segment durations (sanity)
 };
 
 // Learn the schedule from the stereo loopback `L`/`R` (n samples at `rate`). Block-RMS over blockSec windows:
@@ -52,14 +53,10 @@ struct SweepSchedule {
     const int blk = std::max (1, (int) std::lround (blockSec * rate));
     const int nb  = n / blk;   // whole blocks only
 
+    // dB of the block RMS, via the shared NoiseFloorMath helpers (NaN/Inf-skipping so one bad sample can't
+    // fracture a segment - clean PCM loopback never has them, but be robust).
     auto rmsDb = [] (const float* x, int i0, int len) -> double {
-        double s = 0.0; int cnt = 0;
-        for (int i = i0; i < i0 + len; ++i) {                  // SKIP non-finite samples so one NaN/Inf can't
-            const double v = (double) x[i];                    // fracture a segment (verifier MINOR #2); clean
-            if (std::isfinite (v)) { s += v * v; ++cnt; }       // PCM loopback never has them, but be robust.
-        }
-        const double rms = cnt > 0 ? std::sqrt (s / (double) cnt) : 0.0;
-        return rms > 1.0e-12 ? 20.0 * std::log10 (rms) : -240.0;
+        return linToDb (rmsLinearOver (x, i0, i0 + len));
     };
 
     struct Run { int ear; int startBlk; int endBlk; };   // [startBlk, endBlk)
@@ -93,7 +90,6 @@ struct SweepSchedule {
             out.segments.push_back ({ (Ear) r.ear, dur });
             segStartBlk.push_back (r.startBlk);
             segEndBlk.push_back (r.endBlk);
-            out.totalActiveSec += dur;
         }
     }
     for (std::size_t i = 1; i < out.segments.size(); ++i)
