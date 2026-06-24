@@ -151,7 +151,7 @@ MainComponent::MainComponent() {
                            "Set levels in Dirac: Master output, then Mic gain.",
                            juce::dontSendNotification);
     inputGainHint.setColour (juce::Label::textColourId, Theme::textDim());
-    inputGainHint.setFont (juce::Font (juce::FontOptions (11.5f)));
+    inputGainHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     inputGainHint.setJustificationType (juce::Justification::topLeft);
     inputGainHint.setMinimumHorizontalScale (1.0f);
     railContent.addAndMakeVisible (inputGainHint);
@@ -415,7 +415,7 @@ MainComponent::MainComponent() {
     addAndMakeVisible (levelsEyebrow);
     levelsHint.setText ("Set Dirac's Master output so the L and R meters reach the green band.", juce::dontSendNotification);
     levelsHint.setColour (juce::Label::textColourId, Theme::textDim());
-    levelsHint.setFont (juce::Font (juce::FontOptions (11.5f)));
+    levelsHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     levelsHint.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (levelsHint);
     // Dirac Mic-gain caption: EARS Bridge attenuates its output for auto-headroom; tell the user to add
