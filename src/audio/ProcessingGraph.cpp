@@ -142,6 +142,7 @@ bool ProcessingGraph::process (const float* inL, const float* inR,
     const int modeNow = combine.load();
     if (modeNow != lastMode_) {                  // live combine-mode change (user moved the dropdown)
         envL_ = envR_ = 0.0f;                     // re-arm AutoPerEar from clean envelopes so entering it
+        router_.reset();                          // ...and re-arm the schedule router (verifier MINOR: symmetry)
         lastMode_ = modeNow;                      // doesn't inherit a stale active-ear from before
     }
     switch ((CombineMode) modeNow) {

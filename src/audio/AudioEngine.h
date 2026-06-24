@@ -45,6 +45,9 @@ public:
     void clearLeftCalFir();    // restore a neutral (unity) FIR + reset that ear's auto-headroom
     void clearRightCalFir();
     void setCombineMode (eb::CombineMode);
+    // Install the learned AutoPerEar schedule. MESSAGE THREAD, WHILE STOPPED ONLY (loadSchedule allocates +
+    // is NOT mid-run safe, unlike the async setFir loader) - jasserted via reconfigAllowed(). Empty -> envelope fallback.
+    void setSweepSchedule (const SweepSchedule&);
     void setOutputTrimDb (double db);   // output level trim (<= 0 dB), applied live to the mono output
 
     // Convenience: design + load the FIR from a parsed cal file at the active rate.
@@ -137,6 +140,8 @@ public:
     // AutoPerEar: which earcup is currently being fed to Dirac (0 = left, 1 = right). Drives the GUI
     // "capturing Left/Right" indicator; only meaningful while running in AutoPerEar with signal.
     int autoActiveEar() const noexcept;
+    // AutoPerEar: did the schedule-driven router flag the current segment AMBIGUOUS (off-schedule)? Lock-free.
+    bool autoEarAmbiguous() const noexcept;
 
     // How much (>= 0 dB) the graph's auto makeup-headroom is currently attenuating the output. The GUI
     // shows this as "add about +N dB on Dirac's Mic gain" so the user compensates for the attenuation
