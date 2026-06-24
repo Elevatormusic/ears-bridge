@@ -302,8 +302,21 @@ TEST_CASE ("aggregateVerdict: sweepSNR gates, THD escalates at red, IR-SNR never
     CHECK (V (true, 30, true, 60, 6).state     == RefMonState::GradedClean);    // THD orange does NOT
     CHECK (V (true, 30, true, 30, 0.01f).state == RefMonState::GradedClean);    // IR-SNR red never gates
     CHECK (V (true, 30, true, 30, 0.01f).irSnrBand == QualityBand::Red);        // but its band shows red
-    CHECK (V (true, 5, false, 60, 0.01f).state == RefMonState::GradedClean);    // invalid snr -> no penalty
-    CHECK (V (true, 5, false, 60, 0.01f).sweepSnrBand == QualityBand::Unknown);
+    CHECK (V (true, 5, false, 60, 0.01f).state == RefMonState::GradedMarginal); // invalid snr -> Marginal, NEVER Clean
+    CHECK (V (true, 5, false, 60, 0.01f).sweepSnrBand == QualityBand::Unknown);  // (integrity: an unverifiable trust gate can't grant green - review 2026-06-23)
+}
+
+TEST_CASE ("aggregateVerdict never-falsely-green: an UNVERIFIABLE sweepSNR falls to Marginal", "[refmon][verdict]") {
+    // The trust-gate-abstains false-green: a matched-but-noisy capture whose window has no usable noise region
+    // (sweepSnrValid=false) must NOT read Clean - IR-SNR is advisory and THD is ~0 for non-harmonic/tonal noise.
+    for (float ir : { 30.0f, 60.0f })            // any IR-SNR (advisory) ...
+        for (float thd : { 0.01f, 6.0f }) {      // ... and any sub-red THD ...
+            auto v = aggregateVerdict (/*matched*/ true, /*snr*/ 0.0f, /*sweepSnrValid*/ false, ir, thd);
+            CHECK (v.state != RefMonState::GradedClean);              // ... can never be green when SNR is unverifiable
+            CHECK (v.state == RefMonState::GradedMarginal);
+        }
+    // THD-red still escalates past Marginal even when SNR is unverifiable.
+    CHECK (aggregateVerdict (true, 0.0f, false, 60, 12.0f).state == RefMonState::GradedSuspect);
 }
 
 TEST_CASE ("aggregateVerdict honesty invariant: never GradedClean when sweepSNR or THD is red", "[refmon][verdict]") {

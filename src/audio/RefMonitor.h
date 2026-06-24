@@ -172,7 +172,7 @@ struct QualityVerdict {
 // Combine the three metrics into the headline state. Match-gate FIRST (a non-match is "re-learn", never a
 // quality number). Then sweepSNR drives the headline; THD escalates ONLY at red (Farina makes THD
 // non-corrupting, so mild THD must not veto); IR-SNR is advisory (its band is reported, never gates).
-// An Unknown sweepSNR (no usable noise region) never penalizes -> stays Clean.
+// An UNVERIFIABLE sweepSNR (no usable noise region) cannot confirm clean -> Marginal, never Clean (integrity).
 [[nodiscard]] inline QualityVerdict aggregateVerdict (bool matched, float sweepSnrDb, bool sweepSnrValid,
                                                       float irSnrDb, float thdPct) noexcept {
     QualityVerdict v;
@@ -183,9 +183,13 @@ struct QualityVerdict {
     v.thdBand      = classifyThd (thdPct);
 
     RefMonState s = RefMonState::GradedClean;
-    if (v.sweepSnrBand == QualityBand::Orange) s = RefMonState::GradedMarginal;
-    if (v.sweepSnrBand == QualityBand::Red)    s = RefMonState::GradedSuspect;
-    if (v.thdBand      == QualityBand::Red)    s = RefMonState::GradedSuspect;   // worst-wins escalate
+    // sweepSNR is the ONLY trust gate (IR-SNR is advisory, THD ~0 for non-harmonic noise). If it could NOT be
+    // measured (sweepSnrValid==false / Unknown band: no usable noise region in the window), we cannot CONFIRM the
+    // capture is clean -> fall to Marginal, never Clean. (The prior "Unknown stays Clean" was a false-green path:
+    // a colored/tonal noisy capture with no separable noise region read green. Review 2026-06-23.)
+    if (! sweepSnrValid || v.sweepSnrBand == QualityBand::Orange) s = RefMonState::GradedMarginal;
+    if (v.sweepSnrBand == QualityBand::Red)                       s = RefMonState::GradedSuspect;
+    if (v.thdBand      == QualityBand::Red)                       s = RefMonState::GradedSuspect;   // worst-wins escalate
     v.state = s;
     return v;
 }
@@ -198,10 +202,11 @@ struct QualityVerdict {
     // sweepSNR predicts Dirac's "imprecise" verdict: low capture SNR corrupts the excess-phase estimate, so
     // Dirac drops the position from phase correction (research-confirmed; the fix is more SNR, not re-measuring
     // blindly). Name the verdict so the grade is actionable.
-    if (v.sweepSnrBand == QualityBand::Red)    return "Noisy capture - Dirac will likely mark it imprecise; raise level or lower noise.";
-    if (v.thdBand      == QualityBand::Red)    return "High distortion - check level/seal.";
-    if (v.sweepSnrBand == QualityBand::Orange) return "Marginal SNR - Dirac may mark it imprecise; raise level or lower noise.";
-    if (v.irSnrBand    == QualityBand::Red)    return "Weak impulse response - possible time-variance or reference issue.";
+    if (v.sweepSnrBand == QualityBand::Red)     return "Noisy capture - Dirac will likely mark it imprecise; raise level or lower noise.";
+    if (v.thdBand      == QualityBand::Red)     return "High distortion - check level/seal.";
+    if (v.sweepSnrBand == QualityBand::Orange)  return "Marginal SNR - Dirac may mark it imprecise; raise level or lower noise.";
+    if (v.sweepSnrBand == QualityBand::Unknown) return "Couldn't verify SNR (no quiet region in the capture) - re-measure.";
+    if (v.irSnrBand    == QualityBand::Red)     return "Weak impulse response - possible time-variance or reference issue.";
     return {};   // all clear
 }
 
