@@ -26,7 +26,11 @@ namespace eb {
 class MainComponent : public juce::Component,
                       public juce::Timer {
 public:
+    // Headless/test construction: inject a temp-dir Settings (hermetic) and suppress the launch-time update
+    // network call. The default ctor is the real app (per-user Settings, network on).
+    struct TestConfig { juce::File settingsDir; bool disableNetwork = true; };
     MainComponent();
+    explicit MainComponent (const TestConfig& cfg);
     ~MainComponent() override;
 
     void resized() override;
@@ -34,6 +38,9 @@ public:
     void timerCallback() override;   // polls levels()/health()
 
 private:
+    // Common ctor both public ctors delegate to: settingsDir empty -> per-user Settings file (real app), else a
+    // test temp dir; disableNetwork suppresses the launch-time update check so a headless test never hits the net.
+    MainComponent (juce::File settingsDir, bool disableNetwork);
     void refreshDeviceLists();
     void autoSelectDefaults();       // first run / empty slot: pick a recognised EARS + a standard VB-CABLE
     void onInputChosen  (const DeviceId&);
