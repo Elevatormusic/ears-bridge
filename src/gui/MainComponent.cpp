@@ -508,7 +508,7 @@ MainComponent::MainComponent() {
 
     updateStartGate();
     syncPlotScales();
-    setSize (900, 700);
+    setSize (900, 780);   // tall enough for the right pane (two cal cards + Levels + the mic-gain caption) without cramping
     startTimerHz (30);
 
     // Background update check: runs on every launch, gated only by the user's opt-out toggle.
@@ -2375,14 +2375,14 @@ int MainComponent::layoutRail (int width) {
 
     inputPicker.setBounds (rr.removeFromTop (62));
     rr.removeFromTop (4);
-    inputGainHint.setBounds (rr.removeFromTop (30));
+    inputGainHint.setBounds (rr.removeFromTop (60));   // was 30 - too short for the wrapped 3-4 line hint (truncated with "...")
     rr.removeFromTop (12);
 
     combineLabel.setBounds (rr.removeFromTop (16));
     rr.removeFromTop (6);
     combineBox.setBounds (rr.removeFromTop (40));
     rr.removeFromTop (6);
-    combineHint.setBounds (rr.removeFromTop (44));
+    combineHint.setBounds (rr.removeFromTop (80));   // was 44 - too short for the wrapped hint ("...crossta...")
     rr.removeFromTop (16);
 
     outputPicker.setBounds (rr.removeFromTop (62));
@@ -2468,7 +2468,7 @@ void MainComponent::resized() {
     auto area = getLocalBounds();
 
     // --- Title bar ---
-    auto bar = area.removeFromTop (56);
+    auto bar = area.removeFromTop (76);   // fits the 68px per-ear status STACK (4 rows) + margin - was 56 and clipped it
     {
         auto x = bar.reduced (16, 0);
         brandLabel.setBounds (x.removeFromLeft (200).withTrimmedLeft (24));
@@ -2526,12 +2526,23 @@ void MainComponent::resized() {
         auto pp = pane.reduced (16);
         calEyebrow.setBounds (pp.removeFromTop (16));
         pp.removeFromTop (10);
+
+        // Reserve the bottom captions from the BOTTOM first so the cards/Levels above can never clip them (the old
+        // top-down order let the Levels caption fall off the bottom of the pane). The Levels card then flexes to take
+        // whatever space is left between the two fixed cal cards and the reserved captions.
+        if (inputClipHint.isVisible()) {
+            inputClipHint.setBounds (pp.removeFromBottom (50));
+            pp.removeFromBottom (8);
+        }
+        diracMicGainHint.setBounds (pp.removeFromBottom (34));
+        pp.removeFromBottom (8);
+
         leftCal.setBounds (pp.removeFromTop (206));
         pp.removeFromTop (16);
         rightCal.setBounds (pp.removeFromTop (206));
         pp.removeFromTop (20);
 
-        levelsBounds = pp.removeFromTop (104);
+        levelsBounds = pp.removeFromTop (juce::jmin (pp.getHeight(), 110));   // flex down on a short window, cap on a tall one
         auto lv = levelsBounds.reduced (16, 12);
         {
             // Section eyebrow with the gain-staging caption inline to its right (zero extra vertical).
@@ -2541,19 +2552,10 @@ void MainComponent::resized() {
             levelsHint.setBounds (top);
         }
         lv.removeFromTop (8);
-        const int mh = lv.getHeight() / 3;
+        const int mh = juce::jmax (8, lv.getHeight() / 3);   // meters flex with the card but never collapse to nothing
         meterL.setBounds   (lv.removeFromTop (mh));
         meterR.setBounds   (lv.removeFromTop (mh));
         meterOut.setBounds (lv.removeFromTop (mh));
-
-        // Dirac Mic-gain caption: sits just below the Levels card, above the (conditional) clip hint.
-        pp.removeFromTop (8);
-        diracMicGainHint.setBounds (pp.removeFromTop (34));
-
-        if (inputClipHint.isVisible()) {
-            pp.removeFromTop (8);
-            inputClipHint.setBounds (pp.removeFromTop (50));
-        }
     }
 }
 
