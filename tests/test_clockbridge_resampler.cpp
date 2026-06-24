@@ -96,3 +96,35 @@ TEST_CASE ("ClockBridge: click-free across the D6 freeze edge", "[clockbridge][r
     // readPhase_ persists across the swap (only inc's slope changes), so there is no step -> edge ~ baseline.
     CHECK (edge <= base * 2.0 + 1e-3);
 }
+
+TEST_CASE ("ClockBridge: 4x downsample at the ratioTrim ceiling + small capacity stays in-bounds", "[clockbridge][resampler][oob]") {
+    // Review regression (2026-06-23): the FIR scratch was sized for kMaxRatio(4.0), but the PI raises the
+    // effective ratio to 4.0*kMaxRatioTrim(1.03)=4.12. A small-capacity caller (prepare() permits down to 1024)
+    // then had the resampler read ~970 floats PAST the scratch on a full kMaxRenderBlock block. Overfeeding pins
+    // ratioTrim to its ceiling; a full 8192-output block then exercises the worst-case read span. With the fix
+    // (scratch sized for kMaxRatio*kMaxRatioTrim) every read stays in bounds -> finite, bounded output.
+    eb::ClockBridge b; b.prepare (192000.0, 48000.0, 1, 4096); b.primeToTarget();   // small capacity, 4x ratio
+    std::vector<float> in (8192, 0.1f), out (8192);
+    for (int blk = 0; blk < 300; ++blk) {                          // overfeed -> fill pins high -> ratioTrim -> 1.03 (inc 4.12)
+        b.pushCapture (in.data(), 8192);
+        b.pullRender  (out.data(), 1024);
+    }
+    for (int blk = 0; blk < 8; ++blk) {
+        b.pushCapture (in.data(), 8192);
+        REQUIRE (b.pullRender (out.data(), 8192) == 8192);          // a FULL block at the high inc: the worst-case read span
+        for (float s : out) { REQUIRE (std::isfinite (s)); REQUIRE (std::abs ((double) s) < 2.0); }   // an OOB heap read -> garbage/NaN
+    }
+}
+
+TEST_CASE ("ClockBridge: sustained render-starvation does not run readPhase away (no OOB)", "[clockbridge][resampler][oob]") {
+    // Review regression: on a fully-starved block `advance` clamps to 0, so readPhase_ is not retired while the
+    // output loop keeps advancing it - sustained starvation (render pulling while capture is dead) ran readPhase_
+    // past the scratch end. The fix resets readPhase_ to the prime point when it would overrun. 500 starved pulls
+    // must stay finite (silence) with no OOB read.
+    eb::ClockBridge b; b.prepare (192000.0, 48000.0, 1, 4096); b.primeToTarget();
+    std::vector<float> out (1024);
+    for (int blk = 0; blk < 500; ++blk) {                          // capture is DEAD: never pushCapture
+        REQUIRE (b.pullRender (out.data(), 1024) == 1024);
+        for (float s : out) REQUIRE (std::isfinite (s));
+    }
+}

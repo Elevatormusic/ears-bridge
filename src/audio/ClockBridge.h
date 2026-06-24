@@ -74,6 +74,10 @@ private:
     std::vector<float> srcInput;        // peeked from FIFO, fed to the resampler
     double captureRate = 48000.0, renderRate = 48000.0;
     static constexpr double kMaxRatio       = 4.0;      // 192k -> 48k, the worst-case input:output ratio
+    static constexpr double kMaxRatioTrim   = 1.03;     // PI ratioTrim CEILING (the jlimit in pullRender). The
+    static constexpr double kMinRatioTrim   = 0.97;     // scratch MUST be sized for kMaxRatio*kMaxRatioTrim, NOT
+                                                        // kMaxRatio: the PI raises the effective inc to 4.0*1.03=
+                                                        // 4.12, and kMaxRatio alone reads OOB at the rate extreme.
     static constexpr int    kMaxRenderBlock = 8192;     // upper bound on pullRender numFrames (scratch sizing)
 
     // PI fill-control state (consumer thread only).

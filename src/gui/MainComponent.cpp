@@ -1835,9 +1835,14 @@ void MainComponent::onLearnReference() {
                 if (schedule.valid) {
                     const auto refHash = eb::makeReferenceMetadata (samplesL.data(), (int) samplesL.size(), capRate).contentHash;
                     dir.getChildFile ("schedule.txt").replaceWithText (eb::serializeSchedule (schedule, refHash));
-                    mc->engine.setSweepSchedule (schedule);
+                    // Install ONLY if the engine is stopped: setSweepSchedule -> loadSchedule allocates + is not mid-run
+                    // safe. If Start raced in during the Learn capture, skip the live install - the sidecar is already
+                    // persisted, so the next launch's loadStoredReference installs it on the stopped engine.
+                    const bool installed = mc->engine.reconfigAllowed();
+                    if (installed) mc->engine.setSweepSchedule (schedule);
                     mc->logLine (eb::DiagnosticLog::Level::Info, "AutoPerEar schedule learned ("
-                                 + juce::String ((int) schedule.segments.size()) + " segments)");
+                                 + juce::String ((int) schedule.segments.size()) + " segments)"
+                                 + (installed ? juce::String() : juce::String (" - install deferred, engine running")));
                 } else {
                     dir.getChildFile ("schedule.txt").deleteFile();   // no schedule learned -> drop any stale sidecar
                 }

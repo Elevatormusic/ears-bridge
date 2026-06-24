@@ -11,10 +11,11 @@ void ClockBridge::prepare (double capRate, double renRate, int /*channels*/, int
     fifo.reset();
     resampler_.prepare (captureRate, renderRate);
     readPhase_ = resampler_.halfLength() - 1;            // first output centers on primed history
-    // Scratch must hold the worst-case needIn so the stateless FIR never reads OOB (even on starve):
-    // up to kMaxRatio*kMaxRenderBlock output span + the filter length.
+    // Scratch must hold the worst-case needIn so the stateless FIR never reads OOB (even on starve): up to
+    // (kMaxRatio*kMaxRatioTrim)*kMaxRenderBlock output span + the filter length. The *kMaxRatioTrim is essential -
+    // the PI raises the effective ratio to nominal*1.03, so kMaxRatio alone undersizes the scratch (review fix).
     srcInput.assign ((size_t) juce::jmax (capacity,
-                     (int) std::ceil (kMaxRatio * kMaxRenderBlock) + eb::PolyphaseResampler::kMaxLen + 8), 0.0f);
+                     (int) std::ceil (kMaxRatio * kMaxRatioTrim * kMaxRenderBlock) + eb::PolyphaseResampler::kMaxLen + 8), 0.0f);
     smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0; avgRatioTrim_ = 1.0; avgCount_ = 0;
     sweepActive_.store (false); emergencyCorrection_.store (false);
     freezeArmed_ = false; frozenRatio_ = captureRate / juce::jmax (1.0, renderRate);
@@ -78,7 +79,7 @@ void ClockBridge::pushCapture (const float* mono, int numFrames) {
 
 int ClockBridge::pullRender (float* out, int numFrames) {
     // --- Fill observation (always current, even while frozen, so fifoFill() stays honest). ---
-    const double fillFrac = (double) fifo.getNumReady() / (double) capacity;
+    const double fillFrac = (double) fifo.getNumReady() / (double) juce::jmax (1, capacity);   // guard capacity==0 (pre-prepare)
     smoothedFill += 0.01 * (fillFrac - smoothedFill);        // 1-pole smoother (steering only)
     publishedFill.store (smoothedFill);
 
@@ -101,7 +102,7 @@ int ClockBridge::pullRender (float* out, int numFrames) {
         freezeArmed_ = false;                                 // re-arm for the next sweep
         const double errFill = smoothedFill - kTargetFill;
         integ = juce::jlimit (-0.02, 0.02, integ + 1.0e-4 * errFill);
-        ratioTrim = juce::jlimit (0.97, 1.03, 1.0 + (2.0e-2 * errFill + integ));
+        ratioTrim = juce::jlimit (kMinRatioTrim, kMaxRatioTrim, 1.0 + (2.0e-2 * errFill + integ));
         ratio = nominal * ratioTrim;
         // Running mean early (alpha 1/n), settling to a slow EMA (floor 0.001) once warm. The 1/n term makes
         // avgRatioTrim_ converge to the true ratio within a second or two of free-running, so a sweep that arrives
@@ -121,6 +122,15 @@ int ClockBridge::pullRender (float* out, int numFrames) {
         const int chunk = juce::jmin (numFrames - done, kMaxRenderBlock);
         // Highest srcInput index the resampler reads for these `chunk` outputs (= floor(last readPhase)+L/2).
         int needIn = (int) std::floor (readPhase_ + (chunk - 1) * inc) + Lh + 1;
+        if (needIn > (int) srcInput.size()) {
+            // readPhase_ ran away: SUSTAINED render-starvation (render pulling while capture is stalled/dead) never
+            // retires readPhase_ (advance clamps to toRead=0), so it grows by chunk*inc per block until the FIR would
+            // read past the scratch. Reset to the safe prime point - output is the zero-padded scratch (silence) until
+            // capture resumes, which is correct for a dead input. With srcInput sized for kMaxRatio*kMaxRatioTrim a
+            // NON-starved readPhase_ (~Lh) never trips this branch; only the runaway does.
+            readPhase_ = (double) (Lh - 1);
+            needIn = (int) std::floor (readPhase_ + (chunk - 1) * inc) + Lh + 1;
+        }
         needIn = juce::jmin (needIn, (int) srcInput.size());
         const int avail  = fifo.getNumReady();
         const int toRead = juce::jmin (needIn, avail);
