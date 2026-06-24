@@ -1089,6 +1089,19 @@ void MainComponent::syncPlotScales() {
     rightCal.setPlotRange (top);
 }
 
+void MainComponent::forceThemeForTest (bool dark) {
+    theme.setDarkForTest (dark);
+    applyTextColours();
+    // Settle the two labels applyTextColours does NOT own, so the gate scores a STEADY-STATE frame (what the
+    // user sees after the next timer tick), not a transient mid-switch frame: levelsHint's colour/text is the
+    // timer's (updateActiveEarIndicator), and diracCableHint's is state-driven (updateDiracCableHint - hidden
+    // when no virtual output is selected, which is the headless default).
+    updateActiveEarIndicator (true);
+    updateDiracCableHint();
+    sendLookAndFeelChange();   // children re-read LookAndFeel colours (mirrors the live theme tick)
+    resized();
+}
+
 void MainComponent::applyTextColours() {
     // Re-set every theme-dependent label colour (the Theme statics return the active mode);
     // paint-based components (meters, cards, plots) pick the mode up on repaint.

@@ -37,6 +37,10 @@ public:
     void paint (juce::Graphics&) override;
     void timerCallback() override;   // polls levels()/health()
 
+    // Design-QA gate seam: force light/dark through the live theme-apply path (re-register palette + per-label
+    // colours + relayout) so the headless gate can score contrast in both modes deterministically.
+    void forceThemeForTest (bool dark);
+
 private:
     // Common ctor both public ctors delegate to: settingsDir empty -> per-user Settings file (real app), else a
     // test temp dir; disableNetwork suppresses the launch-time update check so a headless test never hits the net.

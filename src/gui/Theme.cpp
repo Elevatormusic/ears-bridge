@@ -61,6 +61,8 @@ bool Theme::syncMode() {
     return true;
 }
 
+void Theme::setDarkForTest (bool d) { s_dark = d; applyColours(); }   // force the mode + re-register the palette
+
 void Theme::applyColours() {
     LookAndFeel_V4::ColourScheme scheme = {
         bg(), surface(), rail(), sep2(), text(), accent(), text(), accent(), text()

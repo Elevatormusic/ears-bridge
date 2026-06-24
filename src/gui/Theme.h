@@ -14,6 +14,7 @@ public:
 
     static bool dark();                 // active mode (system-derived)
     bool syncMode();                    // re-read the system appearance; reapply + return true if it changed
+    void setDarkForTest (bool d);       // force light/dark deterministically (re-applies the palette) - design-QA gate
 
     // Palette (mode-aware) — matches the prototype's CSS custom properties.
     static juce::Colour bg();           // window background
