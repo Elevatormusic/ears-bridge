@@ -129,6 +129,8 @@ MainComponent::MainComponent() {
     addAndMakeVisible (statusLineR);
     addAndMakeVisible (gradeDotsL_);
     addAndMakeVisible (gradeDotsR_);
+    gradeDotsL_.setPrefix ("L");   // distinguish the two stacked per-ear quality rows
+    gradeDotsR_.setPrefix ("R");
 
     // Update link: hidden until a newer release is found; opens the release page in the browser.
     updateLink.setColour (juce::HyperlinkButton::textColourId, Theme::infoText());   // HIG: accent-as-text was 3.5:1; infoText passes ~4.6:1
@@ -2485,11 +2487,14 @@ void MainComponent::resized() {
         // the pair sits where the single line used to. statusLine = upper (L), statusLineR = lower (R). When
         // only one message shows (the hard/global ladder), statusLineR is blanked so the upper line reads as
         // the single status line did. Same right-justification + width as before, so neither line truncates.
+        // Order: [L status][L dots][R dots][R status]. The two dot rows sit ADJACENT so the pair reads as one
+        // centred block aligned with the brand. The old [status][dots][status][dots] order put the (idle-EMPTY)
+        // R status line BETWEEN the dot rows, shoving the R dots to the bottom of the bar - the "misplaced" look.
         auto stack = x.withSizeKeepingCentre (x.getWidth(), 68);
         statusLine.setBounds  (stack.removeFromTop (18));
         gradeDotsL_.setBounds (stack.removeFromTop (16));
-        statusLineR.setBounds (stack.removeFromTop (18));
         gradeDotsR_.setBounds (stack.removeFromTop (16));
+        statusLineR.setBounds (stack.removeFromTop (18));
     }
 
     // --- Version footnote (pinned bottom-right, below both panes) ---
