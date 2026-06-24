@@ -28,13 +28,17 @@ juce::Colour Theme::textFaint() { return pick (0x4dffffff, 0x59000000); }
 juce::Colour Theme::axis()      { return pick (0xff98989D, 0xff5C5C61); }
 juce::Colour Theme::accent()    { return pick (0xff0091FF, 0xff0088FF); }
 juce::Colour Theme::accentHover(){ return pick (0xff1F9DFF, 0xff0A7BEA); }
-// HIG audit (2026-06-23): these tokens are used as TEXT (status/warning/error labels) as well as fills
-// (meters, dots). The off-default appearance failed WCAG 4.5:1 as text, so the failing value in each pair was
-// shifted to pass: light ok 2.22->4.7:1, light warn 4.13->4.6:1, dark danger 4.18->4.9:1. The default
-// appearance value (and thus the common-case meter fill) is unchanged; only the off-default fill deepens slightly.
-juce::Colour Theme::ok()        { return pick (0xff30D158, 0xff1E8E3E); }
-juce::Colour Theme::warn()      { return pick (0xffFF9230, 0xff9A4E00); }
-juce::Colour Theme::danger()    { return pick (0xffFF5C5E, 0xffD6322F); }
+// HIG audit (2026-06-23): ok/warn/danger are the TEXT colours (status/warning/error labels), tuned to pass
+// WCAG 4.5:1 on the ACTUAL label backgrounds in BOTH appearances (recomputed on barBg #F6F6F8 / bg #ECECEE /
+// surface #2A2A2A, not just pure white). The bright originals live on as okFill/warnFill/dangerFill for meter
+// bars and grade dots, which are graphical fills not bound by the 4.5:1 text rule. (Fill/text split per re-audit.)
+juce::Colour Theme::ok()        { return pick (0xff30D158, 0xff157A33); }   // text green:  dark ~7.8:1, light ~5.0:1 on #F6F6F8
+juce::Colour Theme::warn()      { return pick (0xffFF9230, 0xff9A4E00); }   // text amber:  dark ~6.4:1, light ~5.6:1
+juce::Colour Theme::danger()    { return pick (0xffFF5C5E, 0xffC42B28); }   // text red:    dark ~4.75:1, light ~4.8:1 on #ECECEE
+juce::Colour Theme::okFill()    { return pick (0xff30D158, 0xff34C759); }   // bright FILLS (meters/dots); not held to text contrast
+juce::Colour Theme::warnFill()  { return pick (0xffFF9230, 0xffC2630A); }
+juce::Colour Theme::dangerFill(){ return pick (0xffFF4245, 0xffD6322F); }
+juce::Colour Theme::onAccentText(){ return juce::Colours::white; }          // white on the saturated accent fill (both modes)
 juce::Colour Theme::chipBg()    { return pick (0x1affffff, 0x0f000000); }
 juce::Colour Theme::infoText()  { return pick (0xff5AB7FF, 0xff0067D6); }
 juce::Colour Theme::infoBg()    { return pick (0x290091FF, 0x1f0088FF); }
@@ -70,7 +74,7 @@ void Theme::applyColours() {
     setColour (juce::PopupMenu::highlightedTextColourId,     text());
     setColour (juce::TextButton::buttonColourId,             ctrl());
     setColour (juce::TextButton::buttonOnColourId,           accent());
-    setColour (juce::TextButton::textColourOnId,             juce::Colours::white);
+    setColour (juce::TextButton::textColourOnId,             onAccentText());
     setColour (juce::TextButton::textColourOffId,            text());
     setColour (juce::Slider::thumbColourId,                  accent());
     setColour (juce::Slider::trackColourId,                  accent());
