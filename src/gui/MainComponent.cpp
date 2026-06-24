@@ -80,7 +80,11 @@ static float fitTopDb (const eb::CalFile& c) {
     return std::ceil (mag / 6.0f) * 6.0f;
 }
 
-MainComponent::MainComponent() {
+MainComponent::MainComponent() : MainComponent (juce::File{}, false) {}                         // real app: per-user Settings, network on
+MainComponent::MainComponent (const TestConfig& cfg) : MainComponent (cfg.settingsDir, cfg.disableNetwork) {}
+
+MainComponent::MainComponent (juce::File settingsDir, bool disableNetwork)
+    : settings (settingsDir) {
     setLookAndFeel (&theme);
     firPool = std::make_unique<juce::ThreadPool> (1);
 
@@ -518,7 +522,7 @@ MainComponent::MainComponent() {
     // It is async + non-blocking, so a newer release surfaces the title-bar link each time the
     // app starts. (No throttle: GitHub's unauthenticated rate limit is 60/h — far above any
     // realistic launch rate — and a failed/offline check simply shows nothing and retries next time.)
-    if (settings.autoCheckUpdates()) {
+    if (settings.autoCheckUpdates() && ! disableNetwork) {
         updateChecker.start (juce::String (EB_VERSION_STRING),
             [this] (UpdateInfo info) {
                 if (info.updateAvailable) {
