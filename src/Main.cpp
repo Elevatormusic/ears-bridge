@@ -28,6 +28,7 @@ private:
             setUsingNativeTitleBar (true);
             setContentOwned (new eb::MainComponent(), true);
             setResizable (true, true);
+            setResizeLimits (780, 720, 100000, 100000);   // min size that keeps the right pane (cal cards + Levels + caption) from cramping
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
 
