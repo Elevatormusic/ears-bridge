@@ -141,7 +141,8 @@ add_library(eb_gui STATIC
     src/gui/DevicePicker.cpp
     src/gui/MainComponent.cpp
     src/net/UpdateChecker.cpp
-    src/platform/DiracCompat.cpp)   # Windows: Dirac shared-mode env-var helper (no-op elsewhere)
+    src/platform/DiracCompat.cpp     # Windows: Dirac shared-mode env-var helper (no-op elsewhere)
+    src/platform/SystemA11y.cpp)     # Reduce Motion / Increase Contrast / Reduce Transparency (Windows impl + stub)
 target_include_directories(eb_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(eb_gui PUBLIC cxx_std_20)
 target_link_libraries(eb_gui

@@ -1,5 +1,6 @@
 #include "gui/LevelMeter.h"
 #include "gui/Theme.h"
+#include "gui/SystemA11y.h"
 #include <cmath>
 
 namespace eb {
@@ -21,8 +22,9 @@ float LevelMeter::linearToFrac (float linear) {
 }
 
 void LevelMeter::setLevel (float peakLinear, bool clip) {
-    // Bar: fast attack, slow release (the visual bar should still show peaks).
-    level = juce::jmax (peakLinear, level * 0.80f);
+    const bool snap = SystemA11y::reduceMotion();   // HIG Reduce Motion: snap to the value instead of easing
+    // Bar: fast attack, slow release (the visual bar should still show peaks); snap when Reduce Motion is on.
+    level = snap ? peakLinear : juce::jmax (peakLinear, level * 0.80f);
     // Clip latch with a timed auto-release: a clip arms the latch and (re)starts a ~1.5 s hold so
     // the user sees it; once no further clip arrives for the hold window it clears on its own.
     // Without this it only cleared on full silence, so a single transient clip left the readout
@@ -34,7 +36,7 @@ void LevelMeter::setLevel (float peakLinear, bool clip) {
     // Readout: a SEPARATE, slowly-smoothed dB so the printed number doesn't chase peaks and
     // flicker — roughly a 0.3 s time constant at the 30 Hz GUI tick. The bar stays responsive.
     const float instDb = (level <= 1.0e-6f) ? -120.0f : 20.0f * std::log10 (level);
-    smoothDb += (instDb - smoothDb) * 0.10f;
+    smoothDb = snap ? instDb : (smoothDb + (instDb - smoothDb) * 0.10f);
 
     // Expose the readout to assistive tech (VoiceOver); only refresh when the announced value changes.
     const int db = juce::roundToInt (smoothDb);
