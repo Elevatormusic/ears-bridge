@@ -5,3 +5,4 @@
 /dist/
 *.user
 .DS_Store
+hig-states/
