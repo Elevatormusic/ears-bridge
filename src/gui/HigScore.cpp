@@ -50,6 +50,18 @@ double contrastRatio (const juce::String& a, const juce::String& b) {
 }
 bool isLarge (const El& e) { return e.fontPt >= kLargeFontPt || (e.bold && e.fontPt >= kLargeBoldFontPt); }
 
+struct Box { double left, top, right, bottom; };
+
+// interactive(): native-review.mjs ORs a type regex with a role regex - /button|toggle|slider|combo/i on
+// type, /button|link|slider|checkbox/i on role. ToggleButton matches via "toggle"/"button"; ComboBox via
+// "combo"; Label matches neither.
+bool interactive (const El& e) {
+    const auto t = e.type.toLowerCase();
+    for (auto* tok : { "button", "toggle", "slider", "combo" })
+        if (t.contains (tok)) return true;
+    return e.role == "button" || e.role == "link" || e.role == "slider" || e.role == "checkbox";
+}
+
 } // namespace
 
 std::vector<Finding> scoreDescriptor (const juce::var& root) {
@@ -71,6 +83,46 @@ std::vector<Finding> scoreDescriptor (const juce::var& root) {
             out.push_back ({ "contrast", ratio < floor - kHighSeverityDelta ? "high" : "medium", e.id,
                 "text contrast " + juce::String (ratio, 2) + ":1 is below " + juce::String (floor, 1) + ":1" });
     }
+
+    // --- geometry (native-review.mjs geometryFindings: overlap / duplicate / target-size / clip) ---
+    auto rectOf = [] (const El& e) { return Box { e.x, e.y, e.x + e.w, e.y + e.h }; };
+    auto overlaps = [] (const Box& a, const Box& b) {
+        return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top; };
+    auto depth = [] (const Box& a, const Box& b) {
+        const double w = juce::jmax (0.0, juce::jmin (a.right, b.right) - juce::jmax (a.left, b.left));
+        const double h = juce::jmax (0.0, juce::jmin (a.bottom, b.bottom) - juce::jmax (a.top, b.top));
+        return juce::jmin (w, h); };
+    auto contains = [] (const Box& p, const Box& q) {
+        return p.left <= q.left && p.top <= q.top && p.right >= q.right && p.bottom >= q.bottom; };
+
+    std::vector<const El*> vis;
+    for (auto& e : els) if (e.visible && e.showing) vis.push_back (&e);
+
+    for (size_t i = 0; i < vis.size(); ++i)
+        for (size_t j = i + 1; j < vis.size(); ++j) {
+            const El& a = *vis[i]; const El& b = *vis[j];
+            const Box ra = rectOf (a), rb = rectOf (b);
+            const bool ov = overlaps (ra, rb) && depth (ra, rb) > (double) kOverlapNoisePx;
+            const bool nested = contains (ra, rb) || contains (rb, ra);
+            const bool identical = a.type == b.type && a.label.isNotEmpty()
+                                   && a.label == b.label && (int) a.w == (int) b.w && (int) a.h == (int) b.h;
+            if (identical)   // the identical branch SUPPRESSES the overlap finding for the same pair
+                out.push_back ({ "duplicate", ov ? "high" : "medium", b.id,
+                    "identical \"" + a.label + "\" (" + a.type + ") appears twice" });
+            else if (ov && ! nested)
+                out.push_back ({ "overlap", "medium", b.id,
+                    b.id + " overlaps " + a.id + " by " + juce::String ((int) depth (ra, rb)) + "px" });
+        }
+
+    for (auto* e : vis)
+        if (interactive (*e) && ((int) e->w < kMinTargetPx || (int) e->h < kMinTargetPx))
+            out.push_back ({ "target-size", "medium", e->id,
+                juce::String ((int) e->w) + "x" + juce::String ((int) e->h) + "px target below "
+                + juce::String (kMinTargetPx) + "px" });
+
+    for (auto* e : vis)
+        if (e->textOverflows)
+            out.push_back ({ "clip", "medium", e->id, "\"" + e->label.substring (0, 32) + "\" overflows its bounds" });
 
     return out;
 }
