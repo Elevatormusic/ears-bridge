@@ -38,12 +38,19 @@ public:
         repaint();
     }
 
+    // A short leading ear tag ("L" / "R") so two stacked rows are distinguishable (HIG: not an ambiguous duplicate).
+    void setPrefix (const juce::String& p) { prefix_ = p; setTitle ("Measurement quality " + p); repaint(); }
+
     void paint (juce::Graphics& g) override {
-        const auto  r      = getLocalBounds().toFloat();
+        auto        r      = getLocalBounds().toFloat();
+        g.setFont (juce::Font (juce::FontOptions (12.0f)));
+        if (prefix_.isNotEmpty()) {   // leading ear tag (L / R) so the two stacked rows aren't an ambiguous duplicate
+            g.setColour (Theme::text());
+            g.drawText (prefix_, r.removeFromLeft (16.0f), juce::Justification::centredLeft, false);
+        }
         const float cellW  = r.getWidth() / 3.0f;
         const float dotD   = 8.0f;
         const float cy     = r.getCentreY();
-        g.setFont (juce::Font (juce::FontOptions (12.0f)));
 
         for (int i = 0; i < 3; ++i) {
             const auto& d = dots_[i];
@@ -71,6 +78,7 @@ public:
 private:
     struct Dot { QualityBand band = QualityBand::Unknown; juce::String label, value; };
     Dot dots_[3];
+    juce::String prefix_;   // optional leading ear tag (L / R)
 
     static juce::Colour colourFor (QualityBand b) {
         switch (b) {
