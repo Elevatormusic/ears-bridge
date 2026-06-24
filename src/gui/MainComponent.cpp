@@ -4,6 +4,7 @@
 #include "gui/StartGate.h"   // eb::startReady (Task 3 / #3 advanced override)
 #include "gui/StartNotes.h"  // eb::buildStartNotes (Task 4 / #8 calm bit-depth note)
 #include "gui/SystemA11y.h"  // eb::SystemA11y - Reduce Motion / Increase Contrast / Reduce Transparency (HIG)
+#include "gui/juce_design_probe.h"  // EB_HIG_STATES dev-QA harness: probe the header in every status state (vendored apple-hig)
 #include "platform/DiracCompat.h"
 #include "cal/CalibrationPairValidator.h"   // eb::validateCalibrationPair (P0-07)
 #include "audio/CalibrationGeneration.h"    // eb::CalibrationGeneration (generation lifecycle)
@@ -2175,6 +2176,42 @@ void MainComponent::pollChainConfig() {
 }
 
 void MainComponent::timerCallback() {
+    {   // HIG STATE-SWEEP HARNESS (dev-QA, inert unless EB_HIG_STATES=<dir> is set): drive the header through every
+        // status state it can display and emit a native-render descriptor per state, so native-review can MEASURE
+        // overlap/clip in states a single idle screenshot/probe never captures (e.g. the mid-sweep status next to
+        // Start). Runs once after the window is shown. The next tick's normal status update restores the live text.
+        static bool higStatesDone = false;
+        const auto outDir = juce::SystemStats::getEnvironmentVariable ("EB_HIG_STATES", {});
+        if (! higStatesDone && outDir.isNotEmpty() && isShowing() && getWidth() > 0) {
+            higStatesDone = true;
+            const juce::File dir (outDir);
+            struct St { const char* name; const char* l; const char* r; bool update; bool dots; };
+            static const St states[] = {
+                { "idle",        "",                                                                                 "",                                         false, false },
+                { "running",     "Running - waiting for the Dirac sweep...",                                         "",                                         false, false },
+                { "capturing",   "Auto per-ear - capturing the LEFT earcup",                                         "",                                         false, true  },
+                { "clean",       "Sweep captured - safe to run the next sweep",                                      "R clean - SNR 30 dB, IR 56 dB",            false, true  },
+                { "imprecise",   "Noisy capture - Dirac will likely mark it imprecise; raise level or lower noise.", "R marginal SNR 18 dB - re-measure",        false, true  },
+                { "lowlevel",    "Running - level low: turn your amp up to the green band",                          "",                                         false, false },
+                { "error",       "EARS or audio cable disconnected - measurement stopped.",                          "",                                         false, false },
+                { "update+full", "Running - no input signal (check the EARS)",                                       "R weak impulse response - time-variance?", true,  true  },
+            };
+            for (auto& s : states) {
+                statusLine.setText  (s.l, juce::dontSendNotification);
+                statusLineR.setText (s.r, juce::dontSendNotification);
+                if (s.update) updateLink.setButtonText ("Update available");
+                updateLink.setVisible (s.update);
+                if (s.dots) {
+                    gradeDotsL_.setMetrics (eb::QualityBand::Green,  "28 dB", eb::QualityBand::Green, "56 dB", eb::QualityBand::Orange, "0.8%");
+                    gradeDotsR_.setMetrics (eb::QualityBand::Orange, "18 dB", eb::QualityBand::Green, "52 dB", eb::QualityBand::Green,  "0.3%");
+                } else { gradeDotsL_.clear(); gradeDotsR_.clear(); }
+                resized();
+                hig::writeDesignProbe (*getTopLevelComponent(),
+                    dir.getChildFile (juce::String ("hig-") + s.name + ".json"),
+                    dir.getChildFile (juce::String ("hig-") + s.name + ".png"));
+            }
+        }
+    }
     // A device removed mid-run (unplug / sleep / gain-DIP re-enumerate) latches deviceDied_ from its
     // audioDeviceStopped() callback. Tear it down and surface it, instead of leaving the engine sitting
     // in a false "Running - clean" while the cable records silence.
