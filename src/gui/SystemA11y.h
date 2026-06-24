@@ -11,6 +11,7 @@ struct SystemA11y {
     static bool increaseContrast();    // OS High Contrast / Increase Contrast is ON -> stronger separators + borders
     static bool reduceTransparency();  // OS transparency effects OFF -> opaque instead of translucent chip/overlay fills
     static bool refresh();             // re-read the OS settings (cheap; message thread). True if any flag changed.
+    static void setForTest (bool reduceMotion, bool increaseContrast, bool reduceTransparency);  // force state (the OS read is nondeterministic in CI)
 };
 
 } // namespace eb

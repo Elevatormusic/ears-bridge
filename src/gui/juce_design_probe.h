@@ -134,6 +134,20 @@ namespace hig
     // ARIA-ish role derived from the JUCE type, so `role` is meaningful even headless (no peer, so the
     // accessibility handler is null). Mirrors the strings native-review's interactive() role regex looks for
     // (button|link|slider|checkbox). A real peer's handler role is out of scope here; the type fallback suffices.
+    // Peer-independent "showing": visible AND every ancestor visible. Unlike Component::isShowing() this does
+    // NOT require a native peer, so a laid-out-but-offscreen tree (the headless design-QA gate) reports
+    // showing=true and its GEOMETRY is actually scored (isShowing() is false without a peer, which would
+    // silently disable the overlap/clip/duplicate/target-size checks). For a shown component the result is
+    // identical to isShowing(). (EARS-vendored divergence from the upstream apple-hig probe.)
+    inline bool isVisibleInTree (juce::Component& c, juce::Component& root)
+    {
+        // The probed root is the surface under test -> treated as shown; check c + its ancestors UP TO (not
+        // including) root. A child of a HIDDEN intermediate still reports false.
+        for (auto* p = &c; p != nullptr && p != &root; p = p->getParentComponent())
+            if (! p->isVisible()) return false;
+        return true;
+    }
+
     inline juce::String roleOf (const juce::String& type)
     {
         if (type == "ToggleButton")                    return "checkbox";
@@ -152,8 +166,18 @@ namespace hig
         o->setProperty ("id",   c.getComponentID().isNotEmpty() ? c.getComponentID() : ("c" + juce::String (index)));
         o->setProperty ("type", type);
 
-        // geometry in the probed-root LOGICAL coordinate space (transform/scale aware)
-        const auto r = root.getLocalArea (c.getParentComponent(), c.getBounds());
+        // geometry in the probed-root LOGICAL coordinate space (transform/scale aware), CLIPPED to any enclosing
+        // Viewport's visible area: a Viewport CLIPS its content, so a scrolled-out / partially-scrolled child's
+        // reported geometry must reflect what is on screen - otherwise scrollable content's full (un-clipped)
+        // bounds spuriously overlap siblings outside the viewport. A child scrolled ENTIRELY out is flagged
+        // scrolledOut and marked not-showing below (so it is not geometry-scored).
+        const auto rawBounds = root.getLocalArea (c.getParentComponent(), c.getBounds());
+        auto visBounds = rawBounds;
+        for (auto* p = c.getParentComponent(); p != nullptr && p != &root; p = p->getParentComponent())
+            if (auto* vp = dynamic_cast<juce::Viewport*> (p))
+                visBounds = visBounds.getIntersection (root.getLocalArea (vp, vp->getLocalBounds()));
+        const bool scrolledOut = visBounds.isEmpty() && ! rawBounds.isEmpty();
+        const auto r = scrolledOut ? rawBounds : visBounds;
         auto* b = new juce::DynamicObject();
         b->setProperty ("x", r.getX()); b->setProperty ("y", r.getY());
         b->setProperty ("w", r.getWidth()); b->setProperty ("h", r.getHeight());
@@ -169,7 +193,7 @@ namespace hig
         o->setProperty ("fg", fg);  o->setProperty ("bg", bg);
         o->setProperty ("fgIntrospectable", fgOk);  o->setProperty ("bgIntrospectable", bgOk);
         o->setProperty ("fontPt", fontPtOf (c));    o->setProperty ("bold", boldOf (c));
-        o->setProperty ("visible", c.isVisible());  o->setProperty ("showing", c.isShowing());
+        o->setProperty ("visible", c.isVisible());  o->setProperty ("showing", isVisibleInTree (c, root) && ! scrolledOut);
         o->setProperty ("enabled", c.isEnabled());
 
         bool checkable = false, checked = false;

@@ -14,6 +14,12 @@ namespace {
 bool SystemA11y::reduceMotion()       { return g_reduceMotion.load (std::memory_order_relaxed); }
 bool SystemA11y::increaseContrast()   { return g_increaseContrast.load (std::memory_order_relaxed); }
 bool SystemA11y::reduceTransparency() { return g_reduceTransparency.load (std::memory_order_relaxed); }
+
+void SystemA11y::setForTest (bool rm, bool ic, bool rt) {   // deterministic override for the design-QA gate
+    g_reduceMotion.store       (rm, std::memory_order_relaxed);
+    g_increaseContrast.store   (ic, std::memory_order_relaxed);
+    g_reduceTransparency.store (rt, std::memory_order_relaxed);
+}
 } // namespace eb
 
 #if defined (_WIN32)
