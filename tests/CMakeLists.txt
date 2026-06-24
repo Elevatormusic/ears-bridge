@@ -51,7 +51,8 @@ add_executable(eb_tests
     test_sweepschedulestore.cpp
     test_startnotes.cpp
     test_diagnosticlog.cpp
-    test_hig_score.cpp)
+    test_hig_score.cpp
+    test_hig_parity.cpp)
 # Link the JUCE modules the test sources include directly, plus the recommended config flags,
 # so eb_tests compiles regardless of eb_core's link visibility.
 target_link_libraries(eb_tests PRIVATE
@@ -61,6 +62,7 @@ target_link_libraries(eb_tests PRIVATE
     Catch2::Catch2WithMain)
 target_compile_definitions(eb_tests PRIVATE
     EB_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+    EB_HIG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hig"
     JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 
 include(Catch)

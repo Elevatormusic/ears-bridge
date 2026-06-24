@@ -1,0 +1,9 @@
+{
+  "findings": [
+    {
+      "category": "clip",
+      "severity": "medium",
+      "element": "c"
+    }
+  ]
+}
