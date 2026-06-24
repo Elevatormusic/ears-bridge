@@ -65,3 +65,36 @@ TEST_CASE("HigScore: sufficient-contrast black-on-white label is clean") {
     auto d = makeDescriptor ({ el ("Label", "hi", 0, 0, 50, 18, "#000000", "#ffffff") });
     CHECK (eb::hig::scoreDescriptor (d).empty());
 }
+
+// ---- geometry (Task 4): overlap / duplicate / target-size / clip ----
+TEST_CASE("HigScore: two overlapping non-identical siblings -> one overlap finding") {
+    auto d = makeDescriptor ({ el ("Label","a",0,0,100,20), el ("Label","b",90,0,100,20) }); // 10px deep
+    auto f = eb::hig::scoreDescriptor (d);
+    REQUIRE (f.size() == 1); CHECK (f[0].category == "overlap");
+}
+TEST_CASE("HigScore: overlap of exactly 2px does NOT report (>2 strict)") {
+    auto d = makeDescriptor ({ el ("Label","a",0,0,100,20), el ("Label","b",98,0,100,20) }); // 2px deep
+    CHECK (eb::hig::scoreDescriptor (d).empty());
+}
+TEST_CASE("HigScore: a child fully inside its parent is nested, not an overlap") {
+    auto d = makeDescriptor ({ el ("Label","parent",0,0,100,100), el ("Label","child",10,10,50,50) });
+    CHECK (eb::hig::scoreDescriptor (d).empty());
+}
+TEST_CASE("HigScore: identical stacked -> duplicate medium; identical overlapping -> duplicate high") {
+    auto stacked = makeDescriptor ({ el ("Label","Same",0,0,40,20), el ("Label","Same",0,40,40,20) });
+    auto fs = eb::hig::scoreDescriptor (stacked);
+    REQUIRE (fs.size() == 1); CHECK (fs[0].category == "duplicate"); CHECK (fs[0].severity == "medium");
+    auto over = makeDescriptor ({ el ("Label","Same",0,0,40,20), el ("Label","Same",10,0,40,20) });
+    auto fo = eb::hig::scoreDescriptor (over);
+    REQUIRE (fo.size() == 1); CHECK (fo[0].category == "duplicate"); CHECK (fo[0].severity == "high");
+}
+TEST_CASE("HigScore: sub-24px interactive target -> target-size") {
+    auto d = makeDescriptor ({ el ("TextButton","x",0,0,20,20,"#000000","#ffffff",true,true,true,13,false,false,"button") });
+    auto f = eb::hig::scoreDescriptor (d);
+    REQUIRE (f.size() == 1); CHECK (f[0].category == "target-size");
+}
+TEST_CASE("HigScore: a clipped label -> clip") {
+    auto d = makeDescriptor ({ el ("Label","x",0,0,40,18,"#000000","#ffffff",true,true,true,13,false,true) });
+    auto f = eb::hig::scoreDescriptor (d);
+    REQUIRE (f.size() == 1); CHECK (f[0].category == "clip");
+}
