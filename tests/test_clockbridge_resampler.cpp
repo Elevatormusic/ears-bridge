@@ -100,15 +100,17 @@ TEST_CASE ("ClockBridge: click-free across the D6 freeze edge", "[clockbridge][r
 TEST_CASE ("ClockBridge: 4x downsample at the ratioTrim ceiling + small capacity stays in-bounds", "[clockbridge][resampler][oob]") {
     // Review regression (2026-06-23): the FIR scratch was sized for kMaxRatio(4.0), but the PI raises the
     // effective ratio to 4.0*kMaxRatioTrim(1.03)=4.12. A small-capacity caller (prepare() permits down to 1024)
-    // then had the resampler read ~970 floats PAST the scratch on a full kMaxRenderBlock block. Overfeeding pins
-    // ratioTrim to its ceiling; a full 8192-output block then exercises the worst-case read span. With the fix
-    // (scratch sized for kMaxRatio*kMaxRatioTrim) every read stays in bounds -> finite, bounded output.
+    // then had the resampler read ~970 floats PAST the scratch on a full kMaxRenderBlock block. Sustained overfeed
+    // converges ratioTrim to its 1.03 ceiling (the fill smoother + PI integrator need ~2000 blocks to saturate, so
+    // inc -> ~4.12); a full 8192-output block then exercises the worst-case read span. With the fix (scratch sized
+    // for kMaxRatio*kMaxRatioTrim) every read stays in bounds -> finite, bounded output.
     eb::ClockBridge b; b.prepare (192000.0, 48000.0, 1, 4096); b.primeToTarget();   // small capacity, 4x ratio
     std::vector<float> in (8192, 0.1f), out (8192);
-    for (int blk = 0; blk < 300; ++blk) {                          // overfeed -> fill pins high -> ratioTrim -> 1.03 (inc 4.12)
+    for (int blk = 0; blk < 2000; ++blk) {                         // overfeed -> the fill smoother + PI integrator saturate -> ratioTrim -> 1.03
         b.pushCapture (in.data(), 8192);
         b.pullRender  (out.data(), 1024);
     }
+    REQUIRE (b.currentRatio() > 4.10);                             // ASSERT the test actually reached the ~4.12 worst case (guards the tight 13-float margin)
     for (int blk = 0; blk < 8; ++blk) {
         b.pushCapture (in.data(), 8192);
         REQUIRE (b.pullRender (out.data(), 8192) == 8192);          // a FULL block at the high inc: the worst-case read span
