@@ -33,9 +33,13 @@ public:
     static juce::Colour axis();         // plot axis labels
     static juce::Colour accent();       // primary blue
     static juce::Colour accentHover();
-    static juce::Colour ok();           // running / clean / meter green
-    static juce::Colour warn();         // resample / amber zone
-    static juce::Colour danger();       // clip / error / red zone
+    static juce::Colour ok();           // CLEAN/running status TEXT (WCAG 4.5:1-safe; use okFill for fills)
+    static juce::Colour warn();         // resample/amber status TEXT (4.5:1-safe)
+    static juce::Colour danger();       // clip/error status TEXT (4.5:1-safe)
+    static juce::Colour okFill();       // bright green for FILLS (meter bars, grade dots) - not contrast-bound
+    static juce::Colour warnFill();     // bright amber for fills
+    static juce::Colour dangerFill();   // bright red for fills
+    static juce::Colour onAccentText(); // text on the accent fill (white) - primary button / selection
     static juce::Colour chipBg();       // "Recommended" chip background
     static juce::Colour infoText();     // HPN badge text
     static juce::Colour infoBg();       // HPN badge background

@@ -298,6 +298,7 @@ MainComponent::MainComponent() {
         rebuildFirsAsync();
     };
     railContent.addChildComponent (firLenBox);
+    firLenBox.setTitle ("FIR length");   // HIG: accessible name (the eyebrow label is not auto-associated to the control)
     styleEyebrow (trimLabel, "OUTPUT TRIM (dB)");
     railContent.addChildComponent (trimLabel);
     trimSlider.setRange (-24.0, 0.0, 0.1);
@@ -308,6 +309,7 @@ MainComponent::MainComponent() {
         engine.setOutputTrimDb (trimSlider.getValue());   // apply live (the graph reads it lock-free)
     };
     railContent.addChildComponent (trimSlider);
+    trimSlider.setTitle ("Output trim");   // HIG: accessible name
 
     // L/R wiring check: play a tone into the LEFT earcup, then the engine reports which mic responded.
     verifyButton.onClick = [this] {

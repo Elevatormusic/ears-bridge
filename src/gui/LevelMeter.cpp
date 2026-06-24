@@ -83,27 +83,27 @@ void LevelMeter::paint (juce::Graphics& g) {
                                              (hiF - loF) * W, track.getHeight());
         // Faint fill + crisp edges, so the "aim here" zone stays legible even when the (also green)
         // level bar sits inside it -- a flat fill alone reads as one green block under the bar.
-        g.setColour (Theme::ok().withAlpha (0.16f));
+        g.setColour (Theme::okFill().withAlpha (0.16f));
         g.fillRect (bandR);
-        g.setColour (Theme::ok().withAlpha (0.85f));
+        g.setColour (Theme::okFill().withAlpha (0.85f));
         g.fillRect (bandR.getX(),            bandR.getY(), 1.0f, bandR.getHeight());
         g.fillRect (bandR.getRight() - 1.0f, bandR.getY(), 1.0f, bandR.getHeight());
     }
 
     // Zones near full scale: amber from -1.0 dB-ish, red at the very top.
-    g.setColour (Theme::warn().withAlpha (0.65f));
+    g.setColour (Theme::warnFill().withAlpha (0.65f));
     g.fillRect (juce::Rectangle<float> (track.getRight() - W * 0.050f, track.getY(),
                                         W * 0.034f, track.getHeight()));
-    g.setColour (Theme::danger().withAlpha (0.85f));
+    g.setColour (Theme::dangerFill().withAlpha (0.85f));
     g.fillRect (juce::Rectangle<float> (track.getRight() - W * 0.016f, track.getY(),
                                         W * 0.016f, track.getHeight()));
 
     const float frac = linearToFrac (level);
     if (frac > 0.002f) {
         auto fill = track.withWidth (juce::jmax (4.0f, frac * W));
-        juce::Colour c = (clipLatched || frac > 0.95f) ? Theme::danger()
-                       : (frac > 0.92f)                ? Theme::warn()
-                                                       : Theme::ok();
+        juce::Colour c = (clipLatched || frac > 0.95f) ? Theme::dangerFill()
+                       : (frac > 0.92f)                ? Theme::warnFill()
+                                                       : Theme::okFill();
         g.setColour (c);
         g.fillRoundedRectangle (fill, 4.0f);
     }

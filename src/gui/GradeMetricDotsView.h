@@ -74,9 +74,9 @@ private:
 
     static juce::Colour colourFor (QualityBand b) {
         switch (b) {
-            case QualityBand::Green:  return Theme::ok();
-            case QualityBand::Orange: return Theme::warn();
-            case QualityBand::Red:    return Theme::danger();
+            case QualityBand::Green:  return Theme::okFill();
+            case QualityBand::Orange: return Theme::warnFill();
+            case QualityBand::Red:    return Theme::dangerFill();
             default:                  return Theme::textDim();
         }
     }
