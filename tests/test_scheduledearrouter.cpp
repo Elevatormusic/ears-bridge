@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "audio/ScheduledEarRouter.h"
 #include <cmath>
+#include <limits>
 using eb::Ear; using eb::SweepSchedule; using eb::ScheduledEarRouter; using eb::RouterOut;
 
 namespace {
@@ -51,15 +52,27 @@ TEST_CASE("ScheduledEarRouter: a quiet LF onset rides the gap pre-position (capt
     CHECK (onset.ear == 1);                          // already on R BEFORE the sweep ramps up -> onset captured
 }
 
-TEST_CASE("ScheduledEarRouter: the duration-guard HOLDS the ear through an early quiet patch", "[autoperear][router]") {
+TEST_CASE("ScheduledEarRouter: the duration-guard HOLDS the ear through an early quiet patch (and flags it)", "[autoperear][router]") {
     ScheduledEarRouter r; r.loadSchedule (lrl());
     drive (r, SI, SI, 0.5);
     drive (r, SW, SI, 1.5);                          // 1.5 s into L
     auto held = drive (r, SI, SI, 0.5);              // a 0.5 s QUIET patch at ~1.5-2.0 s (well before durOk 85% = 4.25 s)
     CHECK (held.ear == 0);                           // STILL on L -> no premature gap (the guard held)
+    CHECK (held.ambiguous);                          // a sustained quiet this early (< 70%) is anomalous -> flagged
     drive (r, SW, SI, 3.0);                          // resume + finish L (~5 s)
     auto g = drive (r, SI, SI, 0.5);                 // the real gap now transitions
     CHECK (g.ear == 1);
+}
+
+TEST_CASE("ScheduledEarRouter: non-finite / degenerate inputs stay sane (no crash, ear in {0,1})", "[autoperear][router]") {
+    ScheduledEarRouter r; r.loadSchedule (lrl());
+    const float nan = std::nanf ("");
+    const float inf = std::numeric_limits<float>::infinity();
+    auto a = r.process (nan, nan, nan, 0.01);   CHECK ((a.ear == 0 || a.ear == 1));   // NaN peaks + NaN floor
+    auto b = r.process (inf, SI, 0.003f, 0.01); CHECK ((b.ear == 0 || b.ear == 1));   // Inf peak
+    auto c = r.process (SW, SI, 0.0f,   0.01);  CHECK ((c.ear == 0 || c.ear == 1));   // zero floor -> default-floor guard
+    auto d = r.process (SW, SI, 0.003f, 0.0);   CHECK ((d.ear == 0 || d.ear == 1));   // zero blockSec
+    CHECK (std::isfinite (1.0f));                                                     // sentinel: the run did not trap
 }
 
 TEST_CASE("ScheduledEarRouter: a quiet-but-above-floor tail is NOT a gap (floor-tight)", "[autoperear][router]") {
