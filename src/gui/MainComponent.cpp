@@ -130,7 +130,7 @@ MainComponent::MainComponent() {
     addAndMakeVisible (gradeDotsR_);
 
     // Update link: hidden until a newer release is found; opens the release page in the browser.
-    updateLink.setColour (juce::HyperlinkButton::textColourId, Theme::accent());
+    updateLink.setColour (juce::HyperlinkButton::textColourId, Theme::infoText());   // HIG: accent-as-text was 3.5:1; infoText passes ~4.6:1
     updateLink.setFont (juce::Font (juce::FontOptions (12.0f)), false, juce::Justification::centredRight);
     addChildComponent (updateLink);
 
@@ -144,6 +144,7 @@ MainComponent::MainComponent() {
     // --- Input picker ---
     inputPicker.onDeviceChosen = [this] (const DeviceId& d) { onInputChosen (d); };
     railContent.addAndMakeVisible (inputPicker);
+    inputPicker.setTitle ("Input device");   // HIG: accessible name (the eyebrow label is not auto-associated to the control)
     inputGainHint.setText ("Leave the EARS gain switch alone (changing it drops the jig from Windows). "
                            "Set levels in Dirac: Master output, then Mic gain.",
                            juce::dontSendNotification);
@@ -173,6 +174,7 @@ MainComponent::MainComponent() {
     }
     combineBox.onChange = [this] { onCombineChosen(); };
     railContent.addAndMakeVisible (combineBox);
+    combineBox.setTitle ("Combine mode");
     combineHint.setColour (juce::Label::textColourId, Theme::textDim());
     combineHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     combineHint.setJustificationType (juce::Justification::topLeft);
@@ -182,6 +184,7 @@ MainComponent::MainComponent() {
     // --- Output picker + Dirac hint + preflight ---
     outputPicker.onDeviceChosen = [this] (const DeviceId& d) { onOutputChosen (d); };
     railContent.addAndMakeVisible (outputPicker);
+    outputPicker.setTitle ("Output virtual cable");
     outputHint.setText ("In Dirac Live, choose this device's capture side as the recording input.",
                         juce::dontSendNotification);
     outputHint.setColour (juce::Label::textColourId, Theme::textDim());
@@ -223,6 +226,7 @@ MainComponent::MainComponent() {
     railContent.addAndMakeVisible (rateLabel);
     rateBox.onChange = [this] { onRateChosen(); };
     railContent.addAndMakeVisible (rateBox);
+    rateBox.setTitle ("Sample rate");
     rateWarn.setColour (juce::Label::textColourId, Theme::warn());
     rateWarn.setFont (juce::Font (juce::FontOptions (12.0f)));
     railContent.addAndMakeVisible (rateWarn);
@@ -230,6 +234,7 @@ MainComponent::MainComponent() {
     railContent.addAndMakeVisible (bitLabel);
     bitBox.onChange = [this] { onBitDepthChosen(); };
     railContent.addAndMakeVisible (bitBox);
+    bitBox.setTitle ("Preferred bit depth");
 
     // --- Advanced disclosure ---
     advancedToggle.setButtonText ("Advanced");
@@ -2284,7 +2289,11 @@ void MainComponent::timerCallback() {
         if (theme.syncMode()) {
             applyTextColours();
             applyTitleBarTheme();
-            if (auto* top = getTopLevelComponent()) top->repaint(); else repaint();
+            // HIG/render fix: ComboBox/PopupMenu labels cache their colour, so a LIVE OS theme switch left the
+            // combo text invisible (light-on-light) until relaunch. sendLookAndFeelChange re-reads every child's
+            // colours from the updated LookAndFeel so the combos repaint correctly on the switch.
+            if (auto* top = getTopLevelComponent()) { top->sendLookAndFeelChange(); top->repaint(); }
+            else { sendLookAndFeelChange(); repaint(); }
         }
     }
 }

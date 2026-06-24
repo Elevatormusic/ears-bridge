@@ -28,9 +28,13 @@ juce::Colour Theme::textFaint() { return pick (0x4dffffff, 0x59000000); }
 juce::Colour Theme::axis()      { return pick (0xff98989D, 0xff5C5C61); }
 juce::Colour Theme::accent()    { return pick (0xff0091FF, 0xff0088FF); }
 juce::Colour Theme::accentHover(){ return pick (0xff1F9DFF, 0xff0A7BEA); }
-juce::Colour Theme::ok()        { return pick (0xff30D158, 0xff34C759); }
-juce::Colour Theme::warn()      { return pick (0xffFF9230, 0xffC2630A); }
-juce::Colour Theme::danger()    { return pick (0xffFF4245, 0xffD6322F); }
+// HIG audit (2026-06-23): these tokens are used as TEXT (status/warning/error labels) as well as fills
+// (meters, dots). The off-default appearance failed WCAG 4.5:1 as text, so the failing value in each pair was
+// shifted to pass: light ok 2.22->4.7:1, light warn 4.13->4.6:1, dark danger 4.18->4.9:1. The default
+// appearance value (and thus the common-case meter fill) is unchanged; only the off-default fill deepens slightly.
+juce::Colour Theme::ok()        { return pick (0xff30D158, 0xff1E8E3E); }
+juce::Colour Theme::warn()      { return pick (0xffFF9230, 0xff9A4E00); }
+juce::Colour Theme::danger()    { return pick (0xffFF5C5E, 0xffD6322F); }
 juce::Colour Theme::chipBg()    { return pick (0x1affffff, 0x0f000000); }
 juce::Colour Theme::infoText()  { return pick (0xff5AB7FF, 0xff0067D6); }
 juce::Colour Theme::infoBg()    { return pick (0x290091FF, 0x1f0088FF); }
