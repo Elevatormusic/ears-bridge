@@ -108,7 +108,7 @@ MainComponent::MainComponent() {
 
     // Current-version footnote, pinned bottom-right. Reads the single version source of truth.
     versionLabel.setText ("v" EB_VERSION_STRING, juce::dontSendNotification);
-    versionLabel.setColour (juce::Label::textColourId, Theme::textFaint());
+    versionLabel.setColour (juce::Label::textColourId, Theme::textDim());   // HIG: textFaint was 2.4:1; textDim ~5.3:1
     versionLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
     versionLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (versionLabel);
@@ -1086,7 +1086,7 @@ void MainComponent::applyTextColours() {
     // Re-set every theme-dependent label colour (the Theme statics return the active mode);
     // paint-based components (meters, cards, plots) pick the mode up on repaint.
     brandLabel.setColour (juce::Label::textColourId, Theme::text());
-    versionLabel.setColour (juce::Label::textColourId, Theme::textFaint());
+    versionLabel.setColour (juce::Label::textColourId, Theme::textDim());   // HIG: textFaint was 2.4:1; textDim ~5.3:1
     styleEyebrow (combineLabel,  "COMBINE MODE");
     styleEyebrow (rateLabel,     "RATE");
     styleEyebrow (bitLabel,      "PREFERRED DEPTH");
