@@ -131,6 +131,19 @@ namespace hig
             }
     }
 
+    // ARIA-ish role derived from the JUCE type, so `role` is meaningful even headless (no peer, so the
+    // accessibility handler is null). Mirrors the strings native-review's interactive() role regex looks for
+    // (button|link|slider|checkbox). A real peer's handler role is out of scope here; the type fallback suffices.
+    inline juce::String roleOf (const juce::String& type)
+    {
+        if (type == "ToggleButton")                    return "checkbox";
+        if (type == "TextButton" || type == "Button")  return "button";
+        if (type == "Slider")                          return "slider";
+        if (type == "ComboBox")                        return "combo";
+        if (type == "Label" || type == "TextEditor")   return "text";
+        return {};
+    }
+
     inline juce::var elementVar (juce::Component& root, juce::Component& c, int index, int& axCovered)
     {
         auto* o = new juce::DynamicObject();
@@ -160,7 +173,7 @@ namespace hig
         o->setProperty ("enabled", c.isEnabled());
 
         bool checkable = false, checked = false;
-        juce::String role;
+        juce::String role = roleOf (type);
         if (auto* btn = dynamic_cast<juce::Button*> (&c)) { checkable = btn->getClickingTogglesState(); checked = btn->getToggleState(); }
 
        #if (JUCE_MAJOR_VERSION > 6) || (JUCE_MAJOR_VERSION == 6 && JUCE_MINOR_VERSION >= 1)
