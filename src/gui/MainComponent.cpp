@@ -3,6 +3,7 @@
 #include "gui/RawRailStatus.h"
 #include "gui/StartGate.h"   // eb::startReady (Task 3 / #3 advanced override)
 #include "gui/StartNotes.h"  // eb::buildStartNotes (Task 4 / #8 calm bit-depth note)
+#include "gui/SystemA11y.h"  // eb::SystemA11y - Reduce Motion / Increase Contrast / Reduce Transparency (HIG)
 #include "platform/DiracCompat.h"
 #include "cal/CalibrationPairValidator.h"   // eb::validateCalibrationPair (P0-07)
 #include "audio/CalibrationGeneration.h"    // eb::CalibrationGeneration (generation lifecycle)
@@ -145,6 +146,7 @@ MainComponent::MainComponent() {
     inputPicker.onDeviceChosen = [this] (const DeviceId& d) { onInputChosen (d); };
     railContent.addAndMakeVisible (inputPicker);
     inputPicker.setTitle ("Input device");   // HIG: accessible name (the eyebrow label is not auto-associated to the control)
+    inputPicker.setExplicitFocusOrder (1);   // HIG M4: keyboard focus order matches the visual top-down rail order
     inputGainHint.setText ("Leave the EARS gain switch alone (changing it drops the jig from Windows). "
                            "Set levels in Dirac: Master output, then Mic gain.",
                            juce::dontSendNotification);
@@ -175,6 +177,7 @@ MainComponent::MainComponent() {
     combineBox.onChange = [this] { onCombineChosen(); };
     railContent.addAndMakeVisible (combineBox);
     combineBox.setTitle ("Combine mode");
+    combineBox.setExplicitFocusOrder (2);
     combineHint.setColour (juce::Label::textColourId, Theme::textDim());
     combineHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     combineHint.setJustificationType (juce::Justification::topLeft);
@@ -185,6 +188,7 @@ MainComponent::MainComponent() {
     outputPicker.onDeviceChosen = [this] (const DeviceId& d) { onOutputChosen (d); };
     railContent.addAndMakeVisible (outputPicker);
     outputPicker.setTitle ("Output virtual cable");
+    outputPicker.setExplicitFocusOrder (3);
     outputHint.setText ("In Dirac Live, choose this device's capture side as the recording input.",
                         juce::dontSendNotification);
     outputHint.setColour (juce::Label::textColourId, Theme::textDim());
@@ -227,6 +231,7 @@ MainComponent::MainComponent() {
     rateBox.onChange = [this] { onRateChosen(); };
     railContent.addAndMakeVisible (rateBox);
     rateBox.setTitle ("Sample rate");
+    rateBox.setExplicitFocusOrder (4);
     rateWarn.setColour (juce::Label::textColourId, Theme::warn());
     rateWarn.setFont (juce::Font (juce::FontOptions (12.0f)));
     railContent.addAndMakeVisible (rateWarn);
@@ -235,6 +240,7 @@ MainComponent::MainComponent() {
     bitBox.onChange = [this] { onBitDepthChosen(); };
     railContent.addAndMakeVisible (bitBox);
     bitBox.setTitle ("Preferred bit depth");
+    bitBox.setExplicitFocusOrder (5);
 
     // --- Advanced disclosure ---
     advancedToggle.setButtonText ("Advanced");
@@ -299,6 +305,7 @@ MainComponent::MainComponent() {
     };
     railContent.addChildComponent (firLenBox);
     firLenBox.setTitle ("FIR length");   // HIG: accessible name (the eyebrow label is not auto-associated to the control)
+    firLenBox.setExplicitFocusOrder (6);
     styleEyebrow (trimLabel, "OUTPUT TRIM (dB)");
     railContent.addChildComponent (trimLabel);
     trimSlider.setRange (-24.0, 0.0, 0.1);
@@ -310,6 +317,7 @@ MainComponent::MainComponent() {
     };
     railContent.addChildComponent (trimSlider);
     trimSlider.setTitle ("Output trim");   // HIG: accessible name
+    trimSlider.setExplicitFocusOrder (7);
 
     // L/R wiring check: play a tone into the LEFT earcup, then the engine reports which mic responded.
     verifyButton.onClick = [this] {
@@ -2288,6 +2296,7 @@ void MainComponent::timerCallback() {
     // Follow live system light/dark changes (~2 s cadence; cheap, no allocation on the hot path).
     if (++themeTick >= 60) {
         themeTick = 0;
+        const bool a11yChanged = SystemA11y::refresh();   // HIG: re-read Reduce Motion / Increase Contrast / Reduce Transparency
         if (theme.syncMode()) {
             applyTextColours();
             applyTitleBarTheme();
@@ -2296,6 +2305,9 @@ void MainComponent::timerCallback() {
             // colours from the updated LookAndFeel so the combos repaint correctly on the switch.
             if (auto* top = getTopLevelComponent()) { top->sendLookAndFeelChange(); top->repaint(); }
             else { sendLookAndFeelChange(); repaint(); }
+        }
+        else if (a11yChanged) {   // an Increase-Contrast / Reduce-Transparency toggle (no theme change) -> repaint to apply
+            if (auto* top = getTopLevelComponent()) top->repaint(); else repaint();
         }
     }
 }

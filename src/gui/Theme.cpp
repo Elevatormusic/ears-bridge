@@ -1,4 +1,5 @@
 #include "gui/Theme.h"
+#include "gui/SystemA11y.h"
 
 namespace eb {
 
@@ -20,8 +21,10 @@ juce::Colour Theme::ctrlHover() { return pick (0xff414146, 0xffF0F0F2); }
 juce::Colour Theme::track()     { return pick (0xff161616, 0xffE3E3E6); }
 juce::Colour Theme::plot()      { return pick (0xff202020, 0xffF3F3F5); }
 juce::Colour Theme::grid()      { return pick (0x14ffffff, 0x17000000); }
-juce::Colour Theme::sep()       { return pick (0x1fffffff, 0x1f000000); }
-juce::Colour Theme::sep2()      { return pick (0x29ffffff, 0x2e000000); }
+juce::Colour Theme::sep()       { const auto c = pick (0x1fffffff, 0x1f000000);   // HIG Increase Contrast: strengthen hairlines
+    return SystemA11y::increaseContrast() ? c.withAlpha (juce::jmin (1.0f, c.getFloatAlpha() * 3.0f)) : c; }
+juce::Colour Theme::sep2()      { const auto c = pick (0x29ffffff, 0x2e000000);
+    return SystemA11y::increaseContrast() ? c.withAlpha (juce::jmin (1.0f, c.getFloatAlpha() * 3.0f)) : c; }
 juce::Colour Theme::text()      { return pick (0xffffffff, 0xd9000000); }
 juce::Colour Theme::textDim()   { return pick (0x9effffff, 0x99000000); }
 juce::Colour Theme::textFaint() { return pick (0x4dffffff, 0x59000000); }
@@ -39,9 +42,11 @@ juce::Colour Theme::okFill()    { return pick (0xff30D158, 0xff34C759); }   // b
 juce::Colour Theme::warnFill()  { return pick (0xffFF9230, 0xffC2630A); }
 juce::Colour Theme::dangerFill(){ return pick (0xffFF4245, 0xffD6322F); }
 juce::Colour Theme::onAccentText(){ return juce::Colours::white; }          // white on the saturated accent fill (both modes)
-juce::Colour Theme::chipBg()    { return pick (0x1affffff, 0x0f000000); }
+juce::Colour Theme::chipBg()    { const auto c = pick (0x1affffff, 0x0f000000);   // HIG Reduce Transparency: firm up the tint
+    return SystemA11y::reduceTransparency() ? c.withAlpha (juce::jmin (1.0f, c.getFloatAlpha() * 3.0f)) : c; }
 juce::Colour Theme::infoText()  { return pick (0xff5AB7FF, 0xff0067D6); }
-juce::Colour Theme::infoBg()    { return pick (0x290091FF, 0x1f0088FF); }
+juce::Colour Theme::infoBg()    { const auto c = pick (0x290091FF, 0x1f0088FF);
+    return SystemA11y::reduceTransparency() ? c.withAlpha (juce::jmin (1.0f, c.getFloatAlpha() * 2.0f)) : c; }
 
 Theme::Theme() {
     s_dark = juce::Desktop::getInstance().isDarkModeActive();
@@ -107,6 +112,10 @@ void Theme::drawButtonBackground (juce::Graphics& g, juce::Button& b,
         g.setColour (sep2());
         g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.0f);
     }
+    if (b.hasKeyboardFocus (true)) {   // HIG M4: visible keyboard-focus ring (white on the accent primary, accent elsewhere)
+        g.setColour (primary ? onAccentText() : accent());
+        g.drawRoundedRectangle (r.reduced (1.5f), radius, 2.0f);
+    }
 }
 
 void Theme::drawComboBox (juce::Graphics& g, int w, int h, bool /*isDown*/,
@@ -117,6 +126,10 @@ void Theme::drawComboBox (juce::Graphics& g, int w, int h, bool /*isDown*/,
     g.fillRoundedRectangle (r, radius);
     g.setColour (box.findColour (juce::ComboBox::outlineColourId));
     g.drawRoundedRectangle (r, radius, 1.0f);
+    if (box.hasKeyboardFocus (true)) {   // HIG M4: visible keyboard-focus ring
+        g.setColour (accent());
+        g.drawRoundedRectangle (r.reduced (1.0f), radius, 2.0f);
+    }
 
     // Trailing chevron.
     juce::Path chev;
