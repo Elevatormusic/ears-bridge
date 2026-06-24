@@ -870,6 +870,11 @@ void MainComponent::onStartStop() {
         // Task 4: re-arm BOTH per-ear grade pollers on Stop so a stale match from this run can't carry into
         // the next (each ear again needs two consecutive matched polls before its first grade).
         gradePollTick_ = 0; gradePollerL_.reset(); gradePollerR_.reset();
+        // Release the off-thread grade guard on Stop. It is normally cleared by the worker chain (didGrade-false at
+        // the post, or after the publish), but if a continuation is ever dropped the guard would latch true and
+        // SILENTLY kill all future grading. Clearing it on every Stop (and Start, below) guarantees a fresh run is
+        // never gated off. Safe: clearing it can only ALLOW a grade, never falsely green one. (Review #3.)
+        gradeInFlight_.store (false);
         // Re-arm the hardware-Dirac auto-detect too: a fresh run must re-observe the output silence + mic sweep.
         maxOutputRenderPeak_ = 0.0f; hwOutputReadable_ = false; hwDetectTick_ = 0;
         // Reset the live in-sweep readout state too, so a held level / sweep-active hold / live text from this
@@ -880,6 +885,7 @@ void MainComponent::onStartStop() {
         logLine (eb::DiagnosticLog::Level::Info, "Stop: measurement stopped by the user.");
     } else {
         logLine (eb::DiagnosticLog::Level::Debug, "Button: Start clicked");
+        gradeInFlight_.store (false);   // begin every run ungated even if the prior run ended via device-loss (no Stop). #3
         if (verifyTicks > 0) {   // a pending L/R check holds the capture device; clear its GUI state
             verifyTicks = 0;
             verifyButton.setButtonText ("Check L/R wiring");
