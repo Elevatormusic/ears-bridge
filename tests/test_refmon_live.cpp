@@ -242,7 +242,8 @@ static eb::MeasurementGrade matchPollAndPublish (eb::AudioEngine& e, const std::
     g.quality.irSnrDb   = gp.irSnrDb;
     g.quality.thdPercent = gp.thdPercent;
     g.quality.lowQuality = gp.lowQuality;
-    g.match.matched = (gp.state == eb::RefMonState::GradedClean || gp.state == eb::RefMonState::GradedSuspect);
+    g.match.matched = (gp.state == eb::RefMonState::GradedClean || gp.state == eb::RefMonState::GradedMarginal
+                       || gp.state == eb::RefMonState::GradedSuspect);   // any graded quality verdict == it matched
     e.publishReferenceGrade ((int) g.state, g.quality.irSnrDb, g.quality.thdPercent,
                              g.state == eb::RefMonState::ReferenceStale, g.quality.lowQuality);
     gradedOut = true;
@@ -331,7 +332,8 @@ TEST_CASE("Live grade (Task 4 headline): a LOW-level matching ESS response grade
     const auto state = (eb::RefMonState) e.refMonState();
     INFO ("published IR-SNR = " << e.refIrSnrDb() << " dB; gradeState = " << (int) g.state
           << "; coherence = " << e.lastMatchCoherence());
-    CHECK ((state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedSuspect));
+    CHECK ((state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedMarginal
+            || state == eb::RefMonState::GradedSuspect));   // any quality verdict; no-noise-region synthetic window -> Marginal
     CHECK (state != eb::RefMonState::ReferenceStale);
     CHECK (state != eb::RefMonState::NotGraded);
     CHECK_FALSE (eb::any (e.health().flags & eb::HealthFlag::RefMismatch));
@@ -361,7 +363,8 @@ TEST_CASE("Live grade: a full-amplitude matching ESS response through the seam g
     CHECK (graded);
 
     const auto state = (eb::RefMonState) e.refMonState();
-    CHECK ((state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedSuspect));
+    CHECK ((state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedMarginal
+            || state == eb::RefMonState::GradedSuspect));   // any quality verdict; no-noise-region synthetic window -> Marginal
     CHECK (state != eb::RefMonState::ReferenceStale);
     CHECK (state != eb::RefMonState::NotGraded);
     CHECK_FALSE (eb::any (e.health().flags & eb::HealthFlag::RefMismatch));
@@ -400,7 +403,8 @@ TEST_CASE("Bug 1: a continuous response that NEVER settles still grades on a sta
     CHECK (graded);                                    // a grade IS published despite never settling
     CHECK (e.gradeSignalPresent());                    // and the signal is STILL present (never settled) at grade time
     const auto state = (eb::RefMonState) e.refMonState();
-    CHECK ((state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedSuspect));
+    CHECK ((state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedMarginal
+            || state == eb::RefMonState::GradedSuspect));   // any quality verdict; no-noise-region synthetic window -> Marginal
     CHECK (state != eb::RefMonState::NotGraded);
     CHECK (state != eb::RefMonState::ReferenceStale);
     CHECK (e.refIrSnrDb() > 0.0f);                     // an IR-SNR number was produced (the grade ran)
@@ -737,7 +741,8 @@ TEST_CASE("Live grade [NEG-2]: a sweep written ACROSS the ring wrap still snapsh
     INFO ("wrapped-ring grade state = " << (int) g.state << "; coherence = " << e.lastMatchCoherence());
     CHECK (graded);
     const auto state = (eb::RefMonState) e.refMonState();
-    CHECK ((state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedSuspect));
+    CHECK ((state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedMarginal
+            || state == eb::RefMonState::GradedSuspect));   // any quality verdict; no-noise-region synthetic window -> Marginal
     CHECK (state != eb::RefMonState::ReferenceStale);
     CHECK (e.lastMatchCoherence() > 0.0f);
 }

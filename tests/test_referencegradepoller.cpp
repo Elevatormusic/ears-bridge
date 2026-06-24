@@ -175,7 +175,8 @@ TEST_CASE("ReferenceGradePoller: a low-level (~-40 dBFS) matching window still g
     p.poll (resp.data(), (int) resp.size(), ref.data(), (int) ref.size(), fs);   // poll 1: arm
     auto r = p.poll (resp.data(), (int) resp.size(), ref.data(), (int) ref.size(), fs);   // poll 2: grade
     CHECK (r.didGrade);                              // the match fired the grade DESPITE the low level
-    CHECK ((r.state == RefMonState::GradedClean || r.state == RefMonState::GradedSuspect));
+    CHECK ((r.state == RefMonState::GradedClean || r.state == RefMonState::GradedMarginal
+            || r.state == RefMonState::GradedSuspect));   // any quality verdict; this synthetic window has no noise region -> Marginal
     CHECK_FALSE (r.mismatch);
 }
 
@@ -687,7 +688,8 @@ TEST_CASE("ReferenceGradePoller: per-ear independence - L grades a convolved swe
     // LEFT published a real verdict from a CONVOLVED (spread-IR) sweep: graded, not stale, finite IR-SNR.
     CHECK (l2.didGrade);
     CHECK (l2.state != RefMonState::ReferenceStale);
-    CHECK ((l2.state == RefMonState::GradedClean || l2.state == RefMonState::GradedSuspect));
+    CHECK ((l2.state == RefMonState::GradedClean || l2.state == RefMonState::GradedMarginal
+            || l2.state == RefMonState::GradedSuspect));   // any quality verdict; no-noise-region synthetic window -> Marginal
     CHECK_FALSE (l2.mismatch);
     CHECK (std::isfinite (l2.irSnrDb));                 // a sane (finite) IR-SNR number was produced
 
