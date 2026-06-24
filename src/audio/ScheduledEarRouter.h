@@ -69,6 +69,10 @@ public:
                 quietAccum_ = quiet ? quietAccum_ + blockSec : 0.0;
 
                 if (tSeg_ > dur * (1.0 + kDriftTol)) ambiguous_ = true;  // ran long past schedule with no gap (drift/fused)
+                // ...and a PREMATURE gap: a sustained quiet WELL BEFORE the scheduled end (a dropout / wrong
+                // schedule). The quiet LF onset is NOT caught here - it occurs in Idle/InGap (pre-positioned),
+                // before this segment ever armed on the loud body; within InSegment the body has already arrived.
+                if (quietAccum_ >= kDwellSec && tSeg_ < dur * (1.0 - kDriftTol)) ambiguous_ = true;
                 // mic-sanity: the WRONG ear sustainedly louder (only a CLEAR inversion trips it; identity stays the schedule's)
                 if (! quiet) {
                     const float routed = (ear_ == 0) ? pL : pR;
@@ -96,6 +100,9 @@ public:
 
 private:
     enum class State { Idle, InSegment, InGap };
+    // NOTE: tSeg_ resets to 0 at the ARM point (after ~kArmSec of sustained loud), so it runs ~kArmSec short
+    // of the true sweep-onset elapsed. This is self-consistent (durOk and the real sweep tail shift together)
+    // and harmless at the current tolerances; an on-device tuner should NOT chase this ~50 ms offset.
     void startSegment (int i) noexcept {
         state_ = State::InSegment; segIdx_ = i;
         tSeg_ = loudAccum_ = quietAccum_ = invertAccum_ = 0.0;
