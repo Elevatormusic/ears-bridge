@@ -174,8 +174,9 @@ bool ProcessingGraph::process (const float* inL, const float* inR,
             } else {
                 // FALLBACK (no schedule learned / macOS): the mic-envelope router - HOLD through the inter-sweep
                 // silence; switch only when the OTHER ear is >= 2x (6 dB) louder so leakage can't flip it mid-sweep.
-                const float rel = (numSamples == maxBlock) ? relCoeff_   // precomputed; avoid exp() on the hot path
-                                : std::exp (-(float) numSamples / (float) (sr * 0.08));   // exact for a rare short block
+                const float rel = relCoeff_;   // precomputed ~80 ms release - NEVER exp() on the hot path. A rare
+                                               // short final block decays marginally faster; inaudible in this coarse
+                                               // no-schedule envelope fallback (review: keep the RT path transcendental-free).
                 envL_ = juce::jmax (pkL, envL_ * rel);
                 envR_ = juce::jmax (pkR, envR_ * rel);
                 if (envL_ > 0.0032f || envR_ > 0.0032f) {            // ~ -50 dBFS gate
