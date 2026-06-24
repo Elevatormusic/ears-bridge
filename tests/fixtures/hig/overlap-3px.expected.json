@@ -1,0 +1,9 @@
+{
+  "findings": [
+    {
+      "category": "overlap",
+      "severity": "medium",
+      "element": "b"
+    }
+  ]
+}

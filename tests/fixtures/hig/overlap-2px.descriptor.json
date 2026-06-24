@@ -1,0 +1,71 @@
+{
+  "meta": {
+    "juceVersion": "8",
+    "scaleFactor": 1,
+    "rootBounds": {
+      "x": 0,
+      "y": 0,
+      "w": 900,
+      "h": 600
+    },
+    "snapshotPath": "x.png",
+    "shown": false,
+    "axCoverageRatio": 0
+  },
+  "elements": [
+    {
+      "id": "a",
+      "type": "Label",
+      "role": "text",
+      "label": "a",
+      "value": "",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 20
+      },
+      "fg": "#000000",
+      "bg": "#ffffff",
+      "fgIntrospectable": true,
+      "bgIntrospectable": true,
+      "fontPt": 13,
+      "bold": false,
+      "visible": true,
+      "showing": true,
+      "enabled": true,
+      "checkable": false,
+      "checked": false,
+      "measurable": true,
+      "snapshotMayBeBlank": false,
+      "textOverflows": false
+    },
+    {
+      "id": "b",
+      "type": "Label",
+      "role": "text",
+      "label": "b",
+      "value": "",
+      "bounds": {
+        "x": 98,
+        "y": 0,
+        "w": 100,
+        "h": 20
+      },
+      "fg": "#000000",
+      "bg": "#ffffff",
+      "fgIntrospectable": true,
+      "bgIntrospectable": true,
+      "fontPt": 13,
+      "bold": false,
+      "visible": true,
+      "showing": true,
+      "enabled": true,
+      "checkable": false,
+      "checked": false,
+      "measurable": true,
+      "snapshotMayBeBlank": false,
+      "textOverflows": false
+    }
+  ]
+}

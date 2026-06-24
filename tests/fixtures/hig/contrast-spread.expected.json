@@ -1,0 +1,19 @@
+{
+  "findings": [
+    {
+      "category": "contrast",
+      "severity": "medium",
+      "element": "c1"
+    },
+    {
+      "category": "contrast",
+      "severity": "medium",
+      "element": "c2"
+    },
+    {
+      "category": "contrast",
+      "severity": "high",
+      "element": "c3"
+    }
+  ]
+}

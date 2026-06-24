@@ -1,0 +1,9 @@
+{
+  "findings": [
+    {
+      "category": "duplicate",
+      "severity": "high",
+      "element": "b"
+    }
+  ]
+}

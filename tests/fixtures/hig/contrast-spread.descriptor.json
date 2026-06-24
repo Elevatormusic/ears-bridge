@@ -1,0 +1,125 @@
+{
+  "meta": {
+    "juceVersion": "8",
+    "scaleFactor": 1,
+    "rootBounds": {
+      "x": 0,
+      "y": 0,
+      "w": 900,
+      "h": 600
+    },
+    "snapshotPath": "x.png",
+    "shown": false,
+    "axCoverageRatio": 0
+  },
+  "elements": [
+    {
+      "id": "c0",
+      "type": "Label",
+      "role": "text",
+      "label": "a",
+      "value": "",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "w": 50,
+        "h": 20
+      },
+      "fg": "#767676",
+      "bg": "#ffffff",
+      "fgIntrospectable": true,
+      "bgIntrospectable": true,
+      "fontPt": 13,
+      "bold": false,
+      "visible": true,
+      "showing": true,
+      "enabled": true,
+      "checkable": false,
+      "checked": false,
+      "measurable": true,
+      "snapshotMayBeBlank": false,
+      "textOverflows": false
+    },
+    {
+      "id": "c1",
+      "type": "Label",
+      "role": "text",
+      "label": "b",
+      "value": "",
+      "bounds": {
+        "x": 0,
+        "y": 30,
+        "w": 50,
+        "h": 20
+      },
+      "fg": "#777777",
+      "bg": "#ffffff",
+      "fgIntrospectable": true,
+      "bgIntrospectable": true,
+      "fontPt": 13,
+      "bold": false,
+      "visible": true,
+      "showing": true,
+      "enabled": true,
+      "checkable": false,
+      "checked": false,
+      "measurable": true,
+      "snapshotMayBeBlank": false,
+      "textOverflows": false
+    },
+    {
+      "id": "c2",
+      "type": "Label",
+      "role": "text",
+      "label": "c",
+      "value": "",
+      "bounds": {
+        "x": 0,
+        "y": 60,
+        "w": 50,
+        "h": 20
+      },
+      "fg": "#888888",
+      "bg": "#ffffff",
+      "fgIntrospectable": true,
+      "bgIntrospectable": true,
+      "fontPt": 13,
+      "bold": false,
+      "visible": true,
+      "showing": true,
+      "enabled": true,
+      "checkable": false,
+      "checked": false,
+      "measurable": true,
+      "snapshotMayBeBlank": false,
+      "textOverflows": false
+    },
+    {
+      "id": "c3",
+      "type": "Label",
+      "role": "text",
+      "label": "d",
+      "value": "",
+      "bounds": {
+        "x": 0,
+        "y": 90,
+        "w": 50,
+        "h": 20
+      },
+      "fg": "#949494",
+      "bg": "#ffffff",
+      "fgIntrospectable": true,
+      "bgIntrospectable": true,
+      "fontPt": 13,
+      "bold": false,
+      "visible": true,
+      "showing": true,
+      "enabled": true,
+      "checkable": false,
+      "checked": false,
+      "measurable": true,
+      "snapshotMayBeBlank": false,
+      "textOverflows": false
+    }
+  ]
+}

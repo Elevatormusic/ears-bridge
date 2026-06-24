@@ -1,0 +1,9 @@
+{
+  "findings": [
+    {
+      "category": "target-size",
+      "severity": "medium",
+      "element": "t"
+    }
+  ]
+}

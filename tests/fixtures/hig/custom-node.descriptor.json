@@ -1,0 +1,44 @@
+{
+  "meta": {
+    "juceVersion": "8",
+    "scaleFactor": 1,
+    "rootBounds": {
+      "x": 0,
+      "y": 0,
+      "w": 900,
+      "h": 600
+    },
+    "snapshotPath": "x.png",
+    "shown": false,
+    "axCoverageRatio": 0
+  },
+  "elements": [
+    {
+      "id": "cu",
+      "type": "custom/unknown",
+      "role": "text",
+      "label": "x",
+      "value": "",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "w": 50,
+        "h": 20
+      },
+      "fg": "not introspectable",
+      "bg": "not introspectable",
+      "fgIntrospectable": false,
+      "bgIntrospectable": false,
+      "fontPt": 13,
+      "bold": false,
+      "visible": true,
+      "showing": true,
+      "enabled": true,
+      "checkable": false,
+      "checked": false,
+      "measurable": false,
+      "snapshotMayBeBlank": false,
+      "textOverflows": false
+    }
+  ]
+}
