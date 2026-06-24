@@ -11,11 +11,11 @@ constexpr float SI = 0.0001f;    // a hard-panned silent / gap block (quiet: < 0
 constexpr float AB = 0.010f;     // ACTIVE-but-above-floor: between the gap (0.006) and onset (0.012) gates
 
 // The on-device-confirmed L,R,L burst (built directly so the router test does not depend on extractSchedule).
-SweepSchedule lrl (double segSec = 5.0) {
+SweepSchedule lrl (double segSec = 5.0, double gapSec = 0.5) {
     SweepSchedule s;
     s.segments = { { Ear::Left, segSec }, { Ear::Right, segSec }, { Ear::Left, segSec } };
-    s.gapsSec  = { 0.5, 0.5 };
-    s.valid = true; s.totalActiveSec = 3.0 * segSec;
+    s.gapsSec  = { gapSec, gapSec };
+    s.valid = true;
     return s;
 }
 // Feed `sec` of a constant per-ear peak; return the LAST RouterOut.
@@ -72,7 +72,32 @@ TEST_CASE("ScheduledEarRouter: non-finite / degenerate inputs stay sane (no cras
     auto b = r.process (inf, SI, 0.003f, 0.01); CHECK ((b.ear == 0 || b.ear == 1));   // Inf peak
     auto c = r.process (SW, SI, 0.0f,   0.01);  CHECK ((c.ear == 0 || c.ear == 1));   // zero floor -> default-floor guard
     auto d = r.process (SW, SI, 0.003f, 0.0);   CHECK ((d.ear == 0 || d.ear == 1));   // zero blockSec
-    CHECK (std::isfinite (1.0f));                                                     // sentinel: the run did not trap
+    auto e = r.process (SW, SI, 0.003f, std::nanf ("")); CHECK ((e.ear == 0 || e.ear == 1));  // NaN blockSec
+    // A NaN blockSec must NOT poison tSeg_: drive a normal L sweep, inject a NaN-blockSec block mid-segment,
+    // then finish + a gap; the schedule must still advance L->R (a poisoned NaN tSeg_ would freeze it forever).
+    ScheduledEarRouter r2; r2.loadSchedule (lrl());
+    drive (r2, SI, SI, 0.5);
+    drive (r2, SW, SI, 2.0);
+    r2.process (SW, SI, 0.003f, std::nanf (""));     // the poison attempt, mid-segment
+    drive (r2, SW, SI, 3.0);
+    auto g = drive (r2, SI, SI, 0.5);
+    CHECK (g.ear == 1);                              // advanced to R -> tSeg_ stayed finite (not frozen by NaN)
+}
+
+TEST_CASE("ScheduledEarRouter: steady non-panned background does NOT arm a segment (negative gate)", "[autoperear][router]") {
+    ScheduledEarRouter r; r.loadSchedule (lrl());
+    drive (r, 0.05f, 0.05f, 6.0);          // 6 s of LOUD but NON-PANNED background (both ears equal, above the onset gate)
+    auto after = drive (r, SI, SI, 0.5);   // then a gap
+    CHECK (after.ear == 0);                // never armed -> still Idle on the first ear; did NOT advance to R
+}
+
+TEST_CASE("ScheduledEarRouter: a short learned gap (< kDwellSec) is still followed via the adaptive dwell", "[autoperear][router]") {
+    ScheduledEarRouter r; r.loadSchedule (lrl (5.0, 0.1));   // 0.1 s gaps - shorter than the 0.15 s MAX dwell
+    drive (r, SI, SI, 0.5);
+    drive (r, SW, SI, 5.0);                // L
+    drive (r, SI, SI, 0.1);                // a SHORT 0.1 s gap
+    auto inR = drive (r, SI, SW, 1.0);     // R sweep
+    CHECK (inR.ear == 1);                  // followed the short gap -> routed R (a fixed 0.15 s dwell would have missed it)
 }
 
 TEST_CASE("ScheduledEarRouter: a quiet-but-above-floor tail is NOT a gap (floor-tight)", "[autoperear][router]") {
