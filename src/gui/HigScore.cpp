@@ -56,10 +56,16 @@ struct Box { double left, top, right, bottom; };
 // type, /button|link|slider|checkbox/i on role. ToggleButton matches via "toggle"/"button"; ComboBox via
 // "combo"; Label matches neither.
 bool interactive (const El& e) {
+    // case-insensitive substring, mirroring native-review's /.../i regexes (so a future probe role like
+    // "BUTTON" / "my-button" / a real AccessibilityHandler role agrees with the JS - not just the current
+    // lowercase-token probe output).
     const auto t = e.type.toLowerCase();
     for (auto* tok : { "button", "toggle", "slider", "combo" })
         if (t.contains (tok)) return true;
-    return e.role == "button" || e.role == "link" || e.role == "slider" || e.role == "checkbox";
+    const auto r = e.role.toLowerCase();
+    for (auto* tok : { "button", "link", "slider", "checkbox" })
+        if (r.contains (tok)) return true;
+    return false;
 }
 
 } // namespace
@@ -105,7 +111,7 @@ std::vector<Finding> scoreDescriptor (const juce::var& root) {
             const bool ov = overlaps (ra, rb) && depth (ra, rb) > (double) kOverlapNoisePx;
             const bool nested = contains (ra, rb) || contains (rb, ra);
             const bool identical = a.type == b.type && a.label.isNotEmpty()
-                                   && a.label == b.label && (int) a.w == (int) b.w && (int) a.h == (int) b.h;
+                                   && a.label == b.label && a.w == b.w && a.h == b.h;   // raw compare = JS ===
             if (identical)   // the identical branch SUPPRESSES the overlap finding for the same pair
                 out.push_back ({ "duplicate", ov ? "high" : "medium", b.id,
                     "identical \"" + a.label + "\" (" + a.type + ") appears twice" });
@@ -115,14 +121,16 @@ std::vector<Finding> scoreDescriptor (const juce::var& root) {
         }
 
     for (auto* e : vis)
-        if (interactive (*e) && ((int) e->w < kMinTargetPx || (int) e->h < kMinTargetPx))
+        if (interactive (*e) && (e->w < (double) kMinTargetPx || e->h < (double) kMinTargetPx))   // raw < = JS
             out.push_back ({ "target-size", "medium", e->id,
                 juce::String ((int) e->w) + "x" + juce::String ((int) e->h) + "px target below "
                 + juce::String (kMinTargetPx) + "px" });
 
     for (auto* e : vis)
-        if (e->textOverflows)
-            out.push_back ({ "clip", "medium", e->id, "\"" + e->label.substring (0, 32) + "\" overflows its bounds" });
+        if (e->textOverflows) {
+            const auto txt = e->label.isNotEmpty() ? e->label : e->value;   // label||value, matching native-review
+            out.push_back ({ "clip", "medium", e->id, "\"" + txt.substring (0, 32) + "\" overflows its bounds" });
+        }
 
     return out;
 }
