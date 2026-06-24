@@ -12,6 +12,7 @@
 #include "gui/SnrStatus.h"                  // eb::kMinSweepSnrDb (sweep-to-noise SNR threshold; match-window SNR fix)
 #include "gui/LiveInputStatus.h"            // eb::liveInputStatus (live per-channel in-sweep readout)
 #include "audio/LoopbackReference.h"        // eb::captureLoopback / validateReferenceCapture / readDiracDeviceType (Plan 5)
+#include "audio/SweepScheduleStore.h"       // eb::extractSchedule / serialize+deserialize (AutoPerEar schedule, P0-06)
 #include "platform/EndpointFormat.h"        // eb::endpointMixSampleRateForName (the WASAPI mix-format rate)
 #include <algorithm>
 #include <cmath>
@@ -1631,6 +1632,11 @@ void MainComponent::loadStoredReference() {
             loadedReferenceRate_ = loadedReferenceRateL_;
             referenceStatePath_  = refL.getFullPathName();
             engine.setReferenceLoaded (true);
+            // AutoPerEar: reload the schedule sidecar ONLY if it matches this reference (stale guard), then install
+            // it (startup -> bridge stopped). A mismatched / absent sidecar -> the router falls back to the envelope.
+            const auto schedHash = eb::makeReferenceMetadata (fL, nL, loadedReferenceRateL_).contentHash;
+            const auto sched     = eb::deserializeSchedule (dir.getChildFile ("schedule.txt").loadFileAsString(), schedHash);
+            if (sched.valid) engine.setSweepSchedule (sched);
             return;
         }
         case eb::ReferenceFilesState::ReLearnNeeded: {
@@ -1736,6 +1742,7 @@ void MainComponent::onLearnReference() {
         auto cap = eb::captureLoopbackStereo (renderTarget, 35.0, rate, cancel);   // Dirac's output render endpoint; 35 s = max cap
         juce::String resultMsg; bool ok = false; bool cancelled = cap.cancelled;
         std::vector<float> samplesL, samplesR; double capRate = rate;
+        eb::SweepSchedule schedule;   // learned from the FULL stereo loopback (before trimming) for AutoPerEar routing
         if (cap.cancelled) {
             resultMsg = "Learning cancelled.";
         } else if (! cap.ok) {
@@ -1768,6 +1775,10 @@ void MainComponent::onLearnReference() {
                     samplesL = std::move (trimL);
                     samplesR = std::move (trimR);
                     capRate  = cap.rate;
+                    // Learn the AutoPerEar SCHEDULE from the FULL untrimmed loopback (the [L gap R gap L] structure
+                    // lives in the gaps that trimming removes). Offline/pure - safe on this worker thread.
+                    schedule = eb::extractSchedule (cap.samplesL.data(), cap.samplesR.data(),
+                                                    (int) cap.samplesL.size(), cap.rate);
                     resultMsg = "Reference learned - both ears captured (L "
                                 + juce::String (samplesL.size() / capRate, 1) + " s, R "
                                 + juce::String (samplesR.size() / capRate, 1) + " s) - see tip to resume listening.";
@@ -1776,7 +1787,7 @@ void MainComponent::onLearnReference() {
         }
         juce::MessageManager::callAsync ([safe, ok, cancelled, resultMsg,
                                           samplesL = std::move (samplesL), samplesR = std::move (samplesR),
-                                          capRate]() mutable {
+                                          schedule = std::move (schedule), capRate]() mutable {
             auto* mc = safe.getComponent();
             if (! mc) return;
             // Back to idle: restore the button to "Learn reference (Windows Audio)" and re-enable, so the
@@ -1819,6 +1830,17 @@ void MainComponent::onLearnReference() {
                 mc->loadedReference_      = mc->loadedReferenceL_;
                 mc->loadedReferenceRate_  = capRate;
                 mc->engine.setReferenceLoaded (true);
+                // AutoPerEar: persist the learned schedule keyed to this reference's content hash, then install it
+                // (the bridge is STOPPED during Learn). A future re-learn changes the hash -> the stale schedule drops.
+                if (schedule.valid) {
+                    const auto refHash = eb::makeReferenceMetadata (samplesL.data(), (int) samplesL.size(), capRate).contentHash;
+                    dir.getChildFile ("schedule.txt").replaceWithText (eb::serializeSchedule (schedule, refHash));
+                    mc->engine.setSweepSchedule (schedule);
+                    mc->logLine (eb::DiagnosticLog::Level::Info, "AutoPerEar schedule learned ("
+                                 + juce::String ((int) schedule.segments.size()) + " segments)");
+                } else {
+                    dir.getChildFile ("schedule.txt").deleteFile();   // no schedule learned -> drop any stale sidecar
+                }
             }
         });
     });
@@ -2048,7 +2070,12 @@ void MainComponent::updateActiveEarIndicator (bool silent) {
         if (live) {
             text = (ear == 0) ? "Auto per-ear - capturing the LEFT earcup"
                               : "Auto per-ear - capturing the RIGHT earcup";
-            col  = Theme::text();   // readable primary text; the meter's accent dot carries the colour cue
+            if (engine.autoEarAmbiguous()) {                 // the schedule router flagged this segment OFF-schedule
+                text += "  -  routing ambiguous, re-measure";
+                col   = Theme::warn();
+            } else {
+                col   = Theme::text();   // readable primary text; the meter's accent dot carries the colour cue
+            }
         } else {
             text = "Auto per-ear - waiting for the next sweep...";
             col  = Theme::textDim();

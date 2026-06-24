@@ -250,6 +250,10 @@ void AudioEngine::setRightCalFir (juce::AudioBuffer<float> fir) { graph.setFir (
 void AudioEngine::clearLeftCalFir()  { graph.clearFir (0); }   // back to unity + headroom 1.0
 void AudioEngine::clearRightCalFir() { graph.clearFir (1); }
 void AudioEngine::setCombineMode (eb::CombineMode m) { graph.setCombineMode (m); }
+void AudioEngine::setSweepSchedule (const SweepSchedule& s) {
+    jassert (reconfigAllowed());   // STOPPED-only: loadSchedule allocates + is not mid-run safe (Task-3 verifier hand-off)
+    graph.setSweepSchedule (s);
+}
 void AudioEngine::setOutputTrimDb (double db) {
     // Slider is <= 0 dB; treat the bottom of the range as a hard mute, else convert dB -> linear.
     graph.setOutputGain (db <= -60.0 ? 0.0f : juce::Decibels::decibelsToGain ((float) db));
@@ -352,6 +356,7 @@ void AudioEngine::publishCompletedSweepPeakDb (int ear, float peakDb) noexcept {
 }
 void AudioEngine::raiseLowSnr() noexcept { hm.raiseLowSnr(); }
 int  AudioEngine::autoActiveEar()          const noexcept { return graph.activeEar(); }
+bool AudioEngine::autoEarAmbiguous()       const noexcept { return graph.autoEarAmbiguous(); }
 float AudioEngine::headroomAttenuationDb() const noexcept { return graph.headroomAttenuationDb(); }
 
 // ---- Reference-Based Measurement Monitor (Plan 5) ----
