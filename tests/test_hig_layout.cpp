@@ -29,6 +29,7 @@ TEST_CASE("HIG gate: the real editor has no blocking layout finding in any theme
     juce::ScopedJuceInitialiser_GUI juceInit;
     auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
     eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true });
+    const bool wasDark = eb::Theme::dark();   // restore the static mode at the end (no cross-test leakage)
 
     const auto blocking = [] (const eb::hig::Finding& f) {
         return f.category == "overlap" || f.category == "clip" || f.category == "duplicate"
@@ -58,6 +59,7 @@ TEST_CASE("HIG gate: the real editor has no blocking layout finding in any theme
         }
     }
     eb::SystemA11y::setForTest (false, false, false);   // restore the deterministic default for later tests
+    mc.forceThemeForTest (wasDark);                     // restore Theme::s_dark (symmetry with the a11y restore)
 
     INFO ("blocking findings (" << bad.size() << "):\n" << bad.joinIntoString ("\n"));
     CHECK (bad.isEmpty());
