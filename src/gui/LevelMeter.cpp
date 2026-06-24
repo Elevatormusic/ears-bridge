@@ -112,7 +112,7 @@ void LevelMeter::paint (juce::Graphics& g) {
 
     // Readout: a literal "CLIP" tag (not colour alone) latches on overload, else the smoothed dB.
     g.setColour (clipLatched ? Theme::danger() : Theme::textDim());
-    g.setFont (juce::Font (juce::FontOptions (12.5f).withStyle (clipLatched ? "Bold" : "Regular")));
+    g.setFont (juce::Font (juce::FontOptions (12.0f).withStyle (clipLatched ? "Bold" : "Regular")));
     juce::String txt = clipLatched          ? juce::String ("CLIP")
                      : (smoothDb <= -60.0f) ? juce::String ("-")
                                             : "-" + juce::String (juce::roundToInt (-smoothDb)) + " dB";

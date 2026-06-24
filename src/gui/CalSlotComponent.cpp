@@ -215,7 +215,7 @@ void CalSlotComponent::applyTheme() {
 }
 
 void CalSlotComponent::resized() {
-    auto r = getLocalBounds().reduced (14, 12);
+    auto r = getLocalBounds().reduced (16, 12);
     r.removeFromTop (26);   // header strip (painted)
     r.removeFromTop (10);
 
@@ -254,7 +254,7 @@ void CalSlotComponent::paint (juce::Graphics& g) {
     g.setColour (Theme::surface());
     g.fillRoundedRectangle (full, 10.0f);
 
-    auto inner = getLocalBounds().reduced (14, 12);
+    auto inner = getLocalBounds().reduced (16, 12);
     auto header = inner.removeFromTop (26);
 
     // Ear name.
