@@ -235,7 +235,7 @@ MainComponent::MainComponent() {
     rateWarn.setColour (juce::Label::textColourId, Theme::warn());
     rateWarn.setFont (juce::Font (juce::FontOptions (12.0f)));
     railContent.addAndMakeVisible (rateWarn);
-    styleEyebrow (bitLabel, "PREFERRED DEPTH");
+    styleEyebrow (bitLabel, "BIT DEPTH");
     railContent.addAndMakeVisible (bitLabel);
     bitBox.onChange = [this] { onBitDepthChosen(); };
     railContent.addAndMakeVisible (bitBox);
@@ -1089,7 +1089,7 @@ void MainComponent::applyTextColours() {
     versionLabel.setColour (juce::Label::textColourId, Theme::textDim());   // HIG: textFaint was 2.4:1; textDim ~5.3:1
     styleEyebrow (combineLabel,  "COMBINE MODE");
     styleEyebrow (rateLabel,     "RATE");
-    styleEyebrow (bitLabel,      "PREFERRED DEPTH");
+    styleEyebrow (bitLabel,      "BIT DEPTH");
     styleEyebrow (firLenLabel,   "FIR LENGTH");
     styleEyebrow (trimLabel,     "OUTPUT TRIM (dB)");
     styleEyebrow (calEyebrow,    "CALIBRATION");
