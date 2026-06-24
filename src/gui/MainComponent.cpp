@@ -875,6 +875,7 @@ void MainComponent::onStartStop() {
         // SILENTLY kill all future grading. Clearing it on every Stop (and Start, below) guarantees a fresh run is
         // never gated off. Safe: clearing it can only ALLOW a grade, never falsely green one. (Review #3.)
         gradeInFlight_.store (false);
+        gradeRunGen_.fetch_add (1, std::memory_order_relaxed);   // invalidate any in-flight grade job from this run (#4)
         // Re-arm the hardware-Dirac auto-detect too: a fresh run must re-observe the output silence + mic sweep.
         maxOutputRenderPeak_ = 0.0f; hwOutputReadable_ = false; hwDetectTick_ = 0;
         // Reset the live in-sweep readout state too, so a held level / sweep-active hold / live text from this
@@ -886,6 +887,7 @@ void MainComponent::onStartStop() {
     } else {
         logLine (eb::DiagnosticLog::Level::Debug, "Button: Start clicked");
         gradeInFlight_.store (false);   // begin every run ungated even if the prior run ended via device-loss (no Stop). #3
+        gradeRunGen_.fetch_add (1, std::memory_order_relaxed);   // new run generation: a prior run's late grade job won't publish (#4)
         if (verifyTicks > 0) {   // a pending L/R check holds the capture device; clear its GUI state
             verifyTicks = 0;
             verifyButton.setButtonText ("Check L/R wiring");
@@ -1954,18 +1956,20 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
     // debounce never races a Stop/reset(). If the debounce says grade, post the heavy deconvolve+grade (reusing
     // matchAlign's alignOffset) on the worker; the existing publish block is unchanged.
     gradeInFlight_.store (true);
+    const uint32_t myGen = gradeRunGen_.load (std::memory_order_relaxed);   // stamp this job's run; a later Stop/Start drops it (#4)
     juce::Component::SafePointer<MainComponent> safe (this);
     auto refCopy = reference;                          // copy for the worker (message-thread snapshot)
     const double rate = referenceRate;
     eb::ReferenceGradePoller* pollerPtr = &poller;     // owned by `this`; debounce applied on the message thread only
-    firPool->addJob ([safe, ear, refCopy = std::move (refCopy), window = std::move (window), rate, pollerPtr]() mutable {
+    firPool->addJob ([safe, ear, refCopy = std::move (refCopy), window = std::move (window), rate, pollerPtr, myGen]() mutable {
       // OFF-THREAD: the heavy match-gate ONLY (no debounce state touched here).
       const eb::GradePollResult mr = eb::ReferenceGradePoller::matchAlign (
           window.data(), (int) window.size(), refCopy.data(), (int) refCopy.size());
       juce::MessageManager::callAsync (
-          [safe, ear, mr, refCopy = std::move (refCopy), window = std::move (window), rate, pollerPtr]() mutable {
+          [safe, ear, mr, refCopy = std::move (refCopy), window = std::move (window), rate, pollerPtr, myGen]() mutable {
         auto* mc = safe.getComponent();
         if (! mc) return;                              // component gone (app closing) -> guard lives on it; moot
+        if (mc->gradeRunGen_.load (std::memory_order_relaxed) != myGen) return;   // a Stop/Start happened since post -> drop this stale grade (#4)
         mc->engine.setLastMatchCoherence (ear, mr.coherence);
         // Debounce on the MESSAGE THREAD (no race with reset()): two consecutive matched polls -> grade.
         const bool didGrade = pollerPtr->applyDebounce (mr.matched);
@@ -1982,7 +1986,7 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
         const int   refLen      = (int) refCopy.size();
         const int   alignOffset = mr.alignOffset;      // where matchAlign located the sweep (gate + grader agree)
         const float coherence   = mr.coherence;        // captured for the ratification log line
-        mc->firPool->addJob ([safe, ear, refCopy = std::move (refCopy), window = std::move (window), rate, refLen, alignOffset, coherence]() mutable {
+        mc->firPool->addJob ([safe, ear, refCopy = std::move (refCopy), window = std::move (window), rate, refLen, alignOffset, coherence, myGen]() mutable {
         // OFFLINE on the worker: the pure grade for the window decide() said to grade. gradeWindow() grades at the
         // SAME offset decide() located (Fix 1 — gate and grade agree; no second xcorr), re-runs the match-gate
         // FIRST there, then quality — a non-sweep segment fails the gate -> stale.
@@ -2005,9 +2009,10 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
         const int irBand  = (int) g.irSnrBand;
         const int thdBand = (int) g.thdBand;
         juce::MessageManager::callAsync ([safe, ear, state, irSnr, thd, mismatch, lowQ, sweepSnr, snrValid, sweepPeak,
-                                          snrBand, irBand, thdBand, coherence, alignOffset, refLen, rate]() {
+                                          snrBand, irBand, thdBand, coherence, alignOffset, refLen, rate, myGen]() {
             auto* mc = safe.getComponent();
             if (! mc) return;
+            if (mc->gradeRunGen_.load (std::memory_order_relaxed) != myGen) return;   // a Stop/Start happened since post -> drop this stale publish (#4)
             // Publish THIS ear's verdict snapshot (the SNR lesson: trio published together); raise the guidance
             // flag matching the verdict. NEITHER flag invalidates the capture (they are guidance only).
             mc->engine.publishReferenceGrade (ear, state, irSnr, thd, mismatch, lowQ);
