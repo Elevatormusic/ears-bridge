@@ -199,6 +199,9 @@ private:
     std::vector<float> loadedReferenceL_, loadedReferenceR_;  // per-channel learned reference samples (empty until learned)
     double             loadedReferenceRateL_ = 0.0, loadedReferenceRateR_ = 0.0;
     std::atomic<bool>  gradeInFlight_ { false };      // guards against re-posting while a grade job runs
+    std::atomic<uint32_t> gradeRunGen_ { 0 };         // bumped on Stop+Start; a grade job stamps it at post and a
+                                                      // stale (prior-run) continuation is dropped, so run A's verdict
+                                                      // can never publish over run B's fresh state (review #4)
     // Task 4 match poll: the 30 Hz timer calls pollReferenceGrade, but the MATCH (a cross-correlation FFT) is
     // throttled to ~every kGradePollTicks ticks (~2 s) while Running + referenceLoaded. Grade on a STABLE
     // MATCH, not on silence: gradedThisSession_ is the one-grade-per-match DEBOUNCE, set when a match session
