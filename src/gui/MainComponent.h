@@ -200,13 +200,12 @@ private:
     // Reference-Based Measurement Monitor (Plan 5): the learned reference held IN MEMORY for grading. The
     // GUI worker (pollReferenceGrade) needs both halves — this reference and the engine's response buffer —
     // to run gradeMeasurement OFFLINE. Populated on a successful learn; the rate drives the Farina offsets.
-    std::vector<float> loadedReference_;              // LEFT-ear alias (kept ONLY for the startup duration log; NOT the grade path)
-    double             loadedReferenceRate_ = 48000.0;
+    // (the old loadedReference_ LEFT alias - a full ~2 MB duplicate kept for one startup log line - was
+    //  removed in the audit Phase B (#62); the log + grade path read loadedReferenceL_/R_ directly.)
     // Per-Ear Per-Channel Grading: the learned reference is PER CHANNEL — ref_L = Dirac's hard-panned LEFT
     // sweep (render ch0), ref_R = the RIGHT sweep (render ch1). They are stored separately (reference_L.f32 /
-    // reference_R.f32) so each earcup is deconvolved against the channel that drove it. Task 4's grade path
-    // (pollReferenceGrade -> gradeOneEar) uses THESE two refs exclusively; loadedReference_ above is only a
-    // LEFT alias the startup diagnostic logs (the grade no longer reads it).
+    // reference_R.f32) so each earcup is deconvolved against the channel that drove it. The grade path
+    // (pollReferenceGrade -> gradeOneEar) and the startup duration log use THESE two refs exclusively.
     std::vector<float> loadedReferenceL_, loadedReferenceR_;  // per-channel learned reference samples (empty until learned)
     double             loadedReferenceRateL_ = 0.0, loadedReferenceRateR_ = 0.0;
     std::atomic<bool>  gradeInFlight_ { false };      // guards against re-posting while a grade job runs

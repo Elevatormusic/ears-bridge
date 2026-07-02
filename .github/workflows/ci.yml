@@ -43,7 +43,7 @@ jobs:
         run: cmake --build build --target EarsBridge eb_tests
 
       - name: Run tests
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --no-tests=error
 
   test-macos:
     runs-on: macos-latest
@@ -63,4 +63,4 @@ jobs:
         run: cmake --build build --target EarsBridge eb_tests
 
       - name: Run tests
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --no-tests=error

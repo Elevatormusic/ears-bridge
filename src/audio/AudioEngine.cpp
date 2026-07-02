@@ -32,6 +32,7 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
                                            float* const* /*out*/, int /*numOut*/,
                                            int numSamples,
                                            const juce::AudioIODeviceCallbackContext&) override {
+        juce::ScopedNoDenormals noDenormals;   // FTZ/DAZ: the FIR convolutions' decaying tails otherwise hit denormals (audit #39)
         if (numIn < 2 || (int) mono.size() < numSamples) { e.hm.reportXrun(); return; }
         const float* l = in[0]; const float* r = in[1];
         if (l == nullptr || r == nullptr) { e.hm.reportXrun(); return; }   // per-pointer guard (cf. render cb)
@@ -157,6 +158,7 @@ struct AudioEngine::RenderCallback : juce::AudioIODeviceCallback {
                                            float* const* out, int numOut,
                                            int numSamples,
                                            const juce::AudioIODeviceCallbackContext&) override {
+        juce::ScopedNoDenormals noDenormals;   // FTZ/DAZ on the render/ASRC path (audit #39)
         if ((int) mono.size() < numSamples) { e.hm.reportXrun(); return; }
         // D8: re-read the render device's live format every block. On WASAPI shared mode the
         // getCurrent* accessors return cached values (no syscall). A sleep/wake or OS shared-mode
@@ -207,6 +209,7 @@ struct AudioEngine::VerifyCallback : juce::AudioIODeviceCallback {
                                            float* const* /*out*/, int /*numOut*/,
                                            int numSamples,
                                            const juce::AudioIODeviceCallbackContext&) override {
+        juce::ScopedNoDenormals noDenormals;   // FTZ/DAZ (audit #39)
         if (numIn < 2) return;
         const float* l = in[0]; const float* r = in[1];
         float pkL = 0, pkR = 0;
@@ -251,7 +254,10 @@ void AudioEngine::clearLeftCalFir()  { graph.clearFir (0); }   // back to unity 
 void AudioEngine::clearRightCalFir() { graph.clearFir (1); }
 void AudioEngine::setCombineMode (eb::CombineMode m) { graph.setCombineMode (m); }
 void AudioEngine::setSweepSchedule (const SweepSchedule& s) {
-    jassert (reconfigAllowed());   // STOPPED-only: loadSchedule allocates + is not mid-run safe (Task-3 verifier hand-off)
+    // STOPPED-only: loadSchedule allocates + is not mid-run safe (Task-3 verifier hand-off). The release-mode
+    // early-return is the real guard - a bare jassert compiles out and would let a mid-run call race the
+    // capture thread reading schedule_.segments (UB). Mirrors applyCalibrationGeneration's backstop (audit #13).
+    if (! reconfigAllowed()) { jassertfalse; return; }
     graph.setSweepSchedule (s);
 }
 void AudioEngine::setOutputTrimDb (double db) {
