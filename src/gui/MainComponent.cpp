@@ -867,8 +867,21 @@ void MainComponent::rebuildFirsAsync() {
     auto right = rightCal.calFile();
     juce::Component::SafePointer<MainComponent> safe (this);
 
-    firPool->removeAllJobs (false, 0);                  // request the previous job stop; the genId check below is the real guard
-    firPool->addJob ([safe, genId, sr, taps, mode, left, right]() mutable {
+    // #14: purge ONLY superseded FIR-build jobs. The old removeAllJobs(false,0) deleted EVERY queued job on
+    // the single-threaded pool - including a queued Learn capture, whose continuation (the only place
+    // learning_ clears) then never ran, wedging the Learn button for the session. FIR builds are posted as
+    // NAMED jobs so the purge can select exactly them; the genId check below remains the correctness guard.
+    struct FirBuildSelector : juce::ThreadPool::JobSelector {
+        bool isJobSuitable (juce::ThreadPoolJob* j) override { return j->getJobName() == "fir-build"; }
+    } firSel;
+    firPool->removeAllJobs (false, 0, &firSel);
+
+    struct FirBuildJob : juce::ThreadPoolJob {
+        std::function<void()> work;
+        explicit FirBuildJob (std::function<void()> w) : juce::ThreadPoolJob ("fir-build"), work (std::move (w)) {}
+        JobStatus runJob() override { work(); return jobHasFinished; }
+    };
+    firPool->addJob (new FirBuildJob ([safe, genId, sr, taps, mode, left, right]() mutable {
         eb::CalibrationGeneration g;
         g.id = genId; g.sampleRate = sr; g.taps = taps; g.mode = mode;
         if (left && right) {
@@ -890,7 +903,10 @@ void MainComponent::rebuildFirsAsync() {
             mc->engine.applyCalibrationGeneration (std::move (g));
             mc->updateStartGate();
         });
-    });
+    }), /*deleteJobWhenFinished*/ true);
+    // #3: the generation just bumped, so the gate is logically CLOSED until the async build lands - grey the
+    // Start button NOW (rate/FIR-length/complex handlers previously left it enabled through the build window).
+    updateStartGate();
 }
 
 void MainComponent::onStartStop() {
@@ -915,8 +931,21 @@ void MainComponent::onStartStop() {
         sweepActiveTicks_ = 0; sweepActiveReleaseTicks_ = 0; liveTextTick_ = 0; liveWasActive_ = false;
         liveHeldPrimary_.clear();
         logLine (eb::DiagnosticLog::Level::Info, "Stop: measurement stopped by the user.");
+        // #3 heal: if a FIR-affecting change landed MID-RUN, its build continuation no-oped on the reconfig
+        // gate before recording builtGenId_, and nothing re-posts - calibrationApplied() would stay false
+        // forever ("Preparing calibration..." with Start dead). Now that we are stopped, re-post the build.
+        if (engine.requestedGeneration() != engine.builtGeneration())
+            rebuildFirsAsync();
     } else {
         logLine (eb::DiagnosticLog::Level::Debug, "Button: Start clicked");
+        // #3 TOCTOU re-check AT CLICK TIME: a rate/FIR-length/complex-phase change bumps the cal generation
+        // asynchronously and the button's enabled-state may be stale - never start a run on a superseded or
+        // half-built calibration. Refuse, resync the gate, and let the user re-click once it's ready.
+        if (const auto gate = computeStartGate(); ! gate.ready) {
+            logLine (eb::DiagnosticLog::Level::Warn, "Start refused: gate not ready at click time (stale button state)");
+            updateStartGate();
+            return;
+        }
         gradeInFlight_.store (false);   // begin every run ungated even if the prior run ended via device-loss (no Stop). #3
         gradeRunGen_.fetch_add (1, std::memory_order_relaxed);   // new run generation: a prior run's late grade job won't publish (#4)
         if (verifyTicks > 0) {   // a pending L/R check holds the capture device; clear its GUI state
@@ -963,29 +992,37 @@ void MainComponent::onStartStop() {
     updateStartGate();
 }
 
-void MainComponent::updateStartGate() {
-    const bool running  = engine.status() == EngineStatus::Running;
-    const bool haveDevs = inputPicker.selectedDevice().has_value()
-                       && outputPicker.selectedDevice().has_value();
+MainComponent::GateSnapshot MainComponent::computeStartGate() const {
+    GateSnapshot g;
+    g.haveDevs = inputPicker.selectedDevice().has_value()
+              && outputPicker.selectedDevice().has_value();
     // Start requires a VALID, fully-built, atomically-applied generation (requested==built==applied,
     // valid) -- not merely two parsed files. This is the stale/incomplete/invalid guard (P0-02/P0-07).
-    const bool haveCals = engine.calibrationApplied();
+    g.haveCals = engine.calibrationApplied();
     // D7/R17: with real EARS + virtual cable, block non-AutoPerEar so the user can't record a
     // summed/single-ear signal into Dirac.
-    const bool wrongMode = isRealEarsWithCable() && settings.combineMode() != CombineMode::AutoPerEar;
+    g.wrongMode = isRealEarsWithCable() && settings.combineMode() != CombineMode::AutoPerEar;
     // P1-09: a real EARS into an output that is NOT a verified virtual sink would record into a
     // device Dirac never sees. Block Start until the user picks the virtual audio cable.
-    const bool physicalOutput = isRealEarsInput()
-                             && outputPicker.selectedDevice().has_value()
-                             && ! outputPicker.selectedDevice()->isVirtualSink;
+    g.physicalOutput = isRealEarsInput()
+                    && outputPicker.selectedDevice().has_value()
+                    && ! outputPicker.selectedDevice()->isVirtualSink;
     // No cal file loaded for EITHER ear -> the engine runs a neutral unity passthrough (clearLeftCalFir/
     // clearRightCalFir restore unity), a valid-but-uncalibrated state. Allow Start (with a warning) rather
     // than gating on it; a cal that IS loaded but not yet validly applied (half-built) still blocks via haveCals.
-    const bool noCalsLoaded = settings.leftCalPath().isEmpty() && settings.rightCalPath().isEmpty();
+    g.noCalsLoaded = settings.leftCalPath().isEmpty() && settings.rightCalPath().isEmpty();
     // #3: the advanced override relaxes ONLY the two policy gates (wrongMode, physicalOutput) for non-Dirac
     // use cases. It NEVER bypasses haveDevs. The cal requirement is met by a valid applied cal OR no cal at all.
-    const bool ready    = eb::startReady (haveDevs, haveCals, wrongMode, physicalOutput,
-                                          settings.advancedOverride(), noCalsLoaded);
+    g.ready = eb::startReady (g.haveDevs, g.haveCals, g.wrongMode, g.physicalOutput,
+                              settings.advancedOverride(), g.noCalsLoaded);
+    return g;
+}
+
+void MainComponent::updateStartGate() {
+    const bool running  = engine.status() == EngineStatus::Running;
+    const auto gate     = computeStartGate();
+    const bool haveDevs = gate.haveDevs, haveCals = gate.haveCals, wrongMode = gate.wrongMode,
+               physicalOutput = gate.physicalOutput, noCalsLoaded = gate.noCalsLoaded, ready = gate.ready;
     startStop.setEnabled (running || ready);
     // Debug, on-change only (updateStartGate runs at 30 Hz): record WHETHER the gate is enabled and, when
     // disabled, the exact reason from the locals above — this is what explains a greyed-out Start button.
@@ -1086,7 +1123,15 @@ void MainComponent::updateControlsEnabled() {
     firLenBox.setEnabled          (! frozen);
     complexPhaseToggle.setEnabled (! frozen);
     trimSlider.setEnabled         (! frozen);
-    learnRefButton.setEnabled     (! frozen);   // the loopback learn can't run alongside the live measurement
+    // #6: the device pickers were the ONLY config controls left live while Running - a mid-run pick committed
+    // to the combo while the handler early-returned, so the UI named device B while the engine measured device
+    // A (and every gate/status read evaluated B), persisting after Stop. Freeze them like everything else.
+    inputPicker.setEnabled        (! frozen);
+    outputPicker.setEnabled       (! frozen);
+    // #22: the learn enable-state is computed HERE, in one place, from ALL of its inputs. The old unconditional
+    // re-enable clobbered the hardware-Dirac disable and the cancel-window disable on the next gate refresh.
+    const bool cancelPending = learning_ && learnCancelRequested_.load (std::memory_order_relaxed);
+    learnRefButton.setEnabled (! frozen && ! settings.diracHardwareProcessor() && ! cancelPending);
 }
 
 void MainComponent::syncPlotScales() {
@@ -1317,7 +1362,9 @@ void MainComponent::updateStatusLine() {
             //                 lines. Both persist (set-if-changed) and never flip back to "waiting".
             // We set statusLine here and let renderEarStatusLine commit statusLineR, so perEarDriven=true keeps
             // the generic end-of-function commit from clobbering either line.
-            setLabelIfChanged (statusLine, "Sweep captured - safe to run the next sweep", Theme::ok());
+            // #49: compose the chain advisory INTO this single commit (ok = calm) - the old post-commit append
+            // stripped + re-suffixed the label every tick, defeating the set-if-changed no-churn design.
+            setLabelIfChanged (statusLine, "Sweep captured - safe to run the next sweep" + chainAdvisoryTail(), Theme::ok());
             setTooltipIfChanged (statusLine, {});
             renderEarStatusLine (1, "R", statusLineR);        // R-ear per-ear detail on the second line
             perEarDriven = true;
@@ -1493,11 +1540,10 @@ void MainComponent::updateStatusLine() {
     // stays put — no clear-then-reset re-append every tick (Bug B). For perEarDriven branches the per-ear
     // renderer owns statusLine; we apply the same idempotent append to whatever it committed, guarded so the
     // advisory is never double-appended on a subsequent tick.
-    const bool wantAdvisory = chainVerdict_.checked && chainVerdict_.all48k
-                           && chainVerdict_.advisory.isNotEmpty();
     if (! perEarDriven) {
-        if (wantAdvisory && ((sCol == Theme::ok()) || (sCol == Theme::textDim())))
-            sText = sText.isNotEmpty() ? (sText + " - " + chainVerdict_.advisory) : chainVerdict_.advisory;
+        const auto tail = chainAdvisoryTail();
+        if (tail.isNotEmpty() && ((sCol == Theme::ok()) || (sCol == Theme::textDim())))
+            sText = sText.isNotEmpty() ? (sText + tail) : chainVerdict_.advisory;
         // SINGLE COMMIT (Bug B: set-if-changed, no clear-then-reset). Each branch wrote the desired
         // statusLine/statusLineR (text, colour, tooltip) into locals; commit once, writing each label only
         // when it actually changed so the lines persist and the notes don't flicker.
@@ -1505,16 +1551,15 @@ void MainComponent::updateStatusLine() {
         setTooltipIfChanged (statusLine,  sTip);
         setLabelIfChanged (statusLineR, s2Text, s2Col);
         setTooltipIfChanged (statusLineR, s2Tip);
-    } else if (wantAdvisory) {
-        // perEarDriven: the per-ear renderer already committed statusLine via set-if-changed. Append the
-        // advisory to it idempotently (only when calm and not already suffixed), again set-if-changed.
-        const auto curCol = statusLine.findColour (juce::Label::textColourId);
-        const bool calm   = (curCol == Theme::ok()) || (curCol == Theme::textDim());
-        const auto cur    = statusLine.getText();
-        const auto tail   = " - " + chainVerdict_.advisory;
-        if (calm && ! cur.endsWith (tail))
-            setLabelIfChanged (statusLine, cur.isNotEmpty() ? (cur + tail) : chainVerdict_.advisory, curCol);
     }
+    // perEarDriven: the advisory is composed INSIDE the per-ear/hasGrade commits themselves (#49) - the old
+    // append-after-commit here rewrote the label twice per tick (strip then re-suffix), churning repaints.
+}
+
+// " - <advisory>" when the chain-config advisory should decorate a calm status line; empty otherwise.
+juce::String MainComponent::chainAdvisoryTail() const {
+    return (chainVerdict_.checked && chainVerdict_.all48k && chainVerdict_.advisory.isNotEmpty())
+         ? " - " + chainVerdict_.advisory : juce::String();
 }
 
 // Per-Ear Per-Channel Grading (Task 5): drive BOTH per-ear status lines. Called ONLY from the Running +
@@ -1522,7 +1567,7 @@ void MainComponent::updateStatusLine() {
 // pre-sweep activity, output-clip, combined low-SNR) has precedence and short-circuits before this. Pure
 // DISPLAY: it reads the ear-indexed engine getters and never touches grading, the match-gate, or thresholds.
 void MainComponent::renderPerEarStatusLines() {
-    renderEarStatusLine (0, "L", statusLine);
+    renderEarStatusLine (0, "L", statusLine, /*appendAdvisory*/ true);   // line 1 carries the chain advisory (#49)
     renderEarStatusLine (1, "R", statusLineR);
 }
 
@@ -1536,7 +1581,7 @@ void MainComponent::renderPerEarStatusLines() {
 //   Learned / NotGraded / NotLearned -> dim "L: waiting for the sweep" (this ear hasn't graded yet this run).
 // Per-ear low SNR (this ear's sweep ran too close to the room floor) appends a short " (low SNR)". Lines are
 // kept SHORT for the title-bar width. NO grading logic here — display only.
-void MainComponent::renderEarStatusLine (int ear, const char* prefix, juce::Label& label) {
+void MainComponent::renderEarStatusLine (int ear, const char* prefix, juce::Label& label, bool appendAdvisory) {
     const auto  state    = (eb::RefMonState) engine.refMonState (ear);
     const juce::String p = juce::String (prefix) + ": ";
     // This ear's sweep-to-room-noise SNR is published (>0) only when it graded with a valid SNR; flag low
@@ -1634,8 +1679,11 @@ void MainComponent::renderEarStatusLine (int ear, const char* prefix, juce::Labe
     }
 
     // Commit via set-if-changed (Bug B): the per-ear verdict persists tick-to-tick and only repaints when the
-    // ear's state/metrics actually change, so it never flickers.
-    setLabelIfChanged (label, text + snrTail + peakTail, col);
+    // ear's state/metrics actually change, so it never flickers. The chain advisory (when requested and this
+    // line lands CALM) is composed into this single commit (#49) - never appended after the fact.
+    const auto advisory = (appendAdvisory && (col == Theme::ok() || col == Theme::textDim()))
+                        ? chainAdvisoryTail() : juce::String();
+    setLabelIfChanged (label, text + snrTail + peakTail + advisory, col);
     setTooltipIfChanged (label, tip);
 }
 
@@ -1731,6 +1779,15 @@ void MainComponent::onLearnReference() {
         learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
         learnRefResultLabel.setText ("Stop the bridge before learning a reference.", juce::dontSendNotification);
         logLine (eb::DiagnosticLog::Level::Warn, "Learn refused: bridge is running.");
+        return;
+    }
+    if (settings.diracHardwareProcessor()) {
+        // #22 backstop: the button is normally disabled in hardware-Dirac mode (updateControlsEnabled), but a
+        // stale enable must still refuse - the box plays its sweep internally, there is no PC loopback to learn.
+        learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
+        learnRefResultLabel.setText ("Hardware Dirac: the processor plays the sweep internally - there is no PC loopback to learn.",
+                                     juce::dontSendNotification);
+        logLine (eb::DiagnosticLog::Level::Warn, "Learn refused: hardware-Dirac processor mode.");
         return;
     }
 
@@ -2254,6 +2311,10 @@ void MainComponent::timerCallback() {
         gradePollerL_.reset(); gradePollerR_.reset();
         gradeDotsL_.clear();   gradeDotsR_.clear();
         startStop.setButtonText ("Start");
+        // #3 heal (same strand as the Stop path): a mid-run FIR change whose build no-oped on the reconfig
+        // gate must be re-posted now the engine is out of Running, or the Start gate stays closed forever.
+        if (engine.requestedGeneration() != engine.builtGeneration())
+            rebuildFirsAsync();
         updateStartGate();                  // -> updateStatusLine() renders statusErrorMsg_ in the Error branch
         return;
     }
@@ -2389,9 +2450,13 @@ void MainComponent::timerCallback() {
 // MainComponent (full window height, behind the Viewport) so they stay put while the content scrolls.
 void MainComponent::RailContent::paint (juce::Graphics&) {}
 
+// Title-bar height - ONE constant shared by paint() and resized() (audit #25: paint stayed at 56 when the
+// layout grew to 76, so the R status line + dots rendered below the painted bar with the separator crossing them).
+static constexpr int kBarH = 76;
+
 void MainComponent::paint (juce::Graphics& g) {
     g.fillAll (Theme::bg());
-    const int barH = 56, railW = 262;
+    const int barH = kBarH, railW = 262;
     auto bar = getLocalBounds().removeFromTop (barH);
 
     // Title bar + left rail backdrops. The rail fill spans the full window height below the bar; the
@@ -2541,7 +2606,7 @@ void MainComponent::resized() {
     auto area = getLocalBounds();
 
     // --- Title bar ---
-    auto bar = area.removeFromTop (76);   // fits the 68px per-ear status STACK (4 rows) + margin - was 56 and clipped it
+    auto bar = area.removeFromTop (kBarH);   // fits the 68px per-ear status STACK (4 rows) + margin; shared with paint() (audit #25)
     {
         auto x = bar.reduced (16, 0);
         brandLabel.setBounds (x.removeFromLeft (200).withTrimmedLeft (24));

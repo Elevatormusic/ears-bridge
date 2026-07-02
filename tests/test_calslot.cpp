@@ -25,6 +25,28 @@ TEST_CASE("CalSlotComponent: type-warning label never overlaps the filename labe
     CHECK_FALSE (file->getBounds().intersects (warn->getBounds()));
 }
 
+// #38: a persisted cal path that has gone STALE (file moved/deleted) must leave the user a way to CLEAR it -
+// the Remove button must be visible on the error card (it used to exist only on a loaded card, so the error
+// re-appeared every launch with Start locked closed and no affordance to unstick it).
+TEST_CASE("CalSlotComponent: a failed load from a stale path shows the Remove (clear) button") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::CalSlotComponent slot ("Left ear");
+    slot.setSize (420, 206);
+
+    const juce::File gone ("Z:/definitely/not/here/L_HEQ_000-0000.txt");
+    REQUIRE_FALSE (slot.loadFromFile (gone));
+
+    auto* warn = slot.findChildWithID ("calWarn");
+    REQUIRE (warn != nullptr);
+    CHECK (warn->isVisible());                       // the error is surfaced...
+    bool sawVisibleButton = false;                    // ...and a Remove button is reachable to clear the path
+    for (int i = 0; i < slot.getNumChildComponents(); ++i)
+        if (auto* b = dynamic_cast<juce::TextButton*> (slot.getChildComponent (i)))
+            if (b->getButtonText() == "Remove" && b->isVisible() && ! b->getBounds().isEmpty())
+                sawVisibleButton = true;
+    CHECK (sawVisibleButton);
+}
+
 // Load a cal file whose CONTENT carries no side line but whose NAME marks the side -> the slot must
 // fill the Unknown content side from the filename (the second signal), so the validator can catch a
 // swap on a content-silent file.

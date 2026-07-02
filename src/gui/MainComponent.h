@@ -66,6 +66,13 @@ private:
     // notes never flicker (HIG: reflect state persistently, never flash). Returns true iff it wrote.
     static bool setLabelIfChanged (juce::Label& label, const juce::String& text, juce::Colour colour);
     void updateActiveEarIndicator (bool silent);   // AutoPerEar "capturing Left/Right" caption + meter accent
+    // The ONE Start-readiness predicate, snapshotted: updateStartGate() renders it into the button + log, and
+    // onStartStop() re-checks it AT CLICK TIME (audit #3: rate/FIR/complex changes bump the cal generation
+    // without a gate refresh, so the button's enabled-state can be stale - a click raced the async build and
+    // started the run on a superseded FIR, then stranded the gate closed).
+    struct GateSnapshot { bool haveDevs = false, haveCals = false, wrongMode = false,
+                          physicalOutput = false, noCalsLoaded = false, ready = false; };
+    GateSnapshot computeStartGate() const;
     void updateStartGate();          // enable Start only when a valid calibration generation is applied
     void updateDiracMicGainHint();   // refresh the "add ~+N dB on Dirac's Mic gain" caption from the live headroom
     void updateCalProblems();        // surface a rejected swap/serial/type loudly ON the offending cal card
@@ -257,7 +264,11 @@ private:
     // IR-SNR/THD/sweepSNR. INFO-not-warn while kIrThresholdsRatified is false (a clean ~13 dB ESS must not
     // false-warn); mismatch/stale -> warn "re-learn"; ungraded -> dim "waiting for the sweep"; per-ear low
     // SNR appends "(low SNR)". prefix is "L:" / "R:".
-    void renderEarStatusLine (int ear, const char* prefix, juce::Label& label);
+    // appendAdvisory: compose the chain-config advisory INTO the single commit when this line lands calm
+    // (ok/dim) - the old post-commit append stripped + re-suffixed the label every tick (audit #49).
+    void renderEarStatusLine (int ear, const char* prefix, juce::Label& label, bool appendAdvisory = false);
+    // " - <advisory>" when the chain-config advisory should decorate a calm status line; empty otherwise.
+    juce::String chainAdvisoryTail() const;
     // Non-modal "Update available" link shown in the title bar when a newer release exists.
     juce::HyperlinkButton updateLink;
     UpdateChecker         updateChecker;
