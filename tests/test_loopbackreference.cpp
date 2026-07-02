@@ -299,11 +299,13 @@ TEST_CASE("SweepEndDetector: a single short transient does not arm + trailing-st
 // up front on EVERY platform (the cancel is checked before any device work and in
 // the stub), so it's headless-safe — no real endpoint required.
 // ---------------------------------------------------------------------------
-TEST_CASE("captureLoopback returns promptly with a cancelled result when the cancel token is pre-set") {
+TEST_CASE("captureLoopbackStereo returns promptly with a cancelled result when the cancel token is pre-set") {
+    // #64: migrated from the removed legacy mono captureLoopback - the per-channel capture is the
+    // ONLY loopback now, and it honours the same cooperative-cancel contract on every platform.
     std::atomic<bool> cancel { true };                  // already requested before we even call
     const auto t0 = std::chrono::steady_clock::now();
     // A 26 s nominal capture: if cancel were ignored this would block far past the budget below.
-    auto cap = eb::captureLoopback ("CABLE", 26.0, 48000.0, &cancel);
+    auto cap = eb::captureLoopbackStereo ("CABLE", 26.0, 48000.0, &cancel);
     const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds> (
                                std::chrono::steady_clock::now() - t0).count();
 

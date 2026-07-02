@@ -138,8 +138,8 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
   <p class="tag">Measure your headphones with Dirac Live.</p>
   <p class="lede">Dirac Live takes one calibrated microphone. A miniDSP EARS has two — one per ear. EARS Bridge sits between them: it applies each ear's calibration and presents it to Dirac through a virtual audio device as the single microphone it expects. By default it runs in Auto per-ear mode, following Dirac's sweep so each earcup is measured in turn rather than combined.</p>
   <div class="cta">
-    <a class="btn" href="https://github.com/Elevatormusic/ears-bridge/releases/latest/download/EARS-Bridge-Windows-Setup.exe"><i class="ti ti-brand-windows" aria-hidden="true"></i>Download for Windows</a>
-    <a class="btn" href="https://github.com/Elevatormusic/ears-bridge/releases/latest/download/EARS-Bridge-macOS.dmg"><i class="ti ti-brand-apple" aria-hidden="true"></i>Download for macOS</a>
+    <a class="btn" data-dl="win" href="https://github.com/Elevatormusic/ears-bridge/releases"><i class="ti ti-brand-windows" aria-hidden="true"></i>Download for Windows</a>
+    <a class="btn" data-dl="mac" href="https://github.com/Elevatormusic/ears-bridge/releases"><i class="ti ti-brand-apple" aria-hidden="true"></i>Download for macOS</a>
   </div>
   <p class="meta">Free · open source · Windows 10/11 and macOS · works with EARS and EARS&nbsp;Pro</p>
   <div class="demowrap">
@@ -393,7 +393,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
         <li>Install <a href="https://vb-audio.com/Cable/">VB-CABLE</a> and reboot if asked.</li>
         <li>On first launch, SmartScreen may warn — choose <b>More info → Run anyway</b> (the app isn't code-signed yet).</li>
       </ol>
-      <a class="btn" href="https://github.com/Elevatormusic/ears-bridge/releases/latest/download/EARS-Bridge-Windows-Setup.exe"><i class="ti ti-download" aria-hidden="true"></i>Download</a>
+      <a class="btn" data-dl="win" href="https://github.com/Elevatormusic/ears-bridge/releases"><i class="ti ti-download" aria-hidden="true"></i>Download</a>
     </div>
     <div class="dlcard">
       <h3><i class="ti ti-brand-apple" aria-hidden="true"></i>macOS</h3>
@@ -402,7 +402,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
         <li>Install <a href="https://existential.audio/blackhole/">BlackHole 2ch</a>.</li>
         <li>Not notarized yet — the first launch is blocked. Open <b>System Settings → Privacy &amp; Security</b>, scroll down, and click <b>Open Anyway</b> (or run <code>xattr -dr com.apple.quarantine "/Applications/EARS Bridge.app"</code> in Terminal).</li>
       </ol>
-      <a class="btn" href="https://github.com/Elevatormusic/ears-bridge/releases/latest/download/EARS-Bridge-macOS.dmg"><i class="ti ti-download" aria-hidden="true"></i>Download</a>
+      <a class="btn" data-dl="mac" href="https://github.com/Elevatormusic/ears-bridge/releases"><i class="ti ti-download" aria-hidden="true"></i>Download</a>
     </div>
   </div>
 </div></section>
@@ -416,6 +416,29 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
   <a href="https://github.com/Elevatormusic/ears-bridge#readme">Docs</a>
   <p class="disc">EARS Bridge is an independent open-source project. Not affiliated with or endorsed by miniDSP or Dirac. EARS, EARS Pro and Dirac Live are trademarks of their respective owners.</p>
 </div></footer>
+<script>
+(function(){
+  // Download buttons (audit #11): every release so far ships prerelease:true, and GitHub's
+  // /releases/latest endpoint EXCLUDES prereleases - the old static "latest/download/<asset>"
+  // links 404'd for every visitor. The buttons now fall back statically to the releases PAGE
+  // (always valid), and this resolver upgrades them to direct links for the NEWEST release
+  // (prereleases included, drafts excluded) via the public API. On any failure the page
+  // fallback simply remains.
+  try {
+    fetch('https://api.github.com/repos/Elevatormusic/ears-bridge/releases?per_page=1')
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(rel){
+        if(!rel || !rel.length || !rel[0].assets) return;
+        var want = { win: 'EARS-Bridge-Windows-Setup.exe', mac: 'EARS-Bridge-macOS.dmg' };
+        Object.keys(want).forEach(function(k){
+          var a = rel[0].assets.find(function(x){ return x.name === want[k]; });
+          if(!a || !a.browser_download_url) return;
+          document.querySelectorAll('[data-dl="'+k+'"]').forEach(function(el){ el.href = a.browser_download_url; });
+        });
+      }).catch(function(){});
+  } catch(e){}
+})();
+</script>
 <script>
 (function(){
   // The before/after reveal animates a non-compositable SVG width, so it repaints every

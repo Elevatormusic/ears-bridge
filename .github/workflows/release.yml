@@ -86,6 +86,11 @@ jobs:
         with:
           files: dist/*.exe
           generate_release_notes: true
+          # Audit #11 - POLICY NOTE: GitHub's /releases/latest endpoint EXCLUDES prereleases, so while
+          # every release ships prerelease:true, the update notifier (which polls /releases/latest)
+          # cannot see ANY release and the old static site links 404'd (the site now resolves the
+          # newest release via the list API instead). Flip this to false for the first release that
+          # should auto-notify existing users - the planned measurement-corruption-fix release.
           prerelease: true   # alpha: every build ships as a pre-release
 
   macos-installer:
@@ -120,4 +125,9 @@ jobs:
         with:
           files: dist/*.dmg
           generate_release_notes: true
+          # Audit #11 - POLICY NOTE: GitHub's /releases/latest endpoint EXCLUDES prereleases, so while
+          # every release ships prerelease:true, the update notifier (which polls /releases/latest)
+          # cannot see ANY release and the old static site links 404'd (the site now resolves the
+          # newest release via the list API instead). Flip this to false for the first release that
+          # should auto-notify existing users - the planned measurement-corruption-fix release.
           prerelease: true   # alpha: every build ships as a pre-release
