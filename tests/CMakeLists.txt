@@ -49,6 +49,9 @@ add_executable(eb_tests
     test_combinegate.cpp
     test_startgate.cpp
     test_sweepschedule.cpp
+    test_simsignals.cpp
+    test_virtualdevices.cpp
+    test_sim_endtoend.cpp
     test_scheduledearrouter.cpp
     test_sweepschedulestore.cpp
     test_referencemetastore.cpp
