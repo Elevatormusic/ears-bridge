@@ -16,7 +16,8 @@
 #include <catch2/catch_approx.hpp>
 
 #include "audio/ReferenceGradePoller.h"
-#include "gui/SnrStatus.h"   // eb::kMinSweepSnrDb — the GUI threshold the sweep-SNR predicate uses
+#include "gui/SnrStatus.h"     // eb::kMinSweepSnrDb — the GUI threshold the sweep-SNR predicate uses
+#include "gui/GradeGuards.h"   // #32: the PRODUCTION grade-path predicates (rateAllowsGrade / wouldRaiseLowSnr)
 
 #include <vector>
 #include <cmath>
@@ -399,14 +400,14 @@ TEST_CASE("ReferenceGradePoller: mostly-silence window with a sweep at the very 
 // rate-compare condition that the GUI applies BEFORE calling decide(): differing rates -> do not grade.
 // ==================================================================================================
 TEST_CASE("ReferenceGradePoller: a wrong-rate response is gated out before grading (rate guard) [NEG-5]") {
-    // The GUI guard (MainComponent::pollReferenceGrade): grade only if the rates agree within 1 Hz.
-    auto rateAllowsGrade = [] (double referenceRate, double responseRate) {
-        return ! (referenceRate > 0.0 && responseRate > 0.0 && std::abs (responseRate - referenceRate) > 1.0);
-    };
-    CHECK_FALSE (rateAllowsGrade (48000.0, 44100.0));   // 44.1k response vs 48k reference -> NOT graded
-    CHECK_FALSE (rateAllowsGrade (44100.0, 48000.0));   // and the reverse
-    CHECK       (rateAllowsGrade (48000.0, 48000.0));   // matched rates -> grade allowed
-    CHECK       (rateAllowsGrade (48000.0, 48000.5));   // within tolerance -> still allowed
+    // The GUI guard (MainComponent::pollReferenceGrade) — #32: this is the PRODUCTION predicate from
+    // gui/GradeGuards.h, not a test-local mirror, so a drift in the real condition fails HERE.
+    CHECK_FALSE (eb::rateAllowsGrade (48000.0, 44100.0));   // 44.1k response vs 48k reference -> NOT graded
+    CHECK_FALSE (eb::rateAllowsGrade (44100.0, 48000.0));   // and the reverse
+    CHECK       (eb::rateAllowsGrade (48000.0, 48000.0));   // matched rates -> grade allowed
+    CHECK       (eb::rateAllowsGrade (48000.0, 48000.5));   // within tolerance -> still allowed
+    CHECK       (eb::rateAllowsGrade (0.0, 48000.0));       // unknown reference rate -> guard can't act
+    CHECK       (eb::rateAllowsGrade (48000.0, 0.0));       // unknown response rate -> guard can't act
 
     // And confirm the underlying hazard the guard prevents: a sweep matched against itself at the wrong rate
     // can still match the gate (so the guard, not the gate, is what stops the false grade). The reference is a
@@ -471,10 +472,10 @@ TEST_CASE("ReferenceGradePoller: a NaN/Inf window never matches (no crash, no co
     CHECK_FALSE (r.didGrade);                          // no grade fires from a NaN/Inf window
 }
 
-// The GUI predicate that raises the LowSnr guidance flag (MainComponent::pollReferenceGrade): flag iff the SNR
-// is VALID and the sweep ran below the provisional threshold. Mirror it so the tests assert the exact decision.
+// The GUI predicate that raises the LowSnr guidance flag (MainComponent::pollReferenceGrade) — #32: delegates
+// to the PRODUCTION predicate in gui/GradeGuards.h so the tests assert the exact decision the GUI applies.
 static bool wouldRaiseLowSnr (const eb::GradePollResult& r) {
-    return r.sweepSnrValid && r.sweepSnrDb < eb::kMinSweepSnrDb;
+    return eb::wouldRaiseLowSnr (r.sweepSnrValid, r.sweepSnrDb);
 }
 
 // ==================================================================================================

@@ -26,8 +26,21 @@ if not defined ISCC (
   exit /b 1
 )
 
-REM 3. Compile the installer into dist\.
-"%ISCC%" "%~dp0..\installer\ears-bridge.iss" || exit /b 1
+REM 3. #69: read the version from CMakeLists.txt (the single source, same line the release workflow
+REM    checks the tag against) and pass it to ISCC. Without the define the .iss fell back to a stale
+REM    hardcoded number, producing a mislabeled EARS-Bridge-<old>-Setup.exe.
+set "EBVER="
+REM    Line shape: project(EarsBridge VERSION 0.3.1 LANGUAGES C CXX) -> space-token 3 is the version.
+for /f "tokens=3" %%V in ('findstr /b /c:"project(EarsBridge VERSION" "%~dp0..\CMakeLists.txt"') do set "EBVER=%%V"
+if not defined EBVER (
+  echo.
+  echo ERROR: could not read the version from CMakeLists.txt ^(expected "project(EarsBridge VERSION x.y.z ..."^).
+  exit /b 1
+)
+echo Building installer for version %EBVER%
+
+REM 4. Compile the installer into dist\.
+"%ISCC%" "/DMyAppVersion=%EBVER%" "%~dp0..\installer\ears-bridge.iss" || exit /b 1
 
 echo.
 echo ============================================================

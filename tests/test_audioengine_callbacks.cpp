@@ -140,6 +140,30 @@ void* operator new (std::size_t sz) {
 }
 void operator delete (void* p) noexcept { std::free (p); }
 void operator delete (void* p, std::size_t) noexcept { std::free (p); }
+// #31: over-aligned types (alignas > __STDCPP_DEFAULT_NEW_ALIGNMENT__, e.g. SIMD state) route through the
+// align_val_t overloads, which the scalar hooks above would MISS - count those too so an aligned RT-path
+// allocation can't slip past the assertion. KNOWN BLIND SPOT (accepted, documented): raw std::malloc/calloc
+// and juce::HeapBlock allocate WITHOUT operator new, so a malloc on the callback would not be counted here;
+// that class is covered by review of the callback code, not by this counter.
+void* operator new (std::size_t sz, std::align_val_t al) {
+    if (g_countAllocs.load (std::memory_order_relaxed)) g_allocCount.fetch_add (1, std::memory_order_relaxed);
+    const auto a = (std::size_t) al;
+   #if defined(_MSC_VER)
+    if (auto* p = _aligned_malloc (sz ? sz : a, a)) return p;
+   #else
+    // C11 aligned_alloc requires size to be a multiple of the alignment - round up.
+    const auto rounded = ((sz ? sz : a) + a - 1) / a * a;
+    if (auto* p = std::aligned_alloc (a, rounded)) return p;
+   #endif
+    throw std::bad_alloc();
+}
+#if defined(_MSC_VER)
+void operator delete (void* p, std::align_val_t) noexcept              { _aligned_free (p); }
+void operator delete (void* p, std::size_t, std::align_val_t) noexcept { _aligned_free (p); }
+#else
+void operator delete (void* p, std::align_val_t) noexcept              { std::free (p); }
+void operator delete (void* p, std::size_t, std::align_val_t) noexcept { std::free (p); }
+#endif
 
 TEST_CASE("AudioEngine callbacks: steady-state capture+render are allocation-free") {
     eb::AudioEngine e;

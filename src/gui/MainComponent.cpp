@@ -14,6 +14,7 @@
 #include "audio/HardwareDiracDetect.h"      // eb::sweepWasInternal / hardwareDiracSuggestion (hardware-Dirac)
 #include "platform/OutputActivity.h"        // eb::outputRenderPeakForName (is Dirac's PC output rendering?)
 #include "gui/SnrStatus.h"                  // eb::kMinSweepSnrDb (sweep-to-noise SNR threshold; match-window SNR fix)
+#include "gui/GradeGuards.h"                // #32: the grade-path predicates, shared with the tests (no mirror drift)
 #include "gui/LiveInputStatus.h"            // eb::liveInputStatus (live per-channel in-sweep readout)
 #include "audio/LoopbackReference.h"        // eb::captureLoopback / validateReferenceCapture / readDiracDeviceType (Plan 5)
 #include "audio/SweepScheduleStore.h"       // eb::extractSchedule / serialize+deserialize (AutoPerEar schedule, P0-06)
@@ -2144,10 +2145,10 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
 
     // Fix 2 (honesty): guard the capture rate against THIS ear's reference rate. A measurement at 44.1k matched
     // against a 48k reference is the SAME chirp stretched ~8.8% — it can still clear the provisional match cutoffs
-    // and read green "verified", which is a lie. Both rates are known here, so if they differ by more than a tiny
-    // tolerance, publish ReferenceStale FOR THIS EAR and do NOT grade it.
+    // and read green "verified", which is a lie. The predicate lives in gui/GradeGuards.h (#32) so the tests
+    // assert the PRODUCTION condition. When it refuses, publish ReferenceStale FOR THIS EAR and do NOT grade it.
     const double respRate = engine.gradingResponseRate();
-    if (referenceRate > 0.0 && respRate > 0.0 && std::abs (respRate - referenceRate) > 1.0) {
+    if (! eb::rateAllowsGrade (referenceRate, respRate)) {
         poller.reset();   // a rate change is not a sweep -> re-arm so a later same-rate sweep can grade
         engine.setLastMatchCoherence (ear, 0.0f);
         engine.publishReferenceGrade (ear, (int) eb::RefMonState::ReferenceStale, 0.0f, 0.0f, /*mismatch*/ true, false);
@@ -2234,9 +2235,10 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
             // Match-window sweep-SNR fix: publish THIS ear's sweep SNR and raise the GUIDANCE LowSnr flag when the
             // sweep ran too close to the room floor. Match-gate already passed (we only get here when g.didGrade),
             // so a non-sweep / silent ear never reaches this -> a silent ear NEVER raises LowSnr. GUIDANCE only.
+            // The predicate lives in gui/GradeGuards.h (#32) so the tests assert the PRODUCTION condition.
             if (snrValid) {
                 mc->engine.publishCompletedSweepSnrDb (ear, sweepSnr);
-                if (sweepSnr < eb::kMinSweepSnrDb)
+                if (eb::wouldRaiseLowSnr (snrValid, sweepSnr))
                     mc->engine.raiseLowSnr();
             }
             // Gain-staging readout: publish THIS ear's RAW input sweep peak (dBFS, clip reads positive) so the

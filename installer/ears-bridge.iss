@@ -1,12 +1,16 @@
 ; EARS Bridge - Windows installer (Inno Setup 6)
-; Build with:  tools\build-installer.cmd   (configures + builds Release, then compiles this)
-; or directly: "ISCC.exe" installer\ears-bridge.iss
+; Build with:  tools\build-installer.cmd   (configures + builds Release, passes /DMyAppVersion from
+;              CMakeLists.txt, then compiles this)
+; or directly: "ISCC.exe" /DMyAppVersion=x.y.z installer\ears-bridge.iss
+;              (omitting the define compiles, but labels the installer 0.0.0-dev on purpose)
 ;
 ; Paths below are relative to THIS file (the installer\ folder).
 
 #define MyAppName "EARS Bridge"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.16"
+  ; #69: no hardcoded release fallback - it silently drifted from CMakeLists.txt (stuck at its last
+  ; manual bump). An OBVIOUSLY-wrong dev label can't be mistaken for a real release.
+  #define MyAppVersion "0.0.0-dev"
 #endif
 #define MyAppPublisher "Elevatormusic"
 #define MyAppURL "https://github.com/Elevatormusic/ears-bridge"
