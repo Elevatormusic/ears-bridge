@@ -28,19 +28,26 @@ struct SnrVerdict {
     float snrDbL = 0.0f, snrDbR = 0.0f, snrDbMin = 0.0f;   // per-ear + the min that drives the verdict
 };
 
-// Pure verdict. armFloor = frozen pre-sweep noise floor (linear peak, 0 until armed); peakL/peakR = the
-// per-ear max in-sweep peak; floorStable = the floor-confidence guard. minDb defaults to the provisional
-// threshold. RT-safe: no allocation, no lock, no String.
-[[nodiscard]] inline SnrVerdict evaluateSnr (float armFloor, float peakL, float peakR,
+// Pure verdict, per-ear-floor form (#46): each ear's SNR against ITS OWN noise floor. floorL/floorR =
+// frozen pre-sweep noise floors (linear peak, 0 until armed); peakL/peakR = the per-ear max in-sweep peak;
+// floorStable = the floor-confidence guard. minDb defaults to the provisional threshold. RT-safe: no
+// allocation, no lock, no String. (The single-floor overload below delegates here - it previously graded
+// BOTH ears against one floor, so a noisy right earcup was measured against the quiet ear's floor.)
+[[nodiscard]] inline SnrVerdict evaluateSnr (float floorL, float floorR, float peakL, float peakR,
                                              bool floorStable, float minDb = kMinSweepSnrDb) {
     SnrVerdict v;
     const float tiny = 1.0e-6f;   // floors the log argument so a 0 peak/floor can't produce -inf/NaN
-    v.snrDbL = 20.0f * std::log10 (juce::jmax (peakL, tiny) / juce::jmax (armFloor, tiny));
-    v.snrDbR = 20.0f * std::log10 (juce::jmax (peakR, tiny) / juce::jmax (armFloor, tiny));
+    v.snrDbL = 20.0f * std::log10 (juce::jmax (peakL, tiny) / juce::jmax (floorL, tiny));
+    v.snrDbR = 20.0f * std::log10 (juce::jmax (peakR, tiny) / juce::jmax (floorR, tiny));
     v.snrDbMin = juce::jmin (v.snrDbL, v.snrDbR);   // min: the good ear must NOT vouch for the bad
-    v.floorTrusted = floorStable && armFloor > 0.0f;
+    v.floorTrusted = floorStable && floorL > 0.0f && floorR > 0.0f;
     v.lowSnr = v.floorTrusted && v.snrDbMin < minDb;   // honest silence when the floor isn't trusted
     return v;
+}
+
+[[nodiscard]] inline SnrVerdict evaluateSnr (float armFloor, float peakL, float peakR,
+                                             bool floorStable, float minDb = kMinSweepSnrDb) {
+    return evaluateSnr (armFloor, armFloor, peakL, peakR, floorStable, minDb);
 }
 
 // GUI-side note (builds a juce::String — do NOT call on the audio thread). Empty unless the verdict

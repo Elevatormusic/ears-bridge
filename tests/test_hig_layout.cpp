@@ -13,7 +13,8 @@ TEST_CASE("MainComponent constructs headless with a temp-dir Settings and no net
     auto tmp = juce::File::createTempFile ("");
     tmp.createDirectory();
 
-    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, /*disableNetwork*/ true });
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, /*disableNetwork*/ true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
     mc.setSize (900, 780);
     CHECK (mc.getWidth() == 900);
     CHECK (mc.getNumChildComponents() > 0);   // children laid out, no peer needed
@@ -28,7 +29,10 @@ TEST_CASE("MainComponent constructs headless with a temp-dir Settings and no net
 TEST_CASE("HIG gate: the real editor has no blocking layout finding in any theme/a11y/size") {
     juce::ScopedJuceInitialiser_GUI juceInit;
     auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
-    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true });
+    // #24: fully hermetic - Settings, the reference store AND the log dir all point at the temp dir, so the
+    // scored layout can never depend on this machine's real %APPDATA% reference files or write real logs.
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
     const bool wasDark = eb::Theme::dark();   // restore the static mode at the end (no cross-test leakage)
 
     const auto blocking = [] (const eb::hig::Finding& f) {

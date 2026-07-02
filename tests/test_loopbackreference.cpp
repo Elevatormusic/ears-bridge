@@ -145,6 +145,22 @@ TEST_CASE("validateReferenceCapture REJECTS a capture that is too quiet") {
 }
 
 // ---------------------------------------------------------------------------
+// REJECT — a lone steady TONE (#48). Passes the crest gate (one clean spectral
+// peak per frame ~0.6) and the monotonicity gate (a flat ridge counts as
+// "rising" under the >= hold test) — the ridge-TRAVEL gate is what kills it.
+// ---------------------------------------------------------------------------
+TEST_CASE("validateReferenceCapture #48 REJECTS a lone steady tone (no ridge travel)") {
+    const int n = (int) (4.0 * kFs);
+    std::vector<float> x ((size_t) n);
+    for (int i = 0; i < n; ++i)
+        x[(size_t) i] = 0.25f * (float) std::sin (2.0 * kPi * 1000.0 * (double) i / kFs);   // ~-12 dBFS, in-band level
+    auto r = eb::validateReferenceCapture (x.data(), n, kFs, 3.0);
+    INFO ("reason=" << r.reason);
+    CHECK_FALSE (r.ok);
+    CHECK (r.reason.containsIgnoreCase ("sweep"));
+}
+
+// ---------------------------------------------------------------------------
 // REJECT — contamination (sweep + a loud steady tone = two sources) via self-test
 // ---------------------------------------------------------------------------
 TEST_CASE("validateReferenceCapture REJECTS a contaminated capture (two sources)") {

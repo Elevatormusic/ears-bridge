@@ -169,6 +169,9 @@ public:
         const float clamped = std::isfinite (snrDbMin) ? juce::jlimit (-200.0f, 200.0f, snrDbMin) : 0.0f;
         completedSnrDbMilli_.store ((int) std::lround (clamped * 1000.0f));
     }
+    // NOTE (#15): this combined snapshot deliberately keeps LAST-WRITE semantics ("the current sweep's
+    // verdict" - pinned by tests). The GUI's sticky Low-SNR warning must therefore NOT name this number
+    // (the other ear's later grade overwrites it); it reads the PER-EAR stores and names the offending ear.
     // Read the published min-ear sweep SNR dB of the sweep that last completed; 0.0 until one completes.
     // Message-thread read of the lock-free snapshot (the project's int-milli publish idiom).
     float completedSnrDb() const noexcept { return completedSnrDbMilli_.load() / 1000.0f; }

@@ -85,7 +85,8 @@ float ProcessingGraph::peakGainOfIr (const juce::AudioBuffer<float>& ir) {
     const int n = ir.getNumSamples();
     if (n <= 0) return 1.0f;
     int order = 1; while ((1 << order) < n) ++order;  // FFT length >= IR length
-    ++order;                                          // x2 zero-pad: sample |H(f)| between bin centers
+    order += 2;                                       // x4 zero-pad (#45): the x2 grid max understated a narrow
+                                                      // between-bins peak by up to ~0.91 dB; x4 bounds it ~0.22 dB
     const int fftSize = 1 << order;
     juce::dsp::FFT fft (order);
     std::vector<float> buf ((size_t) fftSize * 2, 0.0f);   // real input in [0,fftSize); real-only xform

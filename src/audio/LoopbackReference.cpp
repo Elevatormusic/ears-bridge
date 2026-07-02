@@ -49,6 +49,10 @@ struct RidgeMetrics {
     float meanCrest    = 0.0f;   // mean per-frame dominant-bin energy fraction (0..1)
     float monotonicity = 0.0f;   // fraction of voiced frame-to-frame steps where the ridge rises (0..1)
     int   voicedFrames = 0;      // frames with enough energy to have a defined ridge
+    int   binSpan      = 0;      // #48: dominant-bin TRAVEL (maxBin - minBin over voiced frames). A real
+                                 // sweep traverses hundreds of bins; a steady tone sits in ~1 (its flat
+                                 // ridge counts as "rising" under the >= step test, so travel is the
+                                 // check monotonicity alone cannot provide).
 };
 
 // PROVISIONAL gates (on-device ratification, like the match-gate cutoffs): tuned
@@ -63,6 +67,9 @@ struct RidgeMetrics {
 // and a stalled ridge fall below). On-device ratification is carried in the plan.
 constexpr float kMinMeanCrest    = 0.45f;
 constexpr float kMinMonotonicity = 0.75f;
+// #48: minimum dominant-bin travel for a "sweep". A full-range ESS crosses hundreds of bins; a steady tone
+// (which passes crest ~0.6 and monotonicity 1.0 via the >= hold test) spans ~0-2. Conservative floor.
+constexpr int   kMinRidgeSpanBins = 8;
 
 // Per-frame minimum energy (relative to the loudest frame) to count as "voiced".
 constexpr float kVoicedFloor = 0.01f;
@@ -117,6 +124,7 @@ RidgeMetrics analyseRidge (const float* x, int n, double /*rate*/) {
     const float floorE = maxFrameEnergy * kVoicedFloor;
     double crestSum = 0.0; int voiced = 0;
     int prevBin = -1; int rising = 0, steps = 0;
+    int loBin = -1, hiBin = -1;                     // #48: voiced dominant-bin extremes -> ridge travel
     for (size_t f = 0; f < frameEnergy.size(); ++f) {
         if (frameEnergy[f] < floorE) { prevBin = -1; continue; }
         crestSum += crest[f];
@@ -126,10 +134,13 @@ RidgeMetrics analyseRidge (const float* x, int n, double /*rate*/) {
             if (domBin[f] >= prevBin) ++rising;     // ridge rises (or holds) -> monotone-up
         }
         prevBin = domBin[f];
+        loBin = (loBin < 0) ? domBin[f] : std::min (loBin, domBin[f]);
+        hiBin = std::max (hiBin, domBin[f]);
     }
     rm.voicedFrames = voiced;
     rm.meanCrest    = voiced > 0 ? (float) (crestSum / voiced) : 0.0f;
     rm.monotonicity = steps  > 0 ? (float) rising / (float) steps : 0.0f;
+    rm.binSpan      = (loBin >= 0) ? (hiBin - loBin) : 0;
     return rm;
 }
 
@@ -315,11 +326,13 @@ ReferenceValidation validateReferenceCapture (const float* samples, int n, doubl
     const RidgeMetrics ridge = analyseRidge (samples, n, rate);
     const bool singleSweep = ridge.voicedFrames >= 4
                           && ridge.meanCrest    >= kMinMeanCrest
-                          && ridge.monotonicity >= kMinMonotonicity;
+                          && ridge.monotonicity >= kMinMonotonicity
+                          && ridge.binSpan      >= kMinRidgeSpanBins;   // #48: a steady tone has no travel
     if (! singleSweep)
-        return { false, "capture is not a clean single sweep - a second source or noise was "
+        return { false, "capture is not a clean single sweep - a second source, a steady tone, or noise was "
                         "detected (tone-purity " + juce::String (ridge.meanCrest, 2)
                         + ", rising " + juce::String (ridge.monotonicity, 2)
+                        + ", travel " + juce::String (ridge.binSpan)
                         + "); silence the room and re-run the sweep" };
 
     return { true, {} };

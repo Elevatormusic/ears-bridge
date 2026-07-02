@@ -92,11 +92,17 @@ struct AudioEngine::CaptureCallback : juce::AudioIODeviceCallback {
         // the consumeSweepComplete edge still also scopes the ClockBridge freeze + the per-ear clip peaks below.
         // RT-safe: evaluateSnr is a few log10 + compares + atomic reads, raiseLowSnr is one atomic OR.
         if (e.session_.consumeSweepComplete()) {
-            // Use the MEASURED floor as the SNR denominator once trusted AND above the digital-silence floor
+            // Use the MEASURED floors as the SNR denominators once trusted AND above the digital-silence floor
             // (a 0.0 measured floor -- pure synthetic silence -- makes peak/floor degenerate); else the arm.
-            const bool useFloor = e.hm.floorValid() && e.hm.measuredFloorLinear (0) > 1.0e-5f;
-            const float snrFloor = useFloor ? e.hm.measuredFloorLinear (0) : e.session_.armNoiseFloor();
-            const auto v = eb::evaluateSnr (snrFloor,
+            // #46: PER-EAR floors - BOTH channels must have a real measured floor before either is trusted,
+            // and each ear is then graded against ITS OWN floor (channel 0's floor previously vouched for a
+            // noisy right earcup).
+            const bool useFloor = e.hm.floorValid()
+                               && e.hm.measuredFloorLinear (0) > 1.0e-5f
+                               && e.hm.measuredFloorLinear (1) > 1.0e-5f;
+            const float floorL = useFloor ? e.hm.measuredFloorLinear (0) : e.session_.armNoiseFloor();
+            const float floorR = useFloor ? e.hm.measuredFloorLinear (1) : e.session_.armNoiseFloor();
+            const auto v = eb::evaluateSnr (floorL, floorR,
                                             e.hm.maxSweepPeakL(), e.hm.maxSweepPeakR(),
                                             e.session_.completedFloorStable() || useFloor);
             if (v.lowSnr) e.hm.raiseLowSnr();
