@@ -2,6 +2,7 @@
 #include "sim/SimSignals.h"
 #include "audio/AudioEngine.h"
 #include <vector>
+#include <functional>
 #include <cmath>
 
 // ==================================================================================================
@@ -32,7 +33,10 @@ struct RenderedOutput {
 // Stream the WHOLE mic timeline. Each iteration: one capture push of N +/- the drift debt, then one
 // render pull of exactly blockFrames (the render clock is the reference). The mic tail is zero-padded
 // so the last partial block still streams. Deterministic: no threads, no timing — a plain loop.
-inline RenderedOutput streamSession (eb::AudioEngine& e, const StereoTimeline& mic, const FeederSpec& f) {
+// `perBlock` (optional) runs after each block — the orchestrator uses it to DRAIN the engine's grade
+// snapshots at the GUI's cadence (the publish is single-buffered: it only refreshes once consumed).
+inline RenderedOutput streamSession (eb::AudioEngine& e, const StereoTimeline& mic, const FeederSpec& f,
+                                     const std::function<void()>& perBlock = {}) {
     RenderedOutput out;
     const int N = f.blockFrames > 0 ? f.blockFrames : 480;
     const size_t total = mic.L.size();
@@ -63,6 +67,7 @@ inline RenderedOutput streamSession (eb::AudioEngine& e, const StereoTimeline& m
         e.driveCaptureCallback (capL.data(), capR.data(), nCap);
         e.driveRenderCallback  (outL.data(), outR.data(), N);
         out.mono.insert (out.mono.end(), outL.begin(), outL.end());
+        if (perBlock) perBlock();
     }
     return out;
 }
