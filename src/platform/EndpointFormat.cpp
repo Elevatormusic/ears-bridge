@@ -22,6 +22,25 @@ EndpointFormat interpretMixFormat (unsigned formatTag, unsigned long rateHz, uns
     return f;
 }
 
+// PURE two-tier match (see the header). Exact (UID case-sensitive / FriendlyName case-insensitive) wins
+// across the whole list before any contains-match is considered; first contains-match is the fallback.
+int pickEndpointMatch (const juce::StringArray& uids, const juce::StringArray& friendlyNames,
+                       const juce::String& nameOrUid) {
+    const int n = juce::jmax (uids.size(), friendlyNames.size());
+    int contains = -1;
+    for (int i = 0; i < n; ++i) {
+        if (i < uids.size() && uids[i] == nameOrUid)
+            return i;                                                     // exact tier: stable UID
+        if (i < friendlyNames.size()) {
+            if (friendlyNames[i].equalsIgnoreCase (nameOrUid))
+                return i;                                                 // exact tier: whole display name
+            if (contains < 0 && friendlyNames[i].containsIgnoreCase (nameOrUid))
+                contains = i;                                             // fallback tier: first contains
+        }
+    }
+    return contains;
+}
+
 } // namespace eb
 
 #if JUCE_WINDOWS
@@ -55,15 +74,44 @@ static void makeWfx (WAVEFORMATEXTENSIBLE& w, int rate, int ch, int bits, bool i
     w.SubFormat     = isFloat ? KSDATAFORMAT_SUBTYPE_IEEE_FLOAT : KSDATAFORMAT_SUBTYPE_PCM;
 }
 
-// Read the active endpoint matching `nameOrUid` (UID-keyed via IMMDevice::GetId, else FriendlyName
-// contains-match), activate an IAudioClient, GetMixFormat for the shared-mode ground truth, and probe
-// EXCLUSIVE support at 48k in that same format. Returns {valid=false} on any miss/failure.
+// Activate an IAudioClient on the matched endpoint and read GetMixFormat (the shared-mode ground truth).
+static EndpointFormat readFormatFromDevice (IMMDevice* dev) {
+    EndpointFormat result;   // valid=false until a successful read
+    IAudioClient* ac = nullptr;
+    if (SUCCEEDED (dev->Activate (__uuidof (IAudioClient), CLSCTX_ALL, nullptr,
+                                  (void**) &ac)) && ac != nullptr) {
+        WAVEFORMATEX* mix = nullptr;
+        if (SUCCEEDED (ac->GetMixFormat (&mix)) && mix != nullptr) {
+            bool extFloat = false;
+            if (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix->cbSize >= 22) {
+                auto* wx = reinterpret_cast<WAVEFORMATEXTENSIBLE*> (mix);
+                extFloat = (wx->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+            }
+            // #29: the EXCLUSIVE probe is skipped - nothing downstream consumes exclusive48kSupported
+            // (checkChainConfig never reads it), yet the IsFormatSupported call ran per endpoint per poll
+            // second. The field stays in the struct (tests pin its pass-through); a future consumer
+            // re-enables the probe here.
+            const bool excl48k = false;
+            result = interpretMixFormat (mix->wFormatTag, mix->nSamplesPerSec,
+                                         mix->nChannels, mix->wBitsPerSample,
+                                         extFloat, excl48k);
+            CoTaskMemFree (mix);
+        }
+        ac->Release();
+    }
+    return result;
+}
+
+// Read the active endpoint matching `nameOrUid` via the two-tier pickEndpointMatch (exact UID/whole-name
+// first, contains fallback), activate an IAudioClient, and GetMixFormat for the shared-mode ground truth.
+// Returns {valid=false} on any miss/failure.
 EndpointFormat readEndpointFormat (const juce::String& nameOrUid, bool isInput) {
     // #29/#33: ONE enumeration. The old pre-resolve (endpointUidForName) ran a complete SECOND enumeration
     // with a property-store read per device on every call - at pollChainConfig's 1 Hz x 3 endpoints, a
-    // steady message-thread COM storm for the app's lifetime. The hint is matched IN-LOOP instead: as a
-    // UID (IMMDevice::GetId - covers callers passing the stable id), else FriendlyName contains (the
-    // original fallback tier, same first-match semantics).
+    // steady message-thread COM storm for the app's lifetime. Instead, collect every (uid, FriendlyName)
+    // pair from THIS enumeration and let the pure pickEndpointMatch decide - exact match across the whole
+    // list BEFORE any contains-match, so "Speakers" can never resolve to "Speakers (USB DAC)" when a plain
+    // "Speakers" endpoint exists (the tier the first one-enumeration refactor dropped).
     const HRESULT co = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
     const bool weInited = SUCCEEDED (co);
     EndpointFormat result;   // valid=false until a successful read
@@ -75,55 +123,39 @@ EndpointFormat readEndpointFormat (const juce::String& nameOrUid, bool isInput) 
         const EDataFlow flow = isInput ? eCapture : eRender;
         if (SUCCEEDED (en->EnumAudioEndpoints (flow, DEVICE_STATE_ACTIVE, &coll)) && coll != nullptr) {
             UINT count = 0; coll->GetCount (&count);
-            for (UINT i = 0; i < count && ! result.valid; ++i) {
+
+            // Pass 1: collect (uid, FriendlyName) per endpoint. Unreadable fields stay empty strings so
+            // the indices keep lining up with the collection.
+            juce::StringArray uids, names;
+            for (UINT i = 0; i < count; ++i) {
+                juce::String uid, name;
                 IMMDevice* dev = nullptr;
                 if (SUCCEEDED (coll->Item (i, &dev)) && dev != nullptr) {
-                    // Match this endpoint: the caller's hint as a stable UID (IMMDevice::GetId); else fall
-                    // back to a case-insensitive FriendlyName contains-match on the raw hint.
-                    bool match = false;
                     LPWSTR id = nullptr;
                     if (SUCCEEDED (dev->GetId (&id)) && id != nullptr) {
-                        if (nameOrUid == juce::String (id)) match = true;
+                        uid = juce::String (id);
                         CoTaskMemFree (id);
                     }
-                    if (! match) {
-                        IPropertyStore* store = nullptr;
-                        if (SUCCEEDED (dev->OpenPropertyStore (STGM_READ, &store)) && store != nullptr) {
-                            PROPVARIANT nm = {};
-                            if (SUCCEEDED (store->GetValue (kFriendlyNameKey, &nm))
-                                && nm.vt == VT_LPWSTR && nm.pwszVal != nullptr
-                                && juce::String (nm.pwszVal).containsIgnoreCase (nameOrUid))
-                                match = true;
-                            if (nm.vt == VT_LPWSTR && nm.pwszVal != nullptr) CoTaskMemFree (nm.pwszVal);
-                            store->Release();
-                        }
+                    IPropertyStore* store = nullptr;
+                    if (SUCCEEDED (dev->OpenPropertyStore (STGM_READ, &store)) && store != nullptr) {
+                        PROPVARIANT nm = {};
+                        if (SUCCEEDED (store->GetValue (kFriendlyNameKey, &nm))
+                            && nm.vt == VT_LPWSTR && nm.pwszVal != nullptr)
+                            name = juce::String (nm.pwszVal);
+                        if (nm.vt == VT_LPWSTR && nm.pwszVal != nullptr) CoTaskMemFree (nm.pwszVal);
+                        store->Release();
                     }
+                    dev->Release();
+                }
+                uids.add (uid); names.add (name);
+            }
 
-                    if (match) {
-                        IAudioClient* ac = nullptr;
-                        if (SUCCEEDED (dev->Activate (__uuidof (IAudioClient), CLSCTX_ALL, nullptr,
-                                                      (void**) &ac)) && ac != nullptr) {
-                            WAVEFORMATEX* mix = nullptr;
-                            if (SUCCEEDED (ac->GetMixFormat (&mix)) && mix != nullptr) {
-                                bool extFloat = false;
-                                if (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix->cbSize >= 22) {
-                                    auto* wx = reinterpret_cast<WAVEFORMATEXTENSIBLE*> (mix);
-                                    extFloat = (wx->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
-                                }
-                                // #29: the EXCLUSIVE probe is skipped - nothing downstream consumes
-                                // exclusive48kSupported (checkChainConfig never reads it), yet the
-                                // IsFormatSupported call ran per endpoint per poll second. The field stays
-                                // in the struct (tests pin its pass-through); a future consumer re-enables
-                                // the probe here.
-                                const bool excl48k = false;
-                                result = interpretMixFormat (mix->wFormatTag, mix->nSamplesPerSec,
-                                                             mix->nChannels, mix->wBitsPerSample,
-                                                             extFloat, excl48k);
-                                CoTaskMemFree (mix);
-                            }
-                            ac->Release();
-                        }
-                    }
+            // Pass 2: the pure two-tier decision, then read the format from the ONE chosen endpoint.
+            const int idx = pickEndpointMatch (uids, names, nameOrUid);
+            if (idx >= 0) {
+                IMMDevice* dev = nullptr;
+                if (SUCCEEDED (coll->Item ((UINT) idx, &dev)) && dev != nullptr) {
+                    result = readFormatFromDevice (dev);
                     dev->Release();
                 }
             }
@@ -137,8 +169,8 @@ EndpointFormat readEndpointFormat (const juce::String& nameOrUid, bool isInput) 
 
 double endpointMixSampleRateForName (const juce::String& deviceName, bool isInput) {
     // Delegate to the full read so there is one Windows mix-format code path. readEndpointFormat keys on
-    // the stable UID (then FriendlyName contains) — strictly more robust than the old exact-name match,
-    // and it returns 0.0/{valid=false} on any miss, preserving the documented "unknown => 0.0" contract.
+    // the two-tier pickEndpointMatch (exact UID/whole-name first, contains fallback) and returns
+    // 0.0/{valid=false} on any miss, preserving the documented "unknown => 0.0" contract.
     const EndpointFormat f = readEndpointFormat (deviceName, isInput);
     return f.valid ? f.mixRateHz : 0.0;
 }

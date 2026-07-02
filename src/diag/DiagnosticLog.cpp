@@ -137,7 +137,8 @@ void DiagnosticLog::rotateIfNeeded() {
     // #52: CHECK the rename - an AV/indexer briefly holding the file makes moveFileTo fail, and reopening
     // the same >=cap file in append mode meant the size cap never held (unbounded growth + the rename storm
     // re-running on every write). On failure fall back to truncate-in-place so the cap ALWAYS holds; if even
-    // the delete fails (hard lock) stop writing until the lock clears rather than grow unbounded.
+    // the delete fails (hard lock) DISABLE logging for the rest of the process (out_ stays null and
+    // rotateIfNeeded early-returns on it - there is no re-open path) rather than grow unbounded.
     if (! current_.moveFileTo (backupOf (current_, 1)))
         current_.deleteFile();
     out_ = std::make_unique<juce::FileOutputStream> (current_);
