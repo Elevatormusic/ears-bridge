@@ -16,7 +16,7 @@
 //      self-test. Fully synthetic-testable (tests/test_loopbackreference.cpp).
 //   2. makeReferenceMetadata(...)    — rate, length, a SHA-256 content hash, and
 //      a best-effort Dirac version string.
-//   3. captureLoopback(...)          — the WASAPI loopback capture (Windows-only,
+//   3. captureLoopbackStereo(...)     — the WASAPI loopback capture (Windows-only,
 //      guarded like EndpointUid/EndpointFormat; a no-op stub elsewhere). It
 //      mirrors eb_diag's `loopcap` and asserts mixer transparency (mix rate == the
 //      expected rate) so we never store a resampled reference. Hardware/manual —
@@ -31,7 +31,7 @@ namespace detail {
 
 // Decode one packet's worth of interleaved mix-format bytes into SEPARATE per-channel
 // float vectors WITHOUT downmixing: channel 0 samples are APPENDED to outL, channel 1 to
-// outR (sample index = frame*channels + c, exactly like captureLoopback's mono decode and
+// outR (sample index = frame*channels + c, exactly like the WASAPI packet decode and
 // the pancheck per-channel accumulator). A MONO endpoint (channels < 2) duplicates its single
 // channel into BOTH outL and outR so the per-ear grade path always sees two streams. This is
 // the no-downmix core that keeps Dirac's hard-panned L/R sweep separation intact for grading.
@@ -202,52 +202,14 @@ struct SweepEndDetector {
     }
 };
 
-// ---- The WASAPI loopback capture (Windows-only; stub elsewhere) ----------
-struct LoopbackCaptureResult {
-    bool               ok = false;
-    juce::String       reason;          // empty iff ok
-    bool               cancelled = false;  // true iff the capture was aborted via the cancel token
-                                           // (a user-cancel, NOT a real failure — the GUI shows it neutrally)
-    std::vector<float> samples;         // mono (downmixed) float samples
-    double             rate = 0.0;      // the endpoint mix-format rate actually captured
-    int                channels = 0;    // the endpoint mix-format channel count
-};
-
-// Loopback-capture the first eRender endpoint whose FriendlyName contains
-// `renderDeviceNameSubstring` (case-insensitive), in WASAPI shared mode with
-// AUDCLNT_STREAMFLAGS_LOOPBACK — exactly what eb_diag's `loopcap` does, promoted
-// into the app. The result's samples are a mono downmix of the endpoint mix
-// format. MIXER TRANSPARENCY: if the endpoint mix rate != expectedRate the capture
-// is rejected (we would otherwise store a resampled reference). Must run on a
-// worker/message thread (off the audio callback). Windows-only; a no-op stub on
-// every other platform.
-//
-// END-OF-SWEEP AUTO-STOP: `seconds` is the MAXIMUM. The capture arms on sustained
-// activity, then STOPS as soon as the loopback goes quiet for kTrailingSilenceSeconds
-// (a SweepEndDetector drives this) — so a sequence shorter than the cap returns
-// early and a longer one isn't truncated as long as it finishes within the cap.
-// If no clear end is detected it stops at `seconds` as before.
-//
-// COOPERATIVE CANCEL: pass a non-null `cancel` and set it (from any thread — it's
-// an atomic) to abort the in-flight capture promptly. The capture loop polls it
-// every iteration; when set it Stops()+Releases() the WASAPI client cleanly and
-// returns { ok=false, cancelled=true, reason="cancelled" } so the caller can show
-// a neutral "cancelled" message rather than a capture-failed error. A null cancel
-// (the default) runs the full `seconds` capture as before.
-LoopbackCaptureResult captureLoopback (const juce::String& renderDeviceNameSubstring,
-                                       double seconds,
-                                       double expectedRate = 48000.0,
-                                       const std::atomic<bool>* cancel = nullptr);
-
 // ---- Per-channel loopback capture (no downmix; Windows-only, stub elsewhere) ----
-// captureLoopback downmixes Dirac's render to MONO, which DESTROYS the ~104 dB L/R
-// separation the on-device pan check proved Dirac uses (the L measurement sweep plays on
-// channel 0 only, the R sweep on channel 1 only). For PER-EAR grading we must keep that
-// separation: ref_L = render channel 0, ref_R = render channel 1, no averaging. This is the
-// per-channel sibling of captureLoopback — IDENTICAL WASAPI setup (device-find, IMMDevice/
-// IAudioClient init, mix-format read, MIXER-TRANSPARENCY rate guard, AUDCLNT_STREAMFLAGS_LOOPBACK,
-// the SweepEndDetector arm + auto-stop-on-trailing-silence, the cooperative cancel) but decodes
-// each packet into samplesL / samplesR via detail::decodePacketPerChannel instead of a mono fold.
+// #64: THE loopback capture (the legacy mono captureLoopback - a ~180-line duplicate of the same
+// WASAPI setup that downmixed away the ~104 dB L/R separation Dirac's hard-panned sweeps depend
+// on - was REMOVED; per-ear grading needs the separation kept: ref_L = render channel 0, ref_R =
+// render channel 1, no averaging). WASAPI setup: device-find, IMMDevice/IAudioClient init,
+// mix-format read, MIXER-TRANSPARENCY rate guard, AUDCLNT_STREAMFLAGS_LOOPBACK, the
+// SweepEndDetector arm + auto-stop-on-trailing-silence, the cooperative cancel; decodes each
+// packet into samplesL / samplesR via detail::decodePacketPerChannel.
 //
 // AUTO-STOP keys off the COMBINED activity (the per-block max of |L| and |R|): because Dirac
 // hard-pans, one channel is SILENT while the other sweeps, so feeding the detector a single
@@ -292,7 +254,7 @@ enum class ReferenceFilesState {
 }
 
 // ---- Per-channel pan-check capture (Windows-only; stub elsewhere) ---------
-// DIAGNOSTIC ONLY (eb_diag pancheck). captureLoopback downmixes Dirac's render to MONO,
+// DIAGNOSTIC ONLY (eb_diag pancheck). A mono downmix destroys Dirac's hard-panned separation,
 // which is correct for the single-source reference but blind to L-vs-R structure. To decide
 // the per-EARCUP reference-model design we need to know empirically whether Dirac plays the
 // L measurement sweep on the LEFT channel and the R sweep on the RIGHT (HARD-PANNED, so a
@@ -301,7 +263,7 @@ enum class ReferenceFilesState {
 // This captures a FIXED `seconds` with NO end-of-sweep auto-stop (we need the whole timeline
 // including the L-then-R sequence and the gaps) and returns, per ~100 ms block, the RMS in
 // dBFS of channel 0 (L) and channel 1 (R) SEPARATELY — never averaged. The caller reads the
-// L/R energy-over-time to classify the panning. Mirrors captureLoopback's WASAPI setup exactly
+// L/R energy-over-time to classify the panning. Mirrors captureLoopbackStereo's WASAPI setup exactly
 // (same device-find, IMMDevice/IAudioClient init, mix-format read, AUDCLNT_STREAMFLAGS_LOOPBACK
 // loopback flag, packet loop). Must run off the audio callback. Windows-only; a no-op stub on
 // every other platform.
@@ -317,7 +279,7 @@ struct PanCheckResult {
 };
 
 // Capture `seconds` of per-channel block-RMS from the render endpoint matching
-// `renderDeviceNameSubstring` (empty -> system default render endpoint, like captureLoopback).
+// `renderDeviceNameSubstring` (empty -> system default render endpoint, like captureLoopbackStereo).
 // NO auto-stop; runs the whole fixed duration. expectedRate is informational here (we do NOT
 // reject on a rate mismatch — the diagnostic wants whatever Dirac is actually playing).
 PanCheckResult captureLoopbackPanCheck (const juce::String& renderDeviceNameSubstring,
