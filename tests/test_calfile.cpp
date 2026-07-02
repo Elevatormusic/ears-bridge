@@ -132,3 +132,20 @@ TEST_CASE("CalFile::calSideMismatched flags a wrong-side file in a single slot")
     CHECK (eb::calSideMismatched (true, eb::sideFromFilename ("R_HPN_000-0000.txt"),
                                   CalSide::Left) == true);
 }
+
+// #26: the SPL / phase tokens are validated, not just the frequency. getDoubleValue() returns 0.0 for
+// non-numeric text and stops at a comma, so garbage previously became a silent 0 dB point and a comma-decimal
+// export silently truncated. Such rows must be SKIPPED + recorded, not folded into the curve as bad data.
+TEST_CASE("CalFile #26: non-numeric / comma-decimal SPL rows are skipped, not accepted as 0") {
+    auto txt = juce::String (
+        "* freq spl phase\n"
+        "  100.0   -3.0  0\n"     // good
+        "  200.0   junk  0\n"     // non-numeric SPL -> SKIP (was silently 0.0 dB)
+        "  400.0   -1,5  0\n"     // comma-decimal -> SKIP (was silently truncated to -1)
+        "  1000.0  -2.0  0\n");   // good
+    auto cal = eb::CalFile::parse (txt);
+    REQUIRE (cal.points.size() == 2);
+    CHECK_THAT (cal.points[0].freqHz, WithinAbs (100.0,  1e-9));
+    CHECK_THAT (cal.points[1].freqHz, WithinAbs (1000.0, 1e-9));
+    CHECK (cal.parseWarnings.size() >= 2);
+}

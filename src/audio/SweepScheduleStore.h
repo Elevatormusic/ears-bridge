@@ -1,6 +1,8 @@
 #pragma once
 #include "audio/SweepSchedule.h"
 #include <juce_core/juce_core.h>
+#include <algorithm>
+#include <cmath>
 
 // AutoPerEar hardening (P0-06) Task 4 — persist a learned SweepSchedule as a small text sidecar, KEYED to a
 // hash of the reference it was learned from, so a STALE schedule can never pair with a re-learned reference.
@@ -39,7 +41,15 @@ namespace eb {
         else if (toks.size() == 2 && toks[0] == "gap")
             s.gapsSec.push_back (toks[1].getDoubleValue());
     }
-    s.valid = s.segments.size() >= 2;
+    // #70: reject a corrupt / hand-edited sidecar rather than installing garbage. A non-finite/<=0 segment
+    // duration or a non-finite/<0 gap (getDoubleValue() -> 0.0 on junk) would wedge ScheduledEarRouter into
+    // permanent "routing ambiguous". Leaving valid=false engages the mic-envelope fallback (the safe default).
+    const bool durationsOk = std::all_of (s.segments.begin(), s.segments.end(),
+                                          [] (const SweepSegment& seg) { return std::isfinite (seg.durationSec) && seg.durationSec > 0.0; });
+    const bool gapsOk      = std::all_of (s.gapsSec.begin(), s.gapsSec.end(),
+                                          [] (double g) { return std::isfinite (g) && g >= 0.0; });
+    s.valid = s.segments.size() >= 2 && durationsOk && gapsOk
+           && s.gapsSec.size() == s.segments.size() - 1;   // exactly one gap between each adjacent segment pair
     return s;
 }
 

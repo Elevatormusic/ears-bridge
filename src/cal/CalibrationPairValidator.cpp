@@ -72,12 +72,18 @@ CalPairResult validateCalibrationPair (const CalFile& left,
         if (! fileIntegrityOk (right, "Right", reason))  return { false, reason };
     }
 
-    // Rule 6: range coverage. Both files are strictly increasing here, so front()/back()
-    // give the true min/max. The combined pair must span the correction band.
-    const double minFreq = juce::jmin (left.minFreqHz(),  right.minFreqHz());
-    const double maxFreq = juce::jmax (left.maxFreqHz(),  right.maxFreqHz());
-    if (minFreq > requiredLowHz || maxFreq < requiredHighHz)
-        return { false, "Calibration does not cover the 20 Hz–20 kHz correction band" };
+    // Rule 6: range coverage, checked PER FILE (#7). Each ear's FIR is designed solely from its OWN file, so
+    // the combined span is meaningless: the old jmin(min)/jmax(max) let a band-limited left (e.g. 200-8000 Hz)
+    // pass when paired with a full-range right, and FirDesigner then endpoint-holds the truncated edge across
+    // the missing octaves - a flat, wrong correction on one ear with zero indication. Require BOTH files to
+    // span the band, naming the failing side.
+    const auto coversBand = [requiredLowHz, requiredHighHz] (const CalFile& c) {
+        return c.minFreqHz() <= requiredLowHz && c.maxFreqHz() >= requiredHighHz;
+    };
+    if (! coversBand (left))
+        return { false, "Left calibration does not cover the 20 Hz–20 kHz correction band" };
+    if (! coversBand (right))
+        return { false, "Right calibration does not cover the 20 Hz–20 kHz correction band" };
 
     return { true, {} };
 }

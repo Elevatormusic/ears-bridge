@@ -55,6 +55,13 @@ CalFile CalFile::parse (const juce::String& text) {
 
     auto lines = juce::StringArray::fromLines (text);
     bool sawDataRow = false;
+    // #9: cap the row-warning accumulation. A file full of junk rows would otherwise grow one warning STRING
+    // (holding the full line text) per row - unbounded memory on a pathological/huge file. Keep the first N.
+    auto addWarning = [&out] (const juce::String& w) {
+        constexpr int kMaxWarnings = 20;
+        if      (out.parseWarnings.size() <  kMaxWarnings) out.parseWarnings.add (w);
+        else if (out.parseWarnings.size() == kMaxWarnings) out.parseWarnings.add ("... (further row warnings suppressed)");
+    };
     for (auto raw : lines) {
         auto line = raw.trim();
         if (line.isEmpty()) continue;
@@ -67,8 +74,20 @@ CalFile CalFile::parse (const juce::String& text) {
             auto upper = line.toUpperCase();
             if (out.type == CalType::Unknown) out.type = detectType (upper);
             if (out.side == CalSide::Unknown) {
-                if (line.containsIgnoreCase ("left"))       out.side = CalSide::Left;
-                else if (line.containsIgnoreCase ("right")) out.side = CalSide::Right;
+                // #8: resolve from the CHANNEL-bearing phrase, not bare word presence. The factory header
+                // carries the channel AND a per-unit "sensitive side" in ONE line ("...on the RIGHT channel.
+                // Your sensitive side is LEFT."), so a bare containsIgnoreCase("left") mis-sides every unit
+                // whose sensitive side differs from the channel. Prefer "LEFT/RIGHT channel"; fall back to a
+                // bare word only when unambiguous (both words present -> leave Unknown for the filename to fill).
+                const bool chanLeft  = line.containsIgnoreCase ("left channel")  || line.containsIgnoreCase ("left ch ");
+                const bool chanRight = line.containsIgnoreCase ("right channel") || line.containsIgnoreCase ("right ch ");
+                if (chanLeft != chanRight) {
+                    out.side = chanLeft ? CalSide::Left : CalSide::Right;
+                } else if (! chanLeft && ! chanRight) {
+                    const bool bareLeft  = line.containsIgnoreCase ("left");
+                    const bool bareRight = line.containsIgnoreCase ("right");
+                    if (bareLeft != bareRight) out.side = bareLeft ? CalSide::Left : CalSide::Right;
+                }
             }
             auto idx = upper.indexOf ("SERIAL");
             if (out.serial.isEmpty() && idx >= 0) {
@@ -85,6 +104,15 @@ CalFile CalFile::parse (const juce::String& text) {
         if (! toks[0].containsOnly ("0123456789.+-eE")) continue;
         sawDataRow = true;
 
+        // #26: validate the SPL (and phase) tokens too - not just the frequency. getDoubleValue() returns 0.0
+        // for non-numeric text and stops at a comma, so "1000 junk" silently became 0.0 dB and a comma-decimal
+        // locale export ("1000 -1,5") silently truncated to -1. Reject + record instead of accepting garbage.
+        const char* numChars = "0123456789.+-eE";
+        if (! toks[1].containsOnly (numChars) || (toks.size() >= 3 && ! toks[2].containsOnly (numChars))) {
+            addWarning ("Skipped row with a non-numeric SPL/phase value (comma-decimal locale?): \"" + line + "\"");
+            continue;
+        }
+
         CalPoint p;
         p.freqHz   = toks[0].getDoubleValue();
         p.splDb    = toks[1].getDoubleValue();
@@ -93,14 +121,14 @@ CalFile CalFile::parse (const juce::String& text) {
         // Permissive but recording: drop a row that can't yield a usable point.
         if (! std::isfinite (p.freqHz) || ! std::isfinite (p.splDb) || ! std::isfinite (p.phaseDeg)
             || p.freqHz <= 0.0) {
-            out.parseWarnings.add ("Skipped non-finite or non-positive-frequency row: \"" + line + "\"");
+            addWarning ("Skipped non-finite or non-positive-frequency row: \"" + line + "\"");
             continue;
         }
 
         if (! out.points.empty() && p.freqHz <= out.points.back().freqHz)
-            out.parseWarnings.add ("Frequency not strictly ascending at "
-                                   + juce::String (p.freqHz, 3) + " Hz (previous "
-                                   + juce::String (out.points.back().freqHz, 3) + " Hz)");
+            addWarning ("Frequency not strictly ascending at "
+                        + juce::String (p.freqHz, 3) + " Hz (previous "
+                        + juce::String (out.points.back().freqHz, 3) + " Hz)");
 
         out.points.push_back (p);
     }
