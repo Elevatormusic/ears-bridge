@@ -25,10 +25,20 @@ struct EndpointFormat {
     bool   exclusive48kSupported = false;  // IsFormatSupported(EXCLUSIVE, 48k/this-format)
 };
 
-// Read the full mix format of an endpoint. Prefer matching by stable UID (EndpointUid); fall back to a
-// case-insensitive FriendlyName contains-match. isInput selects eCapture vs eRender. valid=false if not
-// found. Non-Windows returns {valid=false}.
+// Read the full mix format of an endpoint. Two-tier match (pickEndpointMatch below): EXACT stable-UID or
+// whole-FriendlyName first, else the first case-insensitive contains-match. isInput selects eCapture vs
+// eRender. valid=false if not found. Non-Windows returns {valid=false}.
 [[nodiscard]] EndpointFormat readEndpointFormat (const juce::String& nameOrUid, bool isInput);
+
+// PURE two-tier endpoint match over parallel (uid, friendlyName) lists — the decision readEndpointFormat
+// keys on, extracted so the tier ordering is unit-tested. EXACT tier first across the WHOLE list: the hint
+// equals an endpoint's UID (case-sensitive) or its FriendlyName (case-insensitive). Only when no exact
+// match exists does the FIRST FriendlyName contains-match (case-insensitive) win. Returns the index, or
+// -1 for no match. (The exact tier existing at all is the point: a contains-only match must never shadow
+// an exact one — a "Speakers" hint must not resolve to "Speakers (USB DAC)" when a plain "Speakers"
+// endpoint exists. Same substring-collision class the OutputActivity two-tier match fixed.)
+[[nodiscard]] int pickEndpointMatch (const juce::StringArray& uids, const juce::StringArray& friendlyNames,
+                                     const juce::String& nameOrUid);
 
 // PURE, cross-platform interpreter of raw WAVEFORMATEX fields into an EndpointFormat. Extracted so the
 // field logic (esp. float-vs-int derivation) can be unit-tested without a live endpoint or the Windows
