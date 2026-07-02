@@ -102,7 +102,11 @@ bool CalSlotComponent::loadFromFile (const juce::File& file) {
     if (! file.existsAsFile()) {
         errorLabel.setColour (juce::Label::textColourId, Theme::danger());   // real error, not a warning
         errorLabel.setText ("File not found: " + file.getFileName(), juce::dontSendNotification);
-        errorLabel.setVisible (true); repaint();
+        errorLabel.setVisible (true);
+        // #38: a PERSISTED path can go stale (file moved/deleted). Without a visible Remove the user had no
+        // way to clear it from the UI - the error card re-appeared every launch with Start locked closed.
+        removeBtn.setVisible (true);
+        resized(); repaint();
         return false;
     }
     try {
@@ -126,7 +130,9 @@ bool CalSlotComponent::loadFromFile (const juce::File& file) {
     } catch (const eb::CalParseError& e) {
         errorLabel.setColour (juce::Label::textColourId, Theme::danger());   // real error, not a warning
         errorLabel.setText (juce::String ("Parse error: ") + e.what(), juce::dontSendNotification);
-        errorLabel.setVisible (true); repaint();
+        errorLabel.setVisible (true);
+        removeBtn.setVisible (true);   // #38: same clear affordance for a corrupt persisted file
+        resized(); repaint();
         return false;
     }
 }
@@ -244,8 +250,15 @@ void CalSlotComponent::resized() {
         r.removeFromBottom (10);
         thumbnail.setBounds (r);
     } else if (errorLabel.isVisible()) {
-        // Empty slot with a load/parse error (no thumbnail): show it along the bottom of the body.
-        errorLabel.setBounds (r.removeFromBottom (34));
+        // Empty slot with a load/parse error (no thumbnail): the error along the bottom of the body, with the
+        // Remove button beside it (#38) so a stale persisted path can be CLEARED from the card - the button
+        // was only ever laid out on a loaded card before, leaving no affordance to unstick the error state.
+        auto meta = r.removeFromBottom (34);
+        if (removeBtn.isVisible()) {
+            removeBtn.setBounds (meta.removeFromRight (84).withSizeKeepingCentre (84, 28));
+            meta.removeFromRight (10);
+        }
+        errorLabel.setBounds (meta);
     }
 }
 
