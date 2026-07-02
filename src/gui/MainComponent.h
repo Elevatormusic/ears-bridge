@@ -28,7 +28,11 @@ class MainComponent : public juce::Component,
 public:
     // Headless/test construction: inject a temp-dir Settings (hermetic) and suppress the launch-time update
     // network call. The default ctor is the real app (per-user Settings, network on).
-    struct TestConfig { juce::File settingsDir; bool disableNetwork = true; };
+    // appDataDir/logDir (#24): a headless test must also redirect the REFERENCE store (%APPDATA%/EarsBridge)
+    // and the diagnostic-log dir, or the scored layout depends on the machine's real reference files and the
+    // gate writes into the real log folder (non-hermetic). Empty = the real locations (the app itself).
+    struct TestConfig { juce::File settingsDir; bool disableNetwork = true;
+                        juce::File appDataDir;  juce::File logDir; };
     MainComponent();
     explicit MainComponent (const TestConfig& cfg);
     ~MainComponent() override;
@@ -42,9 +46,13 @@ public:
     void forceThemeForTest (bool dark);
 
 private:
-    // Common ctor both public ctors delegate to: settingsDir empty -> per-user Settings file (real app), else a
-    // test temp dir; disableNetwork suppresses the launch-time update check so a headless test never hits the net.
-    MainComponent (juce::File settingsDir, bool disableNetwork);
+    // The reference/schedule store dir: the TestConfig override (#24, hermetic tests), else %APPDATA%/EarsBridge.
+    juce::File appDataDir() const {
+        return appDataOverride_.getFullPathName().isNotEmpty()
+             ? appDataOverride_
+             : juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("EarsBridge");
+    }
+    juce::File appDataOverride_;   // empty = real location
     void refreshDeviceLists();
     void autoSelectDefaults();       // first run / empty slot: pick a recognised EARS + a standard VB-CABLE
     void onInputChosen  (const DeviceId&);
@@ -282,6 +290,11 @@ private:
     // Hardware-Dirac detect-and-degrade: the toggle commits "grading off"; the trackers feed the auto-detect.
     juce::ToggleButton hwDiracToggle  { "Dirac runs on a hardware processor (DDRC-24 / SHD / Flex)" };
     float maxOutputRenderPeak_ = 0.0f;   // max Dirac-output render peak seen this run (auto-detect)
+    // #16: run-scoped UNCONDITIONAL max of the live input peaks (fed every GUI tick from engine.levels()).
+    // The old micHeard source (maxSweepPeakL/R) only accumulates inside session.sweepActive(), whose +12 dB
+    // rise-arm is proven dead on gradual Dirac log-sweeps - so the hardware-Dirac auto-detect could never
+    // fire on a real measurement. This peak sees the sweep regardless of the session arm.
+    float hwMicRunPeak_        = 0.0f;
     bool  hwOutputReadable_    = false;  // whether OutputActivity read a real value this run (else can't confirm silence)
     int   hwDetectTick_        = 0;      // throttle for the (COM-heavy) output-activity poll (~2 s, like the grade poll)
     juce::Label    firLenLabel; juce::ComboBox firLenBox;

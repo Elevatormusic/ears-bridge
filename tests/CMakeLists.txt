@@ -49,6 +49,7 @@ add_executable(eb_tests
     test_sweepschedule.cpp
     test_scheduledearrouter.cpp
     test_sweepschedulestore.cpp
+    test_referencemetastore.cpp
     test_startnotes.cpp
     test_diagnosticlog.cpp
     test_hig_score.cpp

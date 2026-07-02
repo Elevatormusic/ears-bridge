@@ -319,6 +319,10 @@ void CalSlotComponent::paint (juce::Graphics& g) {
     if (! cal) {
         inner.removeFromTop (10);
         auto body = inner.toFloat();
+        // Error state (#38 follow-up): the bottom strip holds the error text + the Remove button - carve it
+        // out of the drop zone so the dashes/hint never paint underneath them (verifier MINOR).
+        if (errorLabel.isVisible())
+            body.removeFromBottom (44.0f);
         juce::Path dash;
         dash.addRoundedRectangle (body.reduced (0.5f), 8.0f);
         g.setColour (dragHover ? Theme::accent() : Theme::sep2());

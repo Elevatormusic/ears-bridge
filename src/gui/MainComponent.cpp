@@ -17,6 +17,7 @@
 #include "gui/LiveInputStatus.h"            // eb::liveInputStatus (live per-channel in-sweep readout)
 #include "audio/LoopbackReference.h"        // eb::captureLoopback / validateReferenceCapture / readDiracDeviceType (Plan 5)
 #include "audio/SweepScheduleStore.h"       // eb::extractSchedule / serialize+deserialize (AutoPerEar schedule, P0-06)
+#include "audio/ReferenceMetaStore.h"       // eb::serializeReferenceMeta / checkReferenceMeta (audit #5/#20 integrity sidecar)
 #include "platform/EndpointFormat.h"        // eb::endpointMixSampleRateForName (the WASAPI mix-format rate)
 #include <algorithm>
 #include <cmath>
@@ -82,19 +83,22 @@ static float fitTopDb (const eb::CalFile& c) {
     return std::ceil (mag / 6.0f) * 6.0f;
 }
 
-MainComponent::MainComponent() : MainComponent (juce::File{}, false) {}                         // real app: per-user Settings, network on
-MainComponent::MainComponent (const TestConfig& cfg) : MainComponent (cfg.settingsDir, cfg.disableNetwork) {}
-
-MainComponent::MainComponent (juce::File settingsDir, bool disableNetwork)
-    : settings (settingsDir) {
+MainComponent::MainComponent() : MainComponent (TestConfig { juce::File{}, /*disableNetwork*/ false }) {}  // real app: per-user everything, network on
+MainComponent::MainComponent (const TestConfig& cfg)
+    : settings (cfg.settingsDir),
+      appDataOverride_ (cfg.appDataDir) {
+    const bool disableNetwork = cfg.disableNetwork;
     setLookAndFeel (&theme);
     firPool = std::make_unique<juce::ThreadPool> (1);
 
     // --- Diagnostic log: open it FIRST so the whole ctor (and every later handler) can write to it ---
     // %TEMP%/EarsBridge/logs, rotating + size-capped (see DiagnosticLog). Logging is message-thread only.
+    // #24: a headless test overrides the dir so the gate never writes into the real log folder.
     log_ = std::make_unique<eb::DiagnosticLog> (
-        juce::File::getSpecialLocation (juce::File::tempDirectory)
-            .getChildFile ("EarsBridge").getChildFile ("logs"));
+        cfg.logDir.getFullPathName().isNotEmpty()
+            ? cfg.logDir
+            : juce::File::getSpecialLocation (juce::File::tempDirectory)
+                  .getChildFile ("EarsBridge").getChildFile ("logs"));
     // Launch banner: app version, build flavour, and the OS. The serial backstop is already armed
     // (loggedSerials_ is empty until a cal loads, so redactSerial is a no-op here).
    #ifdef NDEBUG
@@ -929,7 +933,7 @@ void MainComponent::onStartStop() {
         gradeInFlight_.store (false);
         gradeRunGen_.fetch_add (1, std::memory_order_relaxed);   // invalidate any in-flight grade job from this run (#4)
         // Re-arm the hardware-Dirac auto-detect too: a fresh run must re-observe the output silence + mic sweep.
-        maxOutputRenderPeak_ = 0.0f; hwOutputReadable_ = false; hwDetectTick_ = 0;
+        maxOutputRenderPeak_ = 0.0f; hwMicRunPeak_ = 0.0f; hwOutputReadable_ = false; hwDetectTick_ = 0;
         // Reset the live in-sweep readout state too, so a held level / sweep-active hold / live text from this
         // run can't bleed into the idle line after Stop (matches the Start-path reset).
         liveHeldLDb_ = liveHeldRDb_ = -120.0f;
@@ -971,15 +975,21 @@ void MainComponent::onStartStop() {
             // Task 4 match-poll debounce: a fresh run starts un-matched and un-graded, so the first sustained
             // match (two consecutive matched polls) grades exactly once.
             gradePollTick_ = 0; gradePollerL_.reset(); gradePollerR_.reset(); lastListenTextLogged_.clear();
-            maxOutputRenderPeak_ = 0.0f; hwOutputReadable_ = false; hwDetectTick_ = 0;   // fresh hardware-Dirac auto-detect
+            maxOutputRenderPeak_ = 0.0f; hwMicRunPeak_ = 0.0f; hwOutputReadable_ = false; hwDetectTick_ = 0;   // fresh hardware-Dirac auto-detect
             gradeDotsL_.clear(); gradeDotsR_.clear(); smootherL_.reset(); smootherR_.reset();   // fresh quality dots each run
             // Surface a silent format downgrade: WASAPI shared mode can grant a different rate/depth
             // than the user selected, which would otherwise resample with no indication. The split:
             // genuine cautions (a real resample, an unverifiable rail) go on preflightLabel (yellow);
             // the 32-bit-float fact is NORMAL, so it goes on the neutral preflightInfo line (#8).
-            const auto notes = eb::buildStartNotes (engine.grantedSampleRate(), settings.sampleRate(),
-                                                    engine.grantedOutputBitDepth(), settings.outputBitDepth(),
-                                                    engine.rawRail());
+            auto notes = eb::buildStartNotes (engine.grantedSampleRate(), settings.sampleRate(),
+                                              engine.grantedOutputBitDepth(), settings.outputBitDepth(),
+                                              engine.rawRail());
+            // #66: warn up front when the loaded reference was learned at a DIFFERENT rate than this session -
+            // every grade would honestly read "re-learn", but the user should see WHY before sweeping.
+            if (engine.referenceLoaded() && std::abs (loadedReferenceRateL_ - activeRate()) > 1.0)
+                notes.warnings.add ("Reference was learned at " + juce::String (loadedReferenceRateL_ / 1000.0, 1)
+                                  + " kHz; this session is " + juce::String (activeRate() / 1000.0, 1)
+                                  + " kHz - re-learn for this rate.");
             preflightLabel.setText (notes.warnings.joinIntoString (" "), juce::dontSendNotification);
             preflightInfo.setText (notes.info, juce::dontSendNotification);
             resized();   // the info line claims a row only when non-empty -> relayout the rail
@@ -1340,14 +1350,25 @@ void MainComponent::updateStatusLine() {
             // engine raised LowSnr at the sweep's edge off a TRUSTED floor only (honest silence otherwise). The
             // status line shares the title bar and is narrow, so keep the inline text SHORT and complete (no
             // clipping); the full guidance lives in the tooltip. snrNote's long form is the wording of record.
-            const int snrDb = juce::roundToInt (engine.completedSweepSnrDb());
-            sText = "Low SNR: sweep only " + juce::String (snrDb)
+            // #15: name the OFFENDING EAR from the PER-EAR stores. The combined snapshot keeps last-write
+            // ("the current sweep") semantics, so once the OTHER ear graded higher, quoting it here produced
+            // a self-contradictory warning ("only 30 dB" against a 20 dB threshold). The per-ear stores are
+            // never overwritten by the other ear; fall back to the combined snapshot when neither has
+            // published (the arm path raised the flag before any per-ear grade).
+            const float snrL = engine.refSweepSnrDb (0), snrR = engine.refSweepSnrDb (1);
+            float worst = engine.completedSweepSnrDb();
+            juce::String earTag;
+            if (snrL > 0.0f && (snrR <= 0.0f || snrL <= snrR)) { worst = snrL; earTag = " (L)"; }
+            else if (snrR > 0.0f)                              { worst = snrR; earTag = " (R)"; }
+            const int snrDb = juce::roundToInt (worst);
+            sText = "Low SNR" + earTag + ": sweep only " + juce::String (snrDb)
                   + " dB over the room noise - re-measure";
             sCol  = Theme::warn();
             sTip  = "The Dirac sweep was only " + juce::String (snrDb)
-                  + " dB above the room-noise floor. Quieten the room (close windows, "
-                    "stop fans/AC) or raise the level, then re-measure for a cleaner "
-                    "correction.";
+                  + " dB above the room-noise floor" + (earTag.isEmpty() ? juce::String() : " on the "
+                  + juce::String (earTag.contains ("L") ? "LEFT" : "RIGHT") + " ear")
+                  + ". Quieten the room (close windows, stop fans/AC) or raise the level, "
+                    "then re-measure for a cleaner correction.";
         } else if (rateVeto) {
             // 48k-everywhere VETO. ABOVE the captured/waiting + reference-monitor branches so a wrong-rate (or
             // unreadable) chain can NEVER read "verified"/"safe to run the next" — the reference monitor
@@ -1704,8 +1725,7 @@ void MainComponent::loadStoredReference() {
     // downmixed away Dirac's L/R separation), so we must NOT silently load it as a grade reference —
     // that would mis-grade. classifyReferenceFiles encodes the three outcomes (PURE; unit-tested):
     //   both present -> load; only the old mono (or one channel) -> force a RE-LEARN; nothing -> idle.
-    auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                   .getChildFile ("EarsBridge");
+    auto dir = appDataDir();   // #24: the TestConfig override keeps headless tests off the real reference store
     auto refL   = dir.getChildFile ("reference_L.f32");
     auto refR   = dir.getChildFile ("reference_R.f32");
     auto refOld = dir.getChildFile ("reference.f32");
@@ -1728,16 +1748,39 @@ void MainComponent::loadStoredReference() {
             if (nL < 48000 || nR < 48000) return;   // re-check after the read (defensive)
             const auto* fL = static_cast<const float*> (mbL.getData());
             const auto* fR = static_cast<const float*> (mbR.getData());
+            // #5/#20: verify the integrity sidecar BEFORE trusting the pair. It binds the learn-time RATE
+            // (the loader previously hardcoded 48 kHz while the capture asserted the settings rate - a
+            // mislabeled reference defeated the grade-time rate guard in BOTH directions) and each channel's
+            // length + SHA-256 (nothing previously detected a truncated write or a mixed-generation pair).
+            // Absent/mismatched -> honest re-learn, exactly like the old-mono path below.
+            const auto diskL = eb::makeReferenceMetadata (fL, nL, 0.0);
+            const auto diskR = eb::makeReferenceMetadata (fR, nR, 0.0);
+            const auto meta  = eb::checkReferenceMeta (dir.getChildFile ("reference.meta").loadFileAsString(),
+                                                       diskL, diskR);
+            if (! meta.valid) {
+                engine.setReferenceLoaded (false);
+                learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
+                // SHORT for the rail (the HIG gate caught the long form clipping); the reason lives in the
+                // tooltip + log. Every pre-sidecar install hits this ONCE (their reference predates the
+                // integrity metadata) - a single re-learn upgrades them.
+                learnRefResultLabel.setText ("Re-learn the reference (integrity check failed).",
+                                             juce::dontSendNotification);
+                learnRefResultLabel.setTooltip ("The saved reference failed its integrity/rate check: " + meta.reason
+                                                + ". Click Learn reference (Windows Audio) to capture a new one.");
+                logLine (eb::DiagnosticLog::Level::Warn,
+                         "Reference reload REFUSED: sidecar check failed (" + meta.reason + ") - re-learn required.");
+                return;
+            }
             loadedReferenceL_.assign (fL, fL + nL);
             loadedReferenceR_.assign (fR, fR + nR);
-            loadedReferenceRateL_ = 48000.0;         // v1: 48k-only (the capture asserted 48k)
-            loadedReferenceRateR_ = 48000.0;
+            loadedReferenceRateL_ = meta.rate;       // #5: the REAL learn-time rate from the verified sidecar
+            loadedReferenceRateR_ = meta.rate;
             referenceStatePath_  = refL.getFullPathName();
             engine.setReferenceLoaded (true);
             // AutoPerEar: reload the schedule sidecar ONLY if it matches this reference (stale guard), then install
             // it (startup -> bridge stopped). A mismatched / absent sidecar -> the router falls back to the envelope.
-            const auto schedHash = eb::makeReferenceMetadata (fL, nL, loadedReferenceRateL_).contentHash;
-            const auto sched     = eb::deserializeSchedule (dir.getChildFile ("schedule.txt").loadFileAsString(), schedHash);
+            const auto sched = eb::deserializeSchedule (dir.getChildFile ("schedule.txt").loadFileAsString(),
+                                                        diskL.contentHash);
             if (sched.valid) engine.setSweepSchedule (sched);
             return;
         }
@@ -1869,6 +1912,18 @@ void MainComponent::onLearnReference() {
             const auto spanR = eb::findActiveSpan (cap.samplesR.data(), (int) cap.samplesR.size(), cap.rate);
             if (! spanL.valid)      { resultMsg = "Rejected (Left ear): no sweep found"; }
             else if (! spanR.valid) { resultMsg = "Rejected (Right ear): no sweep found"; }
+            // #35: the RELATIVE -40 dB trim threshold can mis-place a span under leakage/crosstalk. Two sanity
+            // bounds catch that: the two ears' spans must be DISJOINT in time (Dirac hard-pans - overlapping
+            // spans mean the "silent half" wasn't silent), and neither span may swallow most of the capture.
+            else if (spanL.first < spanR.last && spanR.first < spanL.last) {
+                resultMsg = "Rejected: the two ears' sweeps overlap in time - not cleanly panned "
+                            "(leakage, a second source, or a non-hard-panned processor)";
+            }
+            else if ((spanL.last - spanL.first) > (int) (0.8 * (double) cap.samplesL.size())
+                  || (spanR.last - spanR.first) > (int) (0.8 * (double) cap.samplesR.size())) {
+                resultMsg = "Rejected: a sweep span covers most of the capture - no clean silent half "
+                            "(noise or leakage on the quiet channel?)";
+            }
             else {
                 std::vector<float> trimL (cap.samplesL.begin() + spanL.first, cap.samplesL.begin() + spanL.last);
                 std::vector<float> trimR (cap.samplesR.begin() + spanR.first, cap.samplesR.begin() + spanR.last);
@@ -1921,13 +1976,37 @@ void MainComponent::onLearnReference() {
                 // Store BOTH channels on disk as reference_L.f32 / reference_R.f32 (raw f32, same format as the
                 // old single file) so the per-ear reference survives a restart. DELETE the obsolete mono
                 // reference.f32 if present — it would be mistaken for a valid reference on a future reload.
-                auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                               .getChildFile ("EarsBridge");
+                auto dir = mc->appDataDir();   // #24: honours the TestConfig override
                 dir.createDirectory();
                 auto refL = dir.getChildFile ("reference_L.f32");
                 auto refR = dir.getChildFile ("reference_R.f32");
-                refL.replaceWithData (samplesL.data(), samplesL.size() * sizeof (float));
-                refR.replaceWithData (samplesR.data(), samplesR.size() * sizeof (float));
+                // #5/#20: CHECK the writes (they were fire-and-forget - a disk-full mid-write could install a
+                // truncated or mixed-generation pair) and bind the pair with an integrity sidecar carrying the
+                // learn-time RATE + each channel's length + SHA-256. The loader verifies all of it (#5 fixed
+                // the reload hardcoding 48 kHz while the capture ran at the settings rate).
+                const auto metaL  = eb::makeReferenceMetadata (samplesL.data(), (int) samplesL.size(), capRate);
+                const auto metaR  = eb::makeReferenceMetadata (samplesR.data(), (int) samplesR.size(), capRate);
+                const bool wroteL = refL.replaceWithData (samplesL.data(), samplesL.size() * sizeof (float));
+                const bool wroteR = refR.replaceWithData (samplesR.data(), samplesR.size() * sizeof (float));
+                const bool wroteM = dir.getChildFile ("reference.meta")
+                                       .replaceWithText (eb::serializeReferenceMeta (metaL, metaR));
+                const bool persistOk = wroteL && wroteR && wroteM;
+                if (! persistOk) {
+                    // Fail LOUDLY and leave the disk CLEAN: a partial pair that still cross-correlates would
+                    // grade against garbage on the next launch. The in-memory reference stays active for THIS
+                    // session (honest - the message says so).
+                    refL.deleteFile(); refR.deleteFile();
+                    dir.getChildFile ("reference.meta").deleteFile();
+                    dir.getChildFile ("schedule.txt").deleteFile();
+                    mc->learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
+                    mc->learnRefResultLabel.setText ("Reference learned for THIS session, but saving it FAILED "
+                                                     "(disk full / permissions?) - it will need re-learning next launch.",
+                                                     juce::dontSendNotification);
+                    mc->logLine (eb::DiagnosticLog::Level::Error,
+                                 "Reference save FAILED (L=" + juce::String (wroteL ? 1 : 0)
+                               + " R=" + juce::String (wroteR ? 1 : 0) + " meta=" + juce::String (wroteM ? 1 : 0)
+                               + ") - partial files removed");
+                }
                 auto refOld = dir.getChildFile ("reference.f32");
                 if (refOld.existsAsFile()) refOld.deleteFile();   // obsolete mono ref -> remove on a successful re-learn
                 mc->referenceStatePath_ = refL.getFullPathName();
@@ -1938,11 +2017,25 @@ void MainComponent::onLearnReference() {
                 mc->loadedReferenceRateL_ = capRate;
                 mc->loadedReferenceRateR_ = capRate;
                 mc->engine.setReferenceLoaded (true);
+                // #67: if Start raced in during the capture window, a poller mid-debounce could pair the OLD
+                // reference's alignment with the NEW reference bytes - re-arm both pollers and invalidate any
+                // in-flight grade so the first grade against this reference starts from a clean match.
+                if (mc->engine.status() == EngineStatus::Running) {
+                    mc->gradePollerL_.reset(); mc->gradePollerR_.reset();
+                    mc->gradeRunGen_.fetch_add (1, std::memory_order_relaxed);
+                    mc->gradeInFlight_.store (false);
+                }
+                // #65: record what the capture actually saw so an endpoint/config mismatch is visible in the log.
+                mc->logLine (eb::DiagnosticLog::Level::Info,
+                             "Learn capture: endpoint mix " + juce::String (capRate, 0) + " Hz (Dirac output target)");
                 // AutoPerEar: persist the learned schedule keyed to this reference's content hash, then install it
-                // (the bridge is STOPPED during Learn). A future re-learn changes the hash -> the stale schedule drops.
+                // (the bridge is STOPPED during Learn). A future re-learn changes the hash -> the stale schedule
+                // drops. NOT persisted when the reference itself failed to save (#20 - a schedule bound to an
+                // unsaved reference would be stale by construction).
                 if (schedule.valid) {
-                    const auto refHash = eb::makeReferenceMetadata (samplesL.data(), (int) samplesL.size(), capRate).contentHash;
-                    dir.getChildFile ("schedule.txt").replaceWithText (eb::serializeSchedule (schedule, refHash));
+                    const auto refHash = metaL.contentHash;
+                    if (persistOk)
+                        dir.getChildFile ("schedule.txt").replaceWithText (eb::serializeSchedule (schedule, refHash));
                     // Install ONLY if the engine is stopped: setSweepSchedule -> loadSchedule allocates + is not mid-run
                     // safe. If Start raced in during the Learn capture, skip the live install - the sidecar is already
                     // persisted, so the next launch's loadStoredReference installs it on the stopped engine.
@@ -1987,7 +2080,10 @@ void MainComponent::pollReferenceGrade() {
         constexpr float kHwMicSweepFloor = 0.01f;   // ~-40 dBFS: above ambient, below a real sweep (PROVISIONAL)
         const float peak = eb::outputRenderPeakForName (eb::readDiracOutputDeviceName());
         if (peak >= 0.0f) { hwOutputReadable_ = true; maxOutputRenderPeak_ = juce::jmax (maxOutputRenderPeak_, peak); }
-        const bool micHeard  = juce::jmax (engine.maxSweepPeakL(), engine.maxSweepPeakR()) > kHwMicSweepFloor;
+        // #16: derive micHeard from the UNCONDITIONAL run peak - the session-arm-gated maxSweepPeakL/R never
+        // accumulate on a gradual Dirac log-sweep (the +12 dB rise-arm is proven dead on real sweeps), which
+        // made this suggestion structurally unreachable in the field.
+        const bool micHeard  = hwMicRunPeak_ > kHwMicSweepFloor;
         const bool validMode = eb::diracDeviceTypeIsWindowsAudio (eb::readDiracDeviceType());
         engine.updateHardwareDiracAutoDetect (micHeard, maxOutputRenderPeak_, hwOutputReadable_, validMode);
         if (engine.autoDetectedHardwareDirac())
@@ -2324,6 +2420,7 @@ void MainComponent::timerCallback() {
         return;
     }
     const auto lv = engine.levels();
+    hwMicRunPeak_ = juce::jmax (hwMicRunPeak_, lv.inL, lv.inR);   // #16: unconditional run peak for the hw-Dirac detect
     meterL.setLevel  (lv.inL,     lv.clipL);
     meterR.setLevel  (lv.inR,     lv.clipR);
     meterOut.setLevel (lv.outMono, lv.clipOut);
