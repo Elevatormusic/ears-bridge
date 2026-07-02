@@ -21,6 +21,7 @@
 #include "audio/SweepScheduleStore.h"       // eb::extractSchedule / serialize+deserialize (AutoPerEar schedule, P0-06)
 #include "audio/ReferenceMetaStore.h"       // eb::serializeReferenceMeta / checkReferenceMeta (audit #5/#20 integrity sidecar)
 #include "platform/EndpointFormat.h"        // eb::endpointMixSampleRateForName (the WASAPI mix-format rate)
+#include "platform/EndpointUid.h"           // #34: bind/verify the reference's learn-time Dirac output endpoint
 #include <algorithm>
 #include <cmath>
 
@@ -1004,6 +1005,18 @@ void MainComponent::onStartStop() {
                 notes.warnings.add ("Reference was learned at " + juce::String (loadedReferenceRateL_ / 1000.0, 1)
                                   + " kHz; this session is " + juce::String (activeRate() / 1000.0, 1)
                                   + " kHz - re-learn for this rate.");
+            // #34: warn when Dirac's output DEVICE differs from the one the reference was learned
+            // against - a swap silently changes the comparison basis (the grades would read "re-learn"
+            // with no visible reason). Advisory only; legacy sidecars (no binding) stay silent.
+            if (engine.referenceLoaded() && loadedReferenceEndpoint_.isNotEmpty()) {
+                if (const auto curName = eb::readDiracOutputDeviceName(); curName.isNotEmpty()) {
+                    auto curId = eb::endpointUidForName (curName, /*isInput*/ false);
+                    if (curId.isEmpty()) curId = curName;
+                    if (curId != loadedReferenceEndpoint_ && curName != loadedReferenceEndpoint_)
+                        notes.warnings.add ("Reference was learned against a different Dirac output device "
+                                            "- re-learn if measurements read 're-learn'.");
+                }
+            }
             preflightLabel.setText (notes.warnings.joinIntoString (" "), juce::dontSendNotification);
             preflightInfo.setText (notes.info, juce::dontSendNotification);
             resized();   // the info line claims a row only when non-empty -> relayout the rail
@@ -1182,6 +1195,22 @@ void MainComponent::forceThemeForTest (bool dark) {
     updateActiveEarIndicator (true);
     updateDiracCableHint();
     sendLookAndFeelChange();   // children re-read LookAndFeel colours (mirrors the live theme tick)
+    resized();
+}
+
+// #68 (see the header): drive the two status lines + the dots for the render gate. Mirrors the
+// EB_HIG_STATES dev harness's mechanism but is a plain seam the headless suite can call.
+void MainComponent::driveHeaderForTest (const juce::String& line1, const juce::String& line2, bool showDots) {
+    statusLine.setText  (line1, juce::dontSendNotification);
+    statusLineR.setText (line2, juce::dontSendNotification);
+    if (showDots) {
+        gradeDotsL_.setMetrics (eb::QualityBand::Green,  "28 dB", eb::QualityBand::Green, "56 dB",
+                                eb::QualityBand::Orange, "0.8%");
+        gradeDotsR_.setMetrics (eb::QualityBand::Orange, "18 dB", eb::QualityBand::Green, "54 dB",
+                                eb::QualityBand::Red,    "12.5%");
+    }
+    gradeDotsL_.setVisible (showDots);
+    gradeDotsR_.setVisible (showDots);
     resized();
 }
 
@@ -1548,6 +1577,7 @@ void MainComponent::loadStoredReference() {
             loadedReferenceR_.assign (fR, fR + nR);
             loadedReferenceRateL_ = meta.rate;       // #5: the REAL learn-time rate from the verified sidecar
             loadedReferenceRateR_ = meta.rate;
+            loadedReferenceEndpoint_ = meta.endpoint;   // #34: "" on a legacy sidecar (no binding recorded)
             referenceStatePath_  = refL.getFullPathName();
             engine.setReferenceLoaded (true);
             // AutoPerEar: reload the schedule sidecar ONLY if it matches this reference (stale guard), then install
@@ -1724,7 +1754,7 @@ void MainComponent::onLearnReference() {
                 }
             }
         }
-        juce::MessageManager::callAsync ([safe, ok, cancelled, resultMsg,
+        juce::MessageManager::callAsync ([safe, ok, cancelled, resultMsg, renderTarget,
                                           samplesL = std::move (samplesL), samplesR = std::move (samplesR),
                                           schedule = std::move (schedule), capRate]() mutable {
             auto* mc = safe.getComponent();
@@ -1759,10 +1789,20 @@ void MainComponent::onLearnReference() {
                 // the reload hardcoding 48 kHz while the capture ran at the settings rate).
                 const auto metaL  = eb::makeReferenceMetadata (samplesL.data(), (int) samplesL.size(), capRate);
                 const auto metaR  = eb::makeReferenceMetadata (samplesR.data(), (int) samplesR.size(), capRate);
+                // #34: bind the pair to the endpoint it was learned FROM (Dirac's output render device) -
+                // stable UID when it resolves, else the display name; an empty target (system default
+                // render) records nothing. A later device swap then gets a start-time warning instead of
+                // silently grading against a reference from a different signal path.
+                juce::String learnEndpoint;
+                if (renderTarget.isNotEmpty()) {
+                    learnEndpoint = eb::endpointUidForName (renderTarget, /*isInput*/ false);
+                    if (learnEndpoint.isEmpty()) learnEndpoint = renderTarget;
+                }
+                mc->loadedReferenceEndpoint_ = learnEndpoint;
                 const bool wroteL = refL.replaceWithData (samplesL.data(), samplesL.size() * sizeof (float));
                 const bool wroteR = refR.replaceWithData (samplesR.data(), samplesR.size() * sizeof (float));
                 const bool wroteM = dir.getChildFile ("reference.meta")
-                                       .replaceWithText (eb::serializeReferenceMeta (metaL, metaR));
+                                       .replaceWithText (eb::serializeReferenceMeta (metaL, metaR, learnEndpoint));
                 const bool persistOk = wroteL && wroteR && wroteM;
                 if (! persistOk) {
                     // Fail LOUDLY and leave the disk CLEAN: a partial pair that still cross-correlates would

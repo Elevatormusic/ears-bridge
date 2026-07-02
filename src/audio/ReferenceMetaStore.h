@@ -12,25 +12,35 @@
 // cross-correlates and grades against garbage). Pure (juce_core String only) so the unit suite drives every
 // branch; file IO + hashing of the disk bytes live in the caller (MainComponent).
 //
-// Format (one token-line each):
+// Format (one token-line each; the endpoint line is OPTIONAL — audit #34):
 //   v1
 //   rate <hz>
 //   L <lengthSamples> <sha256hex>
 //   R <lengthSamples> <sha256hex>
+//   endpoint <id-or-name>            (the Dirac output the loopback was captured FROM; may contain spaces)
+//
+// The endpoint line is ADVISORY, not part of the integrity gate: a sidecar without it (v0.4.0) stays
+// valid, and a mismatch never invalidates the pair — the caller surfaces a start-time "learned against
+// a different device" warning instead (a device swap silently changed the comparison basis, #34).
+// v0.4.0's parser ignores unknown trailing lines, so this addition is forward- AND backward-compatible.
 namespace eb {
 
-[[nodiscard]] inline juce::String serializeReferenceMeta (const ReferenceMetadata& l, const ReferenceMetadata& r) {
+[[nodiscard]] inline juce::String serializeReferenceMeta (const ReferenceMetadata& l, const ReferenceMetadata& r,
+                                                          const juce::String& endpoint = {}) {
     juce::String out;
     out << "v1\n"
         << "rate " << juce::String (l.rate, 3) << "\n"
         << "L " << l.lengthSamples << " " << l.contentHash << "\n"
         << "R " << r.lengthSamples << " " << r.contentHash << "\n";
+    if (endpoint.isNotEmpty())
+        out << "endpoint " << endpoint << "\n";
     return out;
 }
 
 struct ReferenceMetaCheck {
     bool         valid = false;
     double       rate  = 0.0;    // the learn-time capture rate (only meaningful when valid)
+    juce::String endpoint;       // #34: the learn-time Dirac output id/name ("" = not recorded / legacy sidecar)
     juce::String reason;         // why the check failed (empty when valid)
 };
 
@@ -62,6 +72,13 @@ struct ReferenceMetaCheck {
     juce::String why;
     if (! checkLine (lines[2], "L", diskL, why)) { c.reason = why; return c; }
     if (! checkLine (lines[3], "R", diskR, why)) { c.reason = why; return c; }
+
+    // #34: the OPTIONAL endpoint line (advisory — never gates validity). Scan the trailing lines so a
+    // future field order can't break it; first match wins.
+    for (int i = 4; i < lines.size(); ++i) {
+        const auto t = lines[i].trim();
+        if (t.startsWith ("endpoint ")) { c.endpoint = t.substring (9).trim(); break; }
+    }
 
     c.valid = true;
     c.rate  = rate;

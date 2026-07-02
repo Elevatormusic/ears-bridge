@@ -41,3 +41,34 @@ TEST_CASE("ReferenceMetaStore: absent/garbage/implausible-rate sidecars never va
     CHECK_FALSE (eb::checkReferenceMeta ("v1\nrate nonsense\nL 480000 aabbcc\nR 480000 ddeeff\n", L, R).valid);
     CHECK_FALSE (eb::checkReferenceMeta ("v1\nrate 1.0\nL 480000 aabbcc\nR 480000 ddeeff\n",      L, R).valid);
 }
+
+// ==================================================================================================
+// #34: the OPTIONAL endpoint binding. Advisory only - it must round-trip when present, default empty
+// when absent (legacy v0.4.0 sidecars), and NEVER gate validity (the integrity gate is rate+len+hash).
+// ==================================================================================================
+TEST_CASE("ReferenceMetaStore: the endpoint line round-trips and stays advisory [#34]") {
+    eb::ReferenceMetadata l; l.rate = 48000.0; l.lengthSamples = 1000; l.contentHash = "aa11";
+    eb::ReferenceMetadata r; r.rate = 48000.0; r.lengthSamples = 2000; r.contentHash = "bb22";
+
+    const auto withEp = eb::serializeReferenceMeta (l, r, "{0.0.0.00000000}.{abcd-1234}");
+    auto c = eb::checkReferenceMeta (withEp, l, r);
+    CHECK (c.valid);
+    CHECK (c.endpoint == "{0.0.0.00000000}.{abcd-1234}");
+
+    // A display-name fallback with SPACES survives (the id is the line remainder, not one token).
+    const auto named = eb::serializeReferenceMeta (l, r, "Speakers (VB-Audio Virtual Cable)");
+    CHECK (eb::checkReferenceMeta (named, l, r).endpoint == "Speakers (VB-Audio Virtual Cable)");
+
+    // LEGACY sidecar (no endpoint line, the v0.4.0 shape): still fully valid, endpoint empty.
+    const auto legacy = eb::serializeReferenceMeta (l, r);
+    CHECK_FALSE (legacy.contains ("endpoint"));
+    c = eb::checkReferenceMeta (legacy, l, r);
+    CHECK (c.valid);
+    CHECK (c.endpoint.isEmpty());
+
+    // The endpoint NEVER gates: a mismatched hash still fails for the hash, not the endpoint...
+    eb::ReferenceMetadata bad = l; bad.contentHash = "ffff";
+    CHECK_FALSE (eb::checkReferenceMeta (withEp, bad, r).valid);
+    // ...and the integrity gate passing is unaffected by any endpoint content.
+    CHECK (eb::checkReferenceMeta (withEp, l, r).valid);
+}

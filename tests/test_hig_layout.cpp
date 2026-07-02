@@ -4,6 +4,7 @@
 #include "gui/juce_design_probe.h"
 #include "gui/HigScore.h"
 #include "gui/SystemA11y.h"
+#include "gui/StatusLadder.h"   // #68: worst-case captured wording generated FROM the pure ladder
 
 // Task 6: the real editor must construct HEADLESS (no window/peer) with a temp-dir Settings (hermetic - never
 // touches the developer's/CI's real %APPDATA% file) and with the launch-time GitHub update check SUPPRESSED.
@@ -100,5 +101,66 @@ TEST_CASE("HIG gate bites: probe+score flags a real overlap and a real clip (not
     }
     CHECK (sawOverlap);
     CHECK (sawClip);
+    tmp.deleteRecursively();
+}
+
+// ==================================================================================================
+// #68: the per-ear verdict text + quality dots were never RENDER-verified - the captured two-line
+// header only exists mid-run, which the construct-and-probe sweep above never reaches. Drive the
+// WORST-CASE captured wording (generated from the pure StatusLadder, so this test tracks wording
+// changes automatically) through the REAL header at the MINIMUM window and score the render.
+// ==================================================================================================
+TEST_CASE("HIG gate: the captured two-line header renders clean at the minimum window [#68]") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    const bool wasDark = eb::Theme::dark();
+    const auto blocking = [] (const eb::hig::Finding& f) {
+        return f.category == "overlap" || f.category == "clip" || f.category == "duplicate"
+            || f.category == "target-size" || f.category == "contrast"; };
+
+    // Case 1: the WORST captured state - both ears graded but CLIPPED with low SNR (the longest
+    // compact line2: two full clip-cut clauses) under the Warn headline.
+    eb::EarGradeSnapshot clipped;
+    clipped.state = (int) eb::RefMonState::GradedClean;
+    clipped.irSnrDb = 54.0f; clipped.thdPercent = 0.3f; clipped.sweepSnrDb = 12.0f; clipped.peakDb = 1.6f;
+    eb::RunningSnapshot s1;
+    s1.referenceLoaded = true; s1.earL = clipped; s1.earR = clipped;
+    const auto out1 = eb::runningStatus (s1);
+
+    // Case 2: the longest CALM captured state - verified ears with peak tails, plus the chain
+    // advisory tail (only calm lines carry it) on the green headline.
+    eb::EarGradeSnapshot verified = clipped;
+    verified.sweepSnrDb = 31.0f; verified.peakDb = -6.2f;
+    eb::RunningSnapshot s2;
+    s2.referenceLoaded = true; s2.earL = verified; s2.earR = verified;
+    s2.advisoryTail = " - input, cable 16-bit - 24-bit+ recommended for the cleanest measurement";
+    const auto out2 = eb::runningStatus (s2);
+
+    const auto jf = tmp.getChildFile ("h.json");
+    const auto pf = tmp.getChildFile ("h.png");
+    juce::StringArray bad;
+    struct Case { const eb::StatusOut* o; const char* name; };
+    const Case cases[] = { { &out1, "clipped" }, { &out2, "verified+advisory" } };
+    for (bool dark : { true, false }) {
+        mc.forceThemeForTest (dark);
+        for (auto& c : cases) {
+            mc.setSize (780, 720);                       // the app's hard minimum (Main.cpp setResizeLimits)
+            mc.driveHeaderForTest (c.o->line1.text, c.o->line2.text, /*showDots*/ true);
+            hig::writeDesignProbe (mc, jf, pf);
+            for (auto& f : eb::hig::scoreDescriptor (juce::JSON::parse (jf)))
+                if (blocking (f))
+                    bad.add (juce::String (dark ? "dark" : "light") + "/" + c.name + ": "
+                             + f.category + " on " + f.element + " - " + f.message);
+        }
+    }
+    mc.forceThemeForTest (wasDark);
+    INFO ("line1(clipped)  = " << out1.line1.text
+          << "\nline2(clipped)  = " << out1.line2.text
+          << "\nline1(verified) = " << out2.line1.text
+          << "\nline2(verified) = " << out2.line2.text
+          << "\nblocking findings (" << bad.size() << "):\n" << bad.joinIntoString ("\n"));
+    CHECK (bad.isEmpty());
     tmp.deleteRecursively();
 }
