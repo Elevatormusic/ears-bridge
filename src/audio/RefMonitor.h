@@ -50,6 +50,43 @@ namespace eb {
     return offsets;
 }
 
+// ---- measured sweep length (pure, #18) -------------------------------------
+// Measure the ACTIVE sweep length inside a (possibly margin-padded) reference buffer. The stored
+// reference is trimmed by findActiveSpan with ~50 ms guard margins + 20 ms block quantization, so the
+// BUFFER length overstates the sweep duration by thousands of samples. farinaHarmonicOffsets scales
+// linearly with the sweep length, so feeding it the buffer length displaced every harmonic spot by
+// margin*ln(k)/ln(f2/f1) — hundreds of samples, far outside evaluateIr's spot window — and thdPercent
+// read ~0 on every real measurement (the THD-red escalation was unreachable). Block-RMS over
+// 1024-sample blocks; threshold = loudest block - 40 dB with an absolute ~-80 dBFS silence floor
+// (mirrors findActiveSpan); the length is the LONGEST contiguous above-threshold run (a single-block
+// dip tolerated). Returns 0 when no plausible sweep is found — callers fall back to the buffer length.
+[[nodiscard]] inline int measuredSweepLength (const float* ref, int n) {
+    if (ref == nullptr || n <= 0) return 0;
+    constexpr int   kBlock        = 1024;
+    constexpr float kSilenceFloor = 1.0e-4f;   // ~-80 dBFS
+    const int numBlocks = n / kBlock;
+    if (numBlocks < 2) return 0;
+    std::vector<float> rms ((size_t) numBlocks, 0.0f);
+    float maxRms = 0.0f;
+    for (int b = 0; b < numBlocks; ++b) {
+        double acc = 0.0;
+        const float* p = ref + (size_t) b * (size_t) kBlock;
+        for (int i = 0; i < kBlock; ++i) acc += (double) p[i] * (double) p[i];
+        rms[(size_t) b] = (float) std::sqrt (acc / (double) kBlock);
+        if (rms[(size_t) b] > maxRms) maxRms = rms[(size_t) b];
+    }
+    if (maxRms < kSilenceFloor) return 0;      // no real sweep, only the noise floor
+    const float thr = maxRms * 0.01f;          // -40 dB relative
+    int bestRun = 0, run = 0, dip = 0;
+    for (int b = 0; b < numBlocks; ++b) {
+        if (rms[(size_t) b] >= thr)            { run += 1 + dip; dip = 0; }
+        else if (run > 0 && dip == 0)          { dip = 1; }               // tolerate ONE quiet block mid-run
+        else { if (run > bestRun) bestRun = run; run = 0; dip = 0; }      // a trailing dip never extends the run
+    }
+    if (run > bestRun) bestRun = run;
+    return bestRun * kBlock;
+}
+
 // ---- 3-color measurement-quality bands (pure; PROVISIONAL thresholds) -----
 // sweepSNR is the TRUST GATE (Dirac "20 dB good" + REW; on-device clean 22-36 / noisy 5-18). IR-SNR +
 // THD are ADVISORY (see aggregateVerdict). Thresholds are on-device-informed, not literature: Müller &
@@ -259,7 +296,10 @@ struct MeasurementGrade {
 
     // 2) MATCHED -> recover the IR and grade its quality (guidance only).
     const std::vector<float> ir = deconvolve (reference, response, n);
-    const std::vector<int>   harm = farinaHarmonicOffsets (n, sampleRate, f1, f2);
+    // #18: the harmonic offsets scale with the ACTIVE sweep length, not the margin-padded buffer
+    // length — measure it from the reference (falls back to n when no plausible sweep is found).
+    const int sweepLen = measuredSweepLength (reference, n);
+    const std::vector<int>   harm = farinaHarmonicOffsets (sweepLen > 0 ? sweepLen : n, sampleRate, f1, f2);
     g.quality = evaluateIr (ir.data(), (int) ir.size(), /*matched*/ true,
                             minIrSnrDb, maxThdPct, harm, sampleRate);
     g.state = g.quality.lowQuality ? RefMonState::GradedSuspect : RefMonState::GradedClean;

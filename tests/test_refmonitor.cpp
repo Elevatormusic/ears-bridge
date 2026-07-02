@@ -356,3 +356,56 @@ TEST_CASE ("GradingOffHardware: blocks green, neutral colour, never inferred", "
         for (bool c : {false,true}) for (bool d : {false,true})
             CHECK (nextRefMonState ({a,b,c,d}) != RefMonState::GradingOffHardware);
 }
+
+// ==================================================================================================
+// #18: the Farina THD spots must key off the MEASURED sweep length, not the margin-padded buffer.
+// The stored reference is trimmed with ~50 ms guard margins, so farinaHarmonicOffsets(bufferLen)
+// displaced every harmonic image by margin*ln(k)/ln(f2/f1) — outside the old +-2-sample window —
+// and thdPercent read ~0 on every real (distorted) measurement.
+// ==================================================================================================
+TEST_CASE("measuredSweepLength: recovers the active sweep inside a margin-padded reference [#18]") {
+    const double fs = 48000.0;
+    const int sweepLen = 96 * 1024;                 // ~2 s sweep (block-aligned for an exact expectation)
+    const int margin   = 2400;                      // findActiveSpan's ~50 ms guard each side
+    auto sweep = makeEss (sweepLen, fs);
+    std::vector<float> padded ((size_t) (sweepLen + 2 * margin), 0.0f);
+    std::copy (sweep.begin(), sweep.end(), padded.begin() + margin);
+
+    const int measured = eb::measuredSweepLength (padded.data(), (int) padded.size());
+    CHECK (measured > 0);
+    // Block-quantized (1024): within a couple of blocks of the true active length.
+    CHECK (std::abs (measured - sweepLen) <= 3 * 1024);
+
+    // Degenerates: silence-only or empty -> 0 (callers fall back to the buffer length).
+    std::vector<float> quiet (48000, 1.0e-6f);
+    CHECK (eb::measuredSweepLength (quiet.data(), (int) quiet.size()) == 0);
+    CHECK (eb::measuredSweepLength (nullptr, 0) == 0);
+}
+
+TEST_CASE("gradeMeasurement: real distortion is DETECTED through a margin-padded reference [#18]") {
+    // The end-to-end regression: reference = margins + ESS + margins (the production shape after
+    // findActiveSpan), response = the same chain through a memoryless nonlinearity. The harmonic
+    // images land at offsets set by the TRUE sweep length; keying the spots off the padded buffer
+    // length missed them all and THD read ~0. With the measured length + windowed spot search the
+    // distortion must register.
+    const double fs = 48000.0;
+    const int sweepLen = 96 * 1024, margin = 2400;
+    auto sweep = makeEss (sweepLen, fs);
+    std::vector<float> ref ((size_t) (sweepLen + 2 * margin), 0.0f);
+    std::copy (sweep.begin(), sweep.end(), ref.begin() + margin);
+
+    auto distorted = ref;
+    for (auto& v : distorted) v = 0.8f * v + 0.25f * v * v;   // strong 2nd-order distortion
+
+    const auto g = eb::gradeMeasurement (ref.data(), distorted.data(), (int) ref.size(), fs);
+    REQUIRE (g.match.matched);                                 // same sweep -> the gate passes
+    INFO ("thdPercent = " << g.quality.thdPercent);
+    CHECK (g.quality.thdPercent > 1.0f);                       // the distortion is VISIBLE, not ~0
+
+    // And the clean control stays clean: same padded reference against itself reads ~0% THD.
+    const auto clean = eb::gradeMeasurement (ref.data(), ref.data(), (int) ref.size(), fs);
+    REQUIRE (clean.match.matched);
+    INFO ("clean thdPercent = " << clean.quality.thdPercent);
+    CHECK (clean.quality.thdPercent < 1.0f);
+    CHECK (g.quality.thdPercent > 10.0f * (clean.quality.thdPercent + 0.01f));   // clear separation
+}

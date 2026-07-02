@@ -128,6 +128,15 @@ public:
     static void computeSweepSnr (const float* window, int winLen, int alignOffset, int refLen,
                                  GradePollResult& out) noexcept;
 
+    // #37: ROBUST noise-floor RMS over [first, last). In Auto per-ear the 28 s window's "leading room
+    // noise" can contain the OTHER ear's sweep (open-back crosstalk / leakage) or a stray transient — a
+    // plain full-region RMS is energy-dominated by that contamination and collapses the SNR on a
+    // perfectly clean measurement. Block-RMS (1024-sample blocks) and take the 25th-PERCENTILE block:
+    // the genuinely quiet stretches dominate, tolerating up to ~75% of the region being contaminated
+    // (bias vs a stationary floor is ~0.1 dB). Falls back to the plain RMS when the region holds fewer
+    // than 4 full blocks. Returns -1.0f when no finite samples exist (caller treats as unusable).
+    static float robustNoiseRms (const float* buf, int first, int last) noexcept;
+
     // The SAMPLE-PEAK input level over the aligned sweep region, in dBFS. maxAbs = max(|window[i]|) over
     // [alignOffset, min(alignOffset+refLen, winLen)) (skipping non-finite samples); returns 20*log10(maxAbs).
     // DELIBERATELY NOT clamped at 0 dB: a clipping float > 1.0 returns a POSITIVE dBFS so the GUI can quantify
