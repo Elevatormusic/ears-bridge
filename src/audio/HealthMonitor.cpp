@@ -5,20 +5,23 @@
 namespace eb {
 
 // ---- Plan 4 addition: flag bookkeeping ------------------------------------------------
+// #40: the conditions that invalidate a measurement; pure guidance warnings are not in this mask.
+// cleanCapture is DERIVED from flagBits & this mask — there is no separate clean bool. The old
+// two-step (clean.store + flagBits.fetch_and in resetMeasurementLatches) could interleave with a
+// render-thread raise() so cleanCapture read false with its explaining flag wiped; deriving both
+// answers from the ONE atomic word makes that inconsistent state unrepresentable.
+static constexpr unsigned kInvalidatingMask =
+    static_cast<unsigned> (HealthFlag::Xrun)          |
+    static_cast<unsigned> (HealthFlag::Dropout)       |
+    static_cast<unsigned> (HealthFlag::ExcessDrift)   |
+    static_cast<unsigned> (HealthFlag::FifoStarved)   |
+    static_cast<unsigned> (HealthFlag::ClipConfirmed) |
+    static_cast<unsigned> (HealthFlag::NonFinite)     |
+    static_cast<unsigned> (HealthFlag::SweepRetimed)  |
+    static_cast<unsigned> (HealthFlag::FormatChanged);
+
 void HealthMonitor::raise (HealthFlag f) noexcept {
-    flagBits.fetch_or (static_cast<unsigned> (f));
-    // Conditions that invalidate a measurement clear cleanCapture; pure guidance warnings do not.
-    const unsigned invalidating =
-        static_cast<unsigned> (HealthFlag::Xrun)          |
-        static_cast<unsigned> (HealthFlag::Dropout)       |
-        static_cast<unsigned> (HealthFlag::ExcessDrift)   |
-        static_cast<unsigned> (HealthFlag::FifoStarved)   |
-        static_cast<unsigned> (HealthFlag::ClipConfirmed) |
-        static_cast<unsigned> (HealthFlag::NonFinite)     |
-        static_cast<unsigned> (HealthFlag::SweepRetimed)  |
-        static_cast<unsigned> (HealthFlag::FormatChanged);
-    if ((static_cast<unsigned> (f) & invalidating) != 0u)
-        clean.store (false);
+    flagBits.fetch_or (static_cast<unsigned> (f));   // cleanCapture() derives from this same word (#40)
 }
 
 // ---- Plan 4 addition: per-run configure -----------------------------------------------
@@ -33,7 +36,6 @@ void HealthMonitor::prepare (EarsModel m, int fifoCapacityFrames, double nominal
 void HealthMonitor::reset() {
     xrunsA.store (0); droppedA.store (0);
     fifoFillMilli.store (500); ratioMicro.store (1000000);
-    clean.store (true);
     inLm.store (0); inRm.store (0); outM.store (0);
     cL.store (false); cR.store (false); cO.store (false);
     flagBits.store (0);                 // Plan 4: clear the sticky flags on a fresh run
@@ -55,7 +57,10 @@ void HealthMonitor::reset() {
 
 // ---- D5 addition: re-scope measurement validity on the sweep-onset edge ----------------
 void HealthMonitor::resetMeasurementLatches() noexcept {
-    clean.store (true);
+    // #40: NO separate clean.store here — cleanCapture derives from flagBits, so the single fetch_and
+    // below re-scopes the fault flags AND the verdict in one atomic step. A raise() landing before it
+    // is cleared with its scope; one landing after keeps BOTH its flag and the invalid verdict. The
+    // old two-step could interleave to "invalid, but every explaining flag wiped".
     // Clear every sticky flag EXCEPT the per-run OS-SRC guidance (OsResampled is raised once in start()
     // after prepare() and reflects the whole run's stream; it must survive a mid-run sweep re-scope so
     // the in-sweep clip caveat still fires).
@@ -206,8 +211,9 @@ Health HealthMonitor::snapshot() const {
     h.droppedFrames = droppedA.load();
     h.fifoFill = fifoFillMilli.load() / 1000.0;
     h.captureToRenderRatio = ratioMicro.load() / 1.0e6;
-    h.cleanCapture = clean.load();
-    h.flags = static_cast<HealthFlag> (flagBits.load());   // Plan 4: surface sticky flags
+    const auto bits = flagBits.load();                     // ONE read: flags + verdict stay consistent (#40)
+    h.cleanCapture = (bits & kInvalidatingMask) == 0u;
+    h.flags = static_cast<HealthFlag> (bits);              // Plan 4: surface sticky flags
     return h;
 }
 
@@ -276,6 +282,6 @@ void HealthMonitor::checkFormatChange (double sampleRate, int bitDepth, int numC
 }
 
 HealthFlag HealthMonitor::flags() const noexcept { return static_cast<HealthFlag> (flagBits.load()); }
-bool       HealthMonitor::cleanCapture() const noexcept { return clean.load(); }
+bool       HealthMonitor::cleanCapture() const noexcept { return (flagBits.load() & kInvalidatingMask) == 0u; }   // derived (#40)
 
 } // namespace eb
