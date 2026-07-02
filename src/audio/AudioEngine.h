@@ -40,7 +40,12 @@ public:
     void setOutputBitDepth (int bits);   // 16/24/32 (24 default); best-effort request, not enforced
 
     // ---- DSP config ----
-    void setLeftCalFir  (juce::AudioBuffer<float> fir);   // hot-swappable while Running
+    // #12: LEGACY direct installs — STOPPED ONLY (backstopped via reconfigAllowed(), mirroring
+    // setSweepSchedule). They bypass the R1 calibration-generation lifecycle (no CalibrationPairValidator,
+    // no generation token), so a mid-run install would swap the FIR out from under the Start gate's
+    // applied generation. The generation path (applyCalibrationGeneration) is the validated entry.
+    // (The OLD "hot-swappable while Running" note here was the finding: it invited exactly that misuse.)
+    void setLeftCalFir  (juce::AudioBuffer<float> fir);
     void setRightCalFir (juce::AudioBuffer<float> fir);
     void clearLeftCalFir();    // restore a neutral (unity) FIR + reset that ear's auto-headroom
     void clearRightCalFir();
@@ -352,6 +357,16 @@ private:
     bool          usingAggregate_ = false; // macOS: true when the CoreAudio aggregate path is active
                                            // (Task 7 sets it; the render callback reads it). Always
                                            // false on Windows.
+    juce::String  aggregateNote_;          // #10: engaged-vs-fallback record from the last start()
+                                           // (macOS only; empty on Windows). Message-thread only.
+
+public:
+    // #10: which clock path the last start() actually took ("aggregate ENGAGED" vs "unavailable (...)
+    // - two-clock ASRC path"). The GUI logs it so an on-device Gate-7 validation can't test the
+    // fallback while believing it exercised the aggregate. Empty off-macOS / before the first start.
+    juce::String aggregateNote() const { return aggregateNote_; }
+
+private:
 
     DeviceId inputId, outputId;
     double   activeRate = 48000.0;

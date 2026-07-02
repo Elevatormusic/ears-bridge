@@ -38,6 +38,12 @@ struct ChainConfig {
 
 struct ConfigVerdict {
     bool checked = false;   // false if NONE of the three could be read (don't false-alarm on an empty read)
+    // #55: a poll RAN and nothing was readable. The old contract left this state totally SILENT (every
+    // warn keys on `checked`), which is fail-open: an unverifiable chain read as implicitly fine — and on
+    // macOS (whole-format read unavailable) the entire 48k gate was inert. The summary now carries an
+    // honest "couldn't read" line and the GUI warns on it. false on a default-constructed verdict (no
+    // poll yet), so startup stays quiet.
+    bool unverifiable = false;
     bool all48k  = false;   // THE GATE: every endpoint valid AND at 48 kHz (an unreadable one fails this)
     bool inputOk  = false;  // input.valid  && rate == 48000
     bool cableOk  = false;  // cable.valid  && rate == 48000
@@ -80,7 +86,8 @@ struct ConfigVerdict {
     auto is16BitInt = [] (const eb::EndpointFormat& f) {
         return f.valid && ! f.isFloat && f.bits > 0 && f.bits <= 16;
     };
-    v.inputChannelsLow = c.input.valid && c.input.channels < 2;   // the one advisory WARN
+    // channels == 0 means "not reported" (the macOS rate-only read, #55) — never a false mono warn.
+    v.inputChannelsLow = c.input.valid && c.input.channels > 0 && c.input.channels < 2;
 
     juce::StringArray adv;
     // 1) The input-channels WARN comes FIRST (it's the most important — both earcups can't be measured).
@@ -97,16 +104,23 @@ struct ConfigVerdict {
     }
     // 3) A non-2ch cable / Dirac output: INFO only (the input's channel count is handled by the WARN above).
     {
-        juce::StringArray nonStereo;
-        if (c.cable.valid       && c.cable.channels != 2)       nonStereo.add ("cable");
-        if (c.diracOutput.valid && c.diracOutput.channels != 2) nonStereo.add ("Dirac output");
+        juce::StringArray nonStereo;   // channels == 0 = "not reported" (mac rate-only read): no note
+        if (c.cable.valid       && c.cable.channels > 0       && c.cable.channels != 2)       nonStereo.add ("cable");
+        if (c.diracOutput.valid && c.diracOutput.channels > 0 && c.diracOutput.channels != 2) nonStereo.add ("Dirac output");
         if (! nonStereo.isEmpty())
             adv.add (nonStereo.joinIntoString (", ") + " not 2-channel");
     }
     v.advisory = adv.joinIntoString ("; ");
 
-    if (! v.checked || v.all48k)
-        return v;   // nothing to judge, or every endpoint is a clean 48k -> no RATE warning (advisory may still be set)
+    if (! v.checked) {
+        // #55: honest fail-closed surface. A poll ran and NOT ONE endpoint was readable — say so
+        // instead of silence (the old early-return made an unverifiable chain read as implicitly ok).
+        v.unverifiable = true;
+        v.summary = "couldn't read any endpoint rate - 48k chain unverified";
+        return v;
+    }
+    if (v.all48k)
+        return v;   // every endpoint is a clean 48k -> no RATE warning (advisory may still be set)
 
     // Compact a rate to a human label: 44100 -> "44.1k", 48000 -> "48k", 96000 -> "96k".
     auto rateLabel = [] (double hz) -> juce::String {

@@ -26,6 +26,16 @@ public:
     static constexpr double kFreezeFloor = kTargetFill - kFreezeBand; // 0.10: near-empty (interpolator starve)
     static constexpr double kFreezeCeil  = kTargetFill + kFreezeBand; // 0.90: near-full (producer overrun)
 
+    // #47: the PI/smoother coefficients in pullRender were tuned PER CALLBACK at the on-device WASAPI
+    // shared-mode block (~10 ms @ 48 kHz). Applied per call, their effective loop bandwidth scales with
+    // the callback rate — a 128-sample block ran the loop ~4x faster (less smoothing, jumpier ratio), a
+    // 2048 block ~4x slower (sluggish fill recovery). Every per-call coefficient is now scaled by the
+    // actual block duration relative to THIS reference, so the loop bandwidth is defined in SECONDS and
+    // the validated tuning is numerically unchanged at the reference block. (The proportional term is a
+    // per-block-held ratio offset — bandwidth-independent — and is deliberately NOT scaled.)
+    // ON-DEVICE REVALIDATION owed: confirm behaviour at a non-10 ms callback (e.g. a 512-sample driver).
+    static constexpr double kRefBlockSeconds = 480.0 / 48000.0;       // the tuning-point block duration
+
     void prepare (double captureRate, double renderRate, int channels, int capacityFrames);
     void pushCapture (const float* mono, int numFrames);  // producer
     int  pullRender  (float* out, int numFrames);          // consumer; returns frames written

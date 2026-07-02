@@ -34,9 +34,17 @@ public:
     bool         isValid() const noexcept { return valid; }
     juce::String aggregateUid() const     { return uid; }
 
+    // #10: the DISPLAY name registered in the creation dictionary (kAudioAggregateDeviceNameKey in
+    // AggregateDevice_mac.mm — the CFSTR literal there MUST match this string). JUCE's CoreAudio device
+    // list resolves createDevice() by DISPLAY NAME, not UID, so THIS is the open key for DeviceManager —
+    // opening by aggregateUid() returned nullptr on every mac Start, and the aggregate path silently
+    // never engaged (Gate-7 would have validated the two-clock fallback while believing it tested the
+    // aggregate). Static so the engine can name it without a live instance.
+    static juce::String aggregateName()   { return "EARS Bridge Aggregate"; }
+
 private:
     bool         valid = false;
-    juce::String uid;          // generated aggregate UID, also the open key for JUCE
+    juce::String uid;          // generated aggregate UID (the CoreAudio identity; NOT JUCE's open key)
     unsigned     deviceId = 0; // AudioDeviceID as unsigned (avoid CoreAudio types in the header)
 };
 
