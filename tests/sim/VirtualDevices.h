@@ -42,7 +42,8 @@ inline RenderedOutput streamSession (eb::AudioEngine& e, const StereoTimeline& m
     const size_t total = mic.L.size();
     out.mono.reserve (total + (size_t) N);
 
-    std::vector<float> capL ((size_t) N + 8, 0.0f), capR ((size_t) N + 8, 0.0f);
+    jassert (f.bridgePpm > -1e6);   // ppm <= -1e6 would zero the block debt and spin forever (m3 guard)
+    std::vector<float> capL ((size_t) N, 0.0f), capR ((size_t) N, 0.0f);
     std::vector<float> outL ((size_t) N, 0.0f),     outR ((size_t) N, 0.0f);
 
     // Drift is realised as callback RATE, never block SIZE: production capture callbacks always
