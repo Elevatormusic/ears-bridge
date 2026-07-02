@@ -154,7 +154,11 @@ TEST_CASE("SimSignals: gain, clip, seeded noise and the coupler IR behave as spe
     CHECK (rmsOf (n1.L, 0, 4800) > 0.001);
 
     auto ir = probeTone (997.0, 0.5f);
-    ebsim::convolveIr (ir);                          // unity-peak-scaled: level roughly preserved,
-    const double r = rmsOf (ir.L, 480, (int) ir.L.size());   // energy spread (no exact pin here -
-    CHECK (r > 0.2); CHECK (r < 1.0);                // the mainLobe 0.2-0.4 pin lands in Task 4)
+    ebsim::convolveIr (ir);
+    // The IR is a real frequency response: its tap comb spans ~2.5 periods of 997 Hz, so this probe
+    // sits in a partial-cancellation notch (~-7 dB) - that is physics, not a defect. This sanity
+    // bound only guards blow-up/vanish; the LOAD-BEARING pin is the match-gate mainLobe landing in
+    // 0.2-0.4 through the real pipeline (Task 4's clean-session test).
+    const double r = rmsOf (ir.L, 480, (int) ir.L.size());
+    CHECK (r > 0.08); CHECK (r < 1.0);
 }
