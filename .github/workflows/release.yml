@@ -89,9 +89,10 @@ jobs:
           # Audit #11 - POLICY NOTE: GitHub's /releases/latest endpoint EXCLUDES prereleases, so while
           # every release ships prerelease:true, the update notifier (which polls /releases/latest)
           # cannot see ANY release and the old static site links 404'd (the site now resolves the
-          # newest release via the list API instead). Flip this to false for the first release that
-          # should auto-notify existing users - the planned measurement-corruption-fix release.
-          prerelease: true   # alpha: every build ships as a pre-release
+          # newest release via the list API instead). v0.4.0 (the measurement-corruption-fix +
+          # full-audit release) is the first FULL release, so /releases/latest and the in-app
+          # update notifier reach existing users again.
+          prerelease: false
 
   macos-installer:
     needs: [version-check, tests]
@@ -128,6 +129,7 @@ jobs:
           # Audit #11 - POLICY NOTE: GitHub's /releases/latest endpoint EXCLUDES prereleases, so while
           # every release ships prerelease:true, the update notifier (which polls /releases/latest)
           # cannot see ANY release and the old static site links 404'd (the site now resolves the
-          # newest release via the list API instead). Flip this to false for the first release that
-          # should auto-notify existing users - the planned measurement-corruption-fix release.
-          prerelease: true   # alpha: every build ships as a pre-release
+          # newest release via the list API instead). v0.4.0 (the measurement-corruption-fix +
+          # full-audit release) is the first FULL release, so /releases/latest and the in-app
+          # update notifier reach existing users again.
+          prerelease: false
