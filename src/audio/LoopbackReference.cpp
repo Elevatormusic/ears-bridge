@@ -927,9 +927,6 @@ juce::String readDiracVersion()         { return {}; }
 juce::String readDiracDeviceType()      { return {}; }
 juce::String readDiracOutputDeviceName() { return {}; }
 
-    return res;
-}
-
 StereoLoopbackResult captureLoopbackStereo (const juce::String&, double, double,
                                             const std::atomic<bool>* cancel) {
     StereoLoopbackResult res;
