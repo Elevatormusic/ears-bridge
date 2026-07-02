@@ -276,7 +276,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
         logLine (eb::DiagnosticLog::Level::Debug,
                  juce::String ("Toggle: Automatically check for updates=") + (autoUpdateToggle.getToggleState() ? "on" : "off"));
         settings.setAutoCheckUpdates (autoUpdateToggle.getToggleState());
-        settings.flush();
+        flushSettings();
         if (! autoUpdateToggle.getToggleState() && updateLink.isVisible()) {
             updateLink.setVisible (false);
             resized();
@@ -289,7 +289,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
         logLine (eb::DiagnosticLog::Level::Debug,
                  juce::String ("Toggle: Allow non-Dirac use=") + (overrideToggle.getToggleState() ? "on" : "off"));
         settings.setAdvancedOverride (overrideToggle.getToggleState());
-        settings.flush();
+        flushSettings();
         updateStartGate();   // recompute Start enabled-ness + the status line for the new policy
     };
     railContent.addChildComponent (overrideToggle);
@@ -301,7 +301,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
         const bool on = hwDiracToggle.getToggleState();
         logLine (eb::DiagnosticLog::Level::Info, juce::String ("Toggle: Dirac hardware processor=") + (on ? "on" : "off"));
         settings.setDiracHardwareProcessor (on);
-        settings.flush();
+        flushSettings();
         engine.setDiracHardwareProcessor (on);   // publish GradingOffHardware / clear
         learnRefButton.setEnabled (! on);        // a hardware box has no PC-render reference to learn
     };
@@ -569,6 +569,14 @@ void MainComponent::logLine (eb::DiagnosticLog::Level level, const juce::String&
     juce::String scrubbed = msg;
     for (const auto& s : loggedSerials_) scrubbed = eb::DiagnosticLog::redactSerial (scrubbed, s);   // #51: scrub ALL known serials
     log_->write (level, scrubbed);
+}
+
+void MainComponent::flushSettings() {
+    if (! settings.flush() && ! settingsSaveWarned_) {   // #53: a silent save failure loses the user's selections
+        settingsSaveWarned_ = true;
+        logLine (eb::DiagnosticLog::Level::Warn,
+                 "Settings save FAILED (read-only profile / file lock?) - selections will not persist this session.");
+    }
 }
 
 void MainComponent::logDeviceSnapshot (const juce::String& reason) {

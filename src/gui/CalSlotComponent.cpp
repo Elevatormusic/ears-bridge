@@ -195,6 +195,12 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
             errorLabel.setColour (juce::Label::textColourId, Theme::warn());
             errorLabel.setText (parsed.parseWarnings[0] + more, juce::dontSendNotification);
             errorLabel.setVisible (true);
+        } else {
+            // A type note (HEQ/HPN/RAW - the common cases) already owns the label: append a short pointer so
+            // the warnings are still VISIBLE on the card, not only in the log (C+D verifier MINOR on #54).
+            errorLabel.setText (errorLabel.getText() + " (" + juce::String (parsed.parseWarnings.size())
+                                + " parse warning" + (parsed.parseWarnings.size() > 1 ? "s" : "") + " - see log.)",
+                                juce::dontSendNotification);
         }
         if (onParseWarnings) onParseWarnings (parsed.parseWarnings);
     }

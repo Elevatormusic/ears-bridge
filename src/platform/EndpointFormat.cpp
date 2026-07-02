@@ -59,11 +59,11 @@ static void makeWfx (WAVEFORMATEXTENSIBLE& w, int rate, int ch, int bits, bool i
 // contains-match), activate an IAudioClient, GetMixFormat for the shared-mode ground truth, and probe
 // EXCLUSIVE support at 48k in that same format. Returns {valid=false} on any miss/failure.
 EndpointFormat readEndpointFormat (const juce::String& nameOrUid, bool isInput) {
-    // Resolve the caller's hint to a stable endpoint id once. If they passed a friendly name we get its
-    // UID here; if they passed a UID this just returns it back (no enumeration matched -> empty, and we
-    // then fall back to a FriendlyName contains-match on the raw hint below).
-    const juce::String wantUid = endpointUidForName (nameOrUid, isInput);
-
+    // #29/#33: ONE enumeration. The old pre-resolve (endpointUidForName) ran a complete SECOND enumeration
+    // with a property-store read per device on every call - at pollChainConfig's 1 Hz x 3 endpoints, a
+    // steady message-thread COM storm for the app's lifetime. The hint is matched IN-LOOP instead: as a
+    // UID (IMMDevice::GetId - covers callers passing the stable id), else FriendlyName contains (the
+    // original fallback tier, same first-match semantics).
     const HRESULT co = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
     const bool weInited = SUCCEEDED (co);
     EndpointFormat result;   // valid=false until a successful read
@@ -78,12 +78,12 @@ EndpointFormat readEndpointFormat (const juce::String& nameOrUid, bool isInput) 
             for (UINT i = 0; i < count && ! result.valid; ++i) {
                 IMMDevice* dev = nullptr;
                 if (SUCCEEDED (coll->Item (i, &dev)) && dev != nullptr) {
-                    // Match this endpoint: prefer the stable UID (IMMDevice::GetId == wantUid); else fall
-                    // back to a case-insensitive FriendlyName contains-match on the raw caller hint.
+                    // Match this endpoint: the caller's hint as a stable UID (IMMDevice::GetId); else fall
+                    // back to a case-insensitive FriendlyName contains-match on the raw hint.
                     bool match = false;
                     LPWSTR id = nullptr;
                     if (SUCCEEDED (dev->GetId (&id)) && id != nullptr) {
-                        if (wantUid.isNotEmpty() && wantUid == juce::String (id)) match = true;
+                        if (nameOrUid == juce::String (id)) match = true;
                         CoTaskMemFree (id);
                     }
                     if (! match) {
@@ -110,19 +110,12 @@ EndpointFormat readEndpointFormat (const juce::String& nameOrUid, bool isInput) 
                                     auto* wx = reinterpret_cast<WAVEFORMATEXTENSIBLE*> (mix);
                                     extFloat = (wx->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
                                 }
-                                // Probe EXCLUSIVE support at 48k in the endpoint's own mix shape
-                                // (channels/bits/float), same call Dirac's audio layer uses.
-                                bool excl48k = false;
-                                {
-                                    const bool mixIsFloat =
-                                        (mix->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) || extFloat;
-                                    WAVEFORMATEXTENSIBLE w;
-                                    makeWfx (w, 48000, (int) mix->nChannels,
-                                             (int) mix->wBitsPerSample, mixIsFloat);
-                                    const HRESULT ex = ac->IsFormatSupported (
-                                        AUDCLNT_SHAREMODE_EXCLUSIVE, (WAVEFORMATEX*) &w, nullptr);
-                                    excl48k = (ex == S_OK);
-                                }
+                                // #29: the EXCLUSIVE probe is skipped - nothing downstream consumes
+                                // exclusive48kSupported (checkChainConfig never reads it), yet the
+                                // IsFormatSupported call ran per endpoint per poll second. The field stays
+                                // in the struct (tests pin its pass-through); a future consumer re-enables
+                                // the probe here.
+                                const bool excl48k = false;
                                 result = interpretMixFormat (mix->wFormatTag, mix->nSamplesPerSec,
                                                              mix->nChannels, mix->wBitsPerSample,
                                                              extFloat, excl48k);

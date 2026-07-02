@@ -104,10 +104,14 @@ juce::AudioBuffer<float> FirDesigner::design (const CalFile& cal, const FirDesig
         juce::AudioBuffer<float> ir (1, p.numTaps);
         auto* d = ir.getWritePointer (0);
         for (int i = 0; i < p.numTaps; ++i) d[i] = imp[(size_t) i * 2]; // real part
-        // tail taper (last 1/8) to avoid truncation ripple
+        // tail taper (last 1/8) to avoid truncation ripple. #17: the window was applied BACKWARDS -
+        // w(i)=0.5*(1+cos(pi*i/fade)) is 1.0 at i=0, so indexing d[numTaps-1-i] kept the truncation edge at
+        // FULL amplitude and crushed the tap at the fade's inner edge instead (a ramp-UP + a notch - the
+        // inverse of the stated intent). Inverting the window keeps the same indexing but fades 0 at the
+        // last tap and ~1 at the fade start, i.e. a true fade-OUT toward the truncation point.
         const int fade = p.numTaps / 8;
         for (int i = 0; i < fade; ++i) {
-            float w = 0.5f * (1.0f + std::cos (juce::MathConstants<float>::pi * (float) i / (float) fade));
+            float w = 0.5f * (1.0f - std::cos (juce::MathConstants<float>::pi * (float) i / (float) fade));
             d[p.numTaps - 1 - i] *= w;
         }
         return ir;

@@ -64,7 +64,8 @@ Settings::Settings (const juce::File& dir) {
     opts.folderName          = "EarsBridge";
     opts.osxLibrarySubFolder = "Application Support";
     opts.storageFormat       = juce::PropertiesFile::storeAsXML;
-    opts.millisecondsBeforeSaving = 0;   // write on every change
+    opts.millisecondsBeforeSaving = 500;   // #60: debounced timer save - a trim-slider drag no longer rewrites
+                                           // the whole XML per mouse event; explicit flush() covers critical points
 
     auto target = dir == juce::File()
         ? opts.getDefaultFile()
@@ -142,6 +143,6 @@ void Settings::setAdvancedOverride (bool b) { file->setValue (kAdvOverride, b); 
 bool Settings::diracHardwareProcessor() const { return file->getBoolValue (kDiracHwProc, false); }
 void Settings::setDiracHardwareProcessor (bool b) { file->setValue (kDiracHwProc, b); }
 
-void Settings::flush() { file->saveIfNeeded(); }
+bool Settings::flush() { return file->saveIfNeeded(); }   // #53: propagate the save result (read-only profile / AV lock)
 
 } // namespace eb

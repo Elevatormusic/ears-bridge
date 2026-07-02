@@ -12,4 +12,10 @@ namespace eb {
 // (false) endpoint flow on Windows; CoreAudio devices aren't flow-specific so macOS ignores it.
 juce::String endpointUidForName (const juce::String& deviceName, bool isInput);
 
+// #63: resolve ALL of a flow's endpoints in ONE enumeration (FriendlyName -> endpoint id). rescan()
+// previously called endpointUidForName per device - a complete enumeration + property-store read each,
+// O(N^2) COM work on the message thread at launch and on every hot-plug event. Empty on non-Windows /
+// failure - callers fall back to the per-name resolver.
+juce::StringPairArray endpointUidsForFlow (bool isInput);
+
 } // namespace eb

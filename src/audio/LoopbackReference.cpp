@@ -503,7 +503,16 @@ juce::String readDiracOutputDeviceName() {
                                  .getChildFile ("DiracLiveProcessor.settings");
     if (! settings.existsAsFile())
         return {};
-    return parseDiracOutputDeviceName (settings.loadFileAsString());
+    // #33: mtime-keyed cache. pollChainConfig calls this at 1 Hz for the app's lifetime, and every call was
+    // a full file load + XML parse. Message-thread-only callers (poll/learn/snapshots), so statics are safe.
+    static juce::Time   cachedMtime;
+    static juce::String cachedName;
+    const auto mtime = settings.getLastModificationTime();
+    if (mtime == cachedMtime && cachedMtime != juce::Time())
+        return cachedName;
+    cachedMtime = mtime;
+    cachedName  = parseDiracOutputDeviceName (settings.loadFileAsString());
+    return cachedName;
 }
 
 namespace {

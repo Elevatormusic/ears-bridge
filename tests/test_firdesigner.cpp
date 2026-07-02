@@ -98,3 +98,27 @@ TEST_CASE("Complex-mode FIR matches inverted-cal magnitude within 1 dB") {
     CHECK_THAT(irMagnitudeDb (ir, 4000.0, p.sampleRate),
                Catch::Matchers::WithinAbs(-20.0, 1.0));
 }
+
+// #17: the min-phase tail taper must fade OUT toward the truncation point. The shipped window was applied
+// backwards - the LAST tap kept weight 1.0 and the tap at the fade's inner edge was crushed to ~0 (a ramp-up
+// plus an artificial notch). A short LF-heavy design keeps real energy in the tail region, so both defects
+// are directly observable on the produced taps: this test FAILS on the inverted window, PASSES on the fix.
+TEST_CASE("Min-phase FIR tail taper fades OUT (no full-amplitude edge, no inner notch) [#17]") {
+    eb::CalFile c;
+    c.points = { {20.0, -18.0, 0.0}, {200.0, 0.0, 0.0}, {20000.0, 0.0, 0.0} };   // inverse = +18 dB LF boost
+    eb::FirDesignParams p;
+    p.sampleRate = 48000.0; p.numTaps = 1024; p.mode = eb::FirMode::MinPhaseMagnitude;
+    p.invert = true; p.maxBoostDb = 24.0;
+    auto ir = eb::FirDesigner::design (c, p);
+    REQUIRE (ir.getNumSamples() == 1024);
+    const float* d = ir.getReadPointer (0);
+    const int fade  = 1024 / 8;                       // matches the designer's last-1/8 taper
+    const int inner = 1024 - fade;                    // first tapered tap (w should be ~1 here, ~0 at the end)
+    // (a) the truncation EDGE is attenuated essentially to zero (the old code left it at full amplitude)
+    const float refMag = std::abs (d[inner - 1]);     // last untapered tap - the local tail scale
+    REQUIRE (refMag > 0.0f);
+    CHECK (std::abs (d[1023]) <= 0.02f * refMag + 1.0e-12f);
+    // (b) NO notch at the fade's inner edge: the first tapered tap stays comparable to its untapered
+    // neighbour (the old code multiplied it by ~2.4e-6)
+    CHECK (std::abs (d[inner]) >= 0.25f * std::abs (d[inner - 1]) - 1.0e-12f);
+}
