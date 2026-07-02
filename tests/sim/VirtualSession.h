@@ -1,6 +1,6 @@
 #pragma once
-#include "sim/SimSignals.h"
-#include "sim/VirtualDevices.h"
+#include "SimSignals.h"      // same-directory includes: see VirtualDevices.h (clang vs MSVC quote-include resolution)
+#include "VirtualDevices.h"
 #include "audio/AudioEngine.h"
 #include "audio/LoopbackReference.h"      // findActiveSpan / validateReferenceCapture (the learn pures)
 #include "audio/SweepSchedule.h"          // extractSchedule
