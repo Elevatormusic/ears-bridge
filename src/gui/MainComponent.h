@@ -256,25 +256,13 @@ private:
     // the upper/LEFT line, statusLineR the lower/RIGHT line. For every GLOBAL/hard condition (device error,
     // the 48k config veto, Stopped/gate states, learning, no per-ear reference) statusLine carries the ONE
     // message and statusLineR is blanked — a hard error must never show a stale per-ear grade beneath it.
-    // Only when Running with a per-ear reference loaded do BOTH lines render, one verdict per ear ("L:" /
-    // "R:"). renderEarStatusLine() builds one ear's text+colour; renderPerEarStatusLines() drives both.
+    // #50: the RUNNING wording/precedence lives in the PURE eb::runningStatus (gui/StatusLadder.h,
+    // headlessly tested); updateStatusLine only builds its snapshot and commits the result.
     juce::Label statusLine;
     juce::Label statusLineR;
     // 3-color per-metric quality dots (SNR/IR/THD) under each ear's status line, fed by a per-ear band smoother.
     eb::GradeMetricDotsView gradeDotsL_, gradeDotsR_;
     eb::GradeBandSmoother    smootherL_, smootherR_;
-    // Per-Ear Per-Channel Grading (Task 5): set both per-ear lines from each ear's published state+metrics.
-    // Called only from the Running + reference-loaded path in updateStatusLine (the hard/global ladder above
-    // it has precedence and blanks statusLineR). Pure DISPLAY — reads the ear-indexed engine getters, never
-    // touches grading logic, the match-gate, or the thresholds.
-    void renderPerEarStatusLines();
-    // Build ONE ear's status line (ear 0 = LEFT, 1 = RIGHT) into `label` from THAT ear's refMonState +
-    // IR-SNR/THD/sweepSNR. INFO-not-warn while kIrThresholdsRatified is false (a clean ~13 dB ESS must not
-    // false-warn); mismatch/stale -> warn "re-learn"; ungraded -> dim "waiting for the sweep"; per-ear low
-    // SNR appends "(low SNR)". prefix is "L:" / "R:".
-    // appendAdvisory: compose the chain-config advisory INTO the single commit when this line lands calm
-    // (ok/dim) - the old post-commit append stripped + re-suffixed the label every tick (audit #49).
-    void renderEarStatusLine (int ear, const char* prefix, juce::Label& label, bool appendAdvisory = false);
     // " - <advisory>" when the chain-config advisory should decorate a calm status line; empty otherwise.
     juce::String chainAdvisoryTail() const;
     // Non-modal "Update available" link shown in the title bar when a newer release exists.

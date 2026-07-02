@@ -15,6 +15,7 @@
 #include "platform/OutputActivity.h"        // eb::outputRenderPeakForName (is Dirac's PC output rendering?)
 #include "gui/SnrStatus.h"                  // eb::kMinSweepSnrDb (sweep-to-noise SNR threshold; match-window SNR fix)
 #include "gui/GradeGuards.h"                // #32: the grade-path predicates, shared with the tests (no mirror drift)
+#include "gui/StatusLadder.h"               // #50: the PURE Running status ladder (honesty cluster #1 #4 #21 #44)
 #include "gui/LiveInputStatus.h"            // eb::liveInputStatus (live per-channel in-sweep readout)
 #include "audio/LoopbackReference.h"        // eb::captureLoopback / validateReferenceCapture / readDiracDeviceType (Plan 5)
 #include "audio/SweepScheduleStore.h"       // eb::extractSchedule / serialize+deserialize (AutoPerEar schedule, P0-06)
@@ -1307,188 +1308,76 @@ void MainComponent::updateStatusLine() {
     // the end writes only what actually changed.
     juce::String sText, s2Text, sTip, s2Tip;
     juce::Colour sCol = Theme::textDim(), s2Col = Theme::warn();
-    // When a branch drives the per-ear lines directly (renderPerEarStatusLines), it commits both labels itself
-    // and sets perEarDriven=true so the generic commit at the end skips statusLine/statusLineR.
-    bool perEarDriven = false;
     if (st == EngineStatus::Running) {
+        // #50: the Running ladder is the PURE eb::runningStatus (gui/StatusLadder.h). This method only
+        // BUILDS the snapshot from engine getters (including the stateful/debounced tick counters), maps
+        // StatusTone -> Theme colours, and commits set-if-changed. The honesty fixes (#1 #4 #21 #44) and
+        // the full precedence order are implemented + headlessly tested in the ladder itself
+        // (tests/test_statusladder.cpp) - do NOT reintroduce branch logic here.
         const auto h = engine.health();
-        // The 48k-everywhere config VETO is a hard error: a wrong-rate chain silently invalidates the
-        // measurement, so it must take precedence over the live readout below (you cannot trust a level
-        // shown over a mis-rated chain). Evaluated here so the live branch can defer to it.
-        const bool rateVeto = chainVerdict_.checked && ! chainVerdict_.all48k;
-        // Advance the live-readout state (peak-hold/decay + the attack/release sweep-active debounce) EVERY
-        // tick, even if a hard error will win this render, so the held level + debounce stay continuous. It
-        // writes NO labels itself; live.owns says whether the live line should take over (sweep-active+held).
+        // Advance the live-readout state (peak-hold/decay + the sweep-active debounce) EVERY tick, even
+        // if a hard error wins this render, so the held level + debounce stay continuous.
         const LiveReadout live = updateLiveInputReadout();
-        // Bug A inputs: a captured grade (any ear GradedClean/GradedSuspect/ReferenceStale, with a per-ear
-        // reference loaded) must DEFER the pre-sweep "waiting" text and show a persistent "captured" instead.
-        // The hard warns below (output-clip / low-SNR) still take precedence so we never say "safe to run the
-        // next" over a clipped or noisy sweep.
-        auto isGraded = [this] (int ear) {
-            const auto s = (eb::RefMonState) engine.refMonState (ear);
-            return s == eb::RefMonState::GradedClean
-                || s == eb::RefMonState::GradedMarginal
-                || s == eb::RefMonState::GradedSuspect
-                || s == eb::RefMonState::ReferenceStale;
+        eb::RunningSnapshot snap;
+        snap.cleanCapture = h.cleanCapture;
+        if (! h.cleanCapture) snap.invalidMessage = eb::invalidMeasurementMessage (h.flags);
+        snap.liveOwns     = live.owns;
+        snap.liveText     = live.primary;
+        snap.outputClip   = any (h.flags & HealthFlag::ClipOutput);
+        snap.silentHold   = silentTicks_   >= kSilentHoldTicks;
+        snap.lowSnrHold   = lowSnrTicks_   >= kLowSnrHoldTicks;
+        snap.lowLevelHold = lowLevelTicks_ >= kLowLevelHoldTicks;
+        snap.snrL = engine.refSweepSnrDb (0);
+        snap.snrR = engine.refSweepSnrDb (1);
+        snap.snrCombined = engine.completedSweepSnrDb();
+        snap.rateVeto    = chainVerdict_.checked && ! chainVerdict_.all48k;
+        snap.rateSummary = chainVerdict_.summary;
+        snap.referenceLoaded = engine.referenceLoaded();
+        auto earSnap = [this] (int ear) {
+            eb::EarGradeSnapshot e;
+            e.state      = engine.refMonState (ear);
+            e.irSnrDb    = engine.refIrSnrDb (ear);
+            e.thdPercent = engine.refThdPercent (ear);
+            e.sweepSnrDb = engine.refSweepSnrDb (ear);
+            e.peakDb     = engine.referenceSweepPeakDb (ear);
+            return e;
         };
-        const bool hasGrade = engine.referenceLoaded() && (isGraded (0) || isGraded (1));
-        // An invalidating condition is reported the instant it latches, regardless of phase.
-        if (! h.cleanCapture) {
-            sText = eb::invalidMeasurementMessage (h.flags);
-            sCol  = Theme::danger();
-        } else if (! rateVeto && live.owns) {
-            // LIVE in-sweep readout: while Dirac is actually sweeping (debounced+release-held sweep-active),
-            // show the live sweep PEAK / clip, OVERRIDING the stale per-ear verdicts and the "waiting"/
-            // "captured" text below — the user needs to see the level and catch a clip AS IT HAPPENS. The two
-            // hard errors above (invalid capture, the 48k veto) still win (they short-circuit before this
-            // branch). The held live text persists between the ~7 Hz render ticks (live.primary carries the
-            // last rendered text every tick now) so the single line doesn't blink (Bug B-1). statusLineR is
-            // left at its empty default — the live readout is single-line.
-            sText = live.primary;
-            sCol  = live.colour;
-        } else if (any (h.flags & HealthFlag::ClipOutput)) {
-            // The output hit full scale (e.g. Sum's uncompensated +6 dB drove past the clamp). The clamp stops
-            // a cable over, but it distorts the sweep -- flag it, don't pass it as "clean". HOISTED above the
-            // captured/waiting branches (Bug A): a CLIPPED captured sweep must read the clip warning, never
-            // "safe to run the next" and never the pre-sweep "waiting".
-            sText = "Output clipping - lower the level or avoid Sum";
-            sCol  = Theme::warn();
-        } else if (lowSnrTicks_ >= kLowSnrHoldTicks) {
-            // SNR guidance, BEFORE the captured/waiting branches so a noisy sweep never reads as "clean" or
-            // "safe to run the next" (clean = no dropouts/clipping, which a low-SNR sweep can still pass). The
-            // engine raised LowSnr at the sweep's edge off a TRUSTED floor only (honest silence otherwise). The
-            // status line shares the title bar and is narrow, so keep the inline text SHORT and complete (no
-            // clipping); the full guidance lives in the tooltip. snrNote's long form is the wording of record.
-            // #15: name the OFFENDING EAR from the PER-EAR stores. The combined snapshot keeps last-write
-            // ("the current sweep") semantics, so once the OTHER ear graded higher, quoting it here produced
-            // a self-contradictory warning ("only 30 dB" against a 20 dB threshold). The per-ear stores are
-            // never overwritten by the other ear; fall back to the combined snapshot when neither has
-            // published (the arm path raised the flag before any per-ear grade).
-            const float snrL = engine.refSweepSnrDb (0), snrR = engine.refSweepSnrDb (1);
-            float worst = engine.completedSweepSnrDb();
-            juce::String earTag;
-            if (snrL > 0.0f && (snrR <= 0.0f || snrL <= snrR)) { worst = snrL; earTag = " (L)"; }
-            else if (snrR > 0.0f)                              { worst = snrR; earTag = " (R)"; }
-            const int snrDb = juce::roundToInt (worst);
-            sText = "Low SNR" + earTag + ": sweep only " + juce::String (snrDb)
-                  + " dB over the room noise - re-measure";
-            sCol  = Theme::warn();
-            sTip  = "The Dirac sweep was only " + juce::String (snrDb)
-                  + " dB above the room-noise floor" + (earTag.isEmpty() ? juce::String() : " on the "
-                  + juce::String (earTag.contains ("L") ? "LEFT" : "RIGHT") + " ear")
-                  + ". Quieten the room (close windows, stop fans/AC) or raise the level, "
-                    "then re-measure for a cleaner correction.";
-        } else if (rateVeto) {
-            // 48k-everywhere VETO. ABOVE the captured/waiting + reference-monitor branches so a wrong-rate (or
-            // unreadable) chain can NEVER read "verified"/"safe to run the next" — the reference monitor
-            // REQUIRES 48k on all three endpoints, and a 44.1k Dirac output silently invalidates the
-            // measurement. The hard errors above (invalid capture / output-clip / low-SNR) still win — those
-            // are signal failures the user must see first; this is the config layer. chainVerdict_.summary is a
-            // single short title-bar line naming the off-48k / unreadable endpoint(s).
-            sText = chainVerdict_.summary;
-            sCol  = Theme::warn();
-        } else if (hasGrade) {
-            // Bug A: a grade exists this run and the sweep isn't sounding (clip / low-SNR / 48k veto already
-            // short-circuited above) -> show a PERSISTENT success confirmation that does NOT revert to
-            // "waiting".
-            //   statusLine  = the headline "Sweep captured - safe to run the next sweep" (ok colour).
-            //   statusLineR = the per-ear DETAIL via renderEarStatusLine (keeps the INFO/unratified gate +
-            //                 tooltip), so the actionable verdict (IR-SNR/THD, re-learn, peak) stays on the
-            //                 lines. Both persist (set-if-changed) and never flip back to "waiting".
-            // We set statusLine here and let renderEarStatusLine commit statusLineR, so perEarDriven=true keeps
-            // the generic end-of-function commit from clobbering either line.
-            // #49: compose the chain advisory INTO this single commit (ok = calm) - the old post-commit append
-            // stripped + re-suffixed the label every tick, defeating the set-if-changed no-churn design.
-            setLabelIfChanged (statusLine, "Sweep captured - safe to run the next sweep" + chainAdvisoryTail(), Theme::ok());
-            setTooltipIfChanged (statusLine, {});
-            renderEarStatusLine (1, "R", statusLineR);        // R-ear per-ear detail on the second line
-            perEarDriven = true;
-        } else if (h.session == SessionPhase::Idle || h.session == SessionPhase::Preflight) {
-            // Before the sweep arms: validity isn't scoped to anything yet, so don't claim "clean". With a
-            // reference loaded the grade no longer depends on the (level-blind) arm — the engine listens via
-            // the rolling ring + the off-thread reference MATCH (Task 4) — so show the cosmetic activity state:
-            // "Sweep in progress..." while signal is present, "Listening..." while quiet. Non-adopters (no
-            // reference learned, no verdict yet) keep the unchanged wording.
-            // hasGrade above already intercepted the graded case, so by here NO ear has graded this run (the
-            // genuine pre-first-sweep wait) — only the cosmetic Listening<->Sweep-in-progress activity remains.
-            const bool refEngaged = engine.referenceLoaded()
-                                 && (eb::RefMonState) engine.refMonState() != eb::RefMonState::GradedClean
-                                 && (eb::RefMonState) engine.refMonState() != eb::RefMonState::GradedMarginal
-                                 && (eb::RefMonState) engine.refMonState() != eb::RefMonState::GradedSuspect
-                                 && (eb::RefMonState) engine.refMonState() != eb::RefMonState::ReferenceStale;
-            // Cosmetic activity flag drives ONLY this text (never the grade): present -> the sweep is
-            // sounding now; quiet -> waiting for it. Log each Listening<->Sweep-in-progress transition.
-            const bool active = engine.gradeSignalPresent();
-            const juce::String refText = active ? "Sweep in progress..." : "Listening for the Dirac sweep...";
-            if (refEngaged && refText != lastListenTextLogged_) {
-                logLine (eb::DiagnosticLog::Level::Info, "RefMon status: " + refText);
-                lastListenTextLogged_ = refText;
-            }
-            sText = refEngaged ? refText : juce::String ("Running - waiting for the Dirac sweep...");
-            sCol  = Theme::textDim();
-        } else if (engine.referenceLoaded()) {
-            // Per-Ear Per-Channel Grading (Task 5): a per-ear reference IS loaded, so the verdict is PER
-            // EARCUP. Dirac hard-pans its sweeps; each earcup is graded against the channel that drove it,
-            // so the two verdicts are independent and we show TWO lines (L on statusLine, R on statusLineR).
-            // This REPLACES both the old single reference-monitor branch and the green "captured (earcup)"
-            // branch for reference adopters — those collapsed everything to ONE line and one earcup. Every
-            // hard/global guard above (invalid capture, Idle/Preflight pre-sweep activity, output-clip,
-            // combined low-SNR, the 48k veto) still has precedence and short-circuits before we get here,
-            // leaving statusLineR blank under them. renderPerEarStatusLines mirrors the unratified-INFO gate
-            // (kIrThresholdsRatified) so a clean ~13 dB ESS shows the numbers as INFO, never a false warn.
-            // (This branch is now reached only when referenceLoaded() but NO ear has graded yet — the graded
-            // case is intercepted by the hasGrade branch above.) It commits both lines via set-if-changed.
-            renderPerEarStatusLines();
-            perEarDriven = true;
-        } else if (h.session == SessionPhase::Complete) {
-            // Sweep finished clean: an honest sweep-scoped all-clear (no dropouts / clipping seen during
-            // the captured sweep), with the OS-resampled caveat when the input ran through OS SRC.
-            const auto refState = (eb::RefMonState) engine.refMonState();
-            juce::String msg = "Sweep captured - no clipping or dropouts detected";
-            // The sweepSNR gate (ACTIVE) decides the headline: only GradedClean reads "verified" (green);
-            // GradedMarginal = amber (usable, re-measure), GradedSuspect = red (noisy/distorted) — neither may
-            // read as verified. "captured earcup" = Auto per-ear grades a SINGLE earcup per measurement (honesty).
-            sCol = Theme::ok();
-            if (refState == eb::RefMonState::GradingOffHardware) {
-                // Hardware Dirac committed: no loopback reference -> grading off. Calm/neutral, not a warning.
-                msg  = "Sweep captured - reference grading off (hardware Dirac); per-ear calibration still active";
-                sCol = Theme::textDim();
-            } else if (engine.autoDetectedHardwareDirac() && ! settings.diracHardwareProcessor()) {
-                // Auto-detect SUGGESTION (never auto-applies): the box was detected; point to the Advanced toggle.
-                msg  = "Sweep captured - looks like a hardware Dirac processor; turn it on in Advanced to silence the grade";
-                sCol = Theme::textDim();
-            } else if (refState == eb::RefMonState::GradedClean) {
-                const int snr = juce::roundToInt (engine.refIrSnrDb());
-                const int thd = juce::roundToInt (engine.refThdPercent());
-                msg = "Sweep captured + verified against the reference (captured earcup) - IR-SNR "
-                    + juce::String (snr) + " dB, THD " + juce::String (thd) + "% (calibration pending)";
-            } else if (refState == eb::RefMonState::GradedMarginal) {
-                msg  = "Sweep captured - marginal SNR; usable, consider re-measuring (captured earcup)";
-                sCol = Theme::warn();
-            } else if (refState == eb::RefMonState::GradedSuspect) {
-                msg  = "Sweep captured but flagged - noisy or distorted, re-measure (captured earcup)";
-                sCol = Theme::danger();
-            }
-            if (any (h.flags & HealthFlag::OsResampled)) msg += " (OS-resampled - approximate)";
-            sText = msg;
-        } else if (silentTicks_ >= kSilentHoldTicks) {
-            // "clean" only means no dropouts -- a connected-but-silent EARS reads clean too. After ~2 s
-            // of genuinely below-floor input (debounced in timerCallback so normal gaps don't flicker),
-            // say so, since ambient room noise alone (~-30 dB) sits well above the -50 dB floor.
-            sText = "Running - no input signal (check the EARS)";
-            sCol  = Theme::warn();
-        } else if (lowLevelTicks_ >= kLowLevelHoldTicks) {
-            // Signal present but the capture never reached a healthy level: a measurement this quiet has
-            // poor SNR and reads "tin-can", yet without this it would show "clean" (clean = no dropouts).
-            // Point the user at the meter target band, not an absolute dB they can't read.
-            sText = "Running - level low: turn your amp up to the green band";
-            sCol  = Theme::warn();
-        } else {
-            // In-sweep (SweepActive), no warning latched: clean so far.
-            sText = "Capturing the Dirac sweep - clean so far";
-            sCol  = Theme::ok();
+        snap.earL = earSnap (0);
+        snap.earR = earSnap (1);
+        snap.phaseIdleOrPreflight = h.session == SessionPhase::Idle || h.session == SessionPhase::Preflight;
+        snap.phaseComplete        = h.session == SessionPhase::Complete;
+        snap.gradeSignalPresent   = engine.gradeSignalPresent();
+        snap.osResampled          = any (h.flags & HealthFlag::OsResampled);
+        snap.autoDetectedHardwareDirac = engine.autoDetectedHardwareDirac();
+        snap.hardwareDiracSetting      = settings.diracHardwareProcessor();
+        snap.advisoryTail = chainAdvisoryTail();
+
+        const auto lines = eb::runningStatus (snap);
+        // Log each Listening <-> Sweep-in-progress transition (side-effect kept out of the pure ladder).
+        if ((lines.line1.text.startsWith ("Listening for the Dirac sweep")
+             || lines.line1.text.startsWith ("Sweep in progress"))
+            && lines.line1.text != lastListenTextLogged_) {
+            logLine (eb::DiagnosticLog::Level::Info, "RefMon status: " + lines.line1.text);
+            lastListenTextLogged_ = lines.line1.text;
         }
-    } else if (st == EngineStatus::Error) {
+        auto toneColour = [&live] (eb::StatusTone t) {
+            switch (t) {
+                case eb::StatusTone::Ok:     return Theme::ok();
+                case eb::StatusTone::Warn:   return Theme::warn();
+                case eb::StatusTone::Danger: return Theme::danger();
+                case eb::StatusTone::Live:   return live.colour;   // the meter logic's own colour role
+                default:                     return Theme::textDim();
+            }
+        };
+        // SINGLE COMMIT (Bug B: set-if-changed): both lines committed every tick; a blank line2 clears
+        // any stale per-ear verdict under a hard/global message (the header's two-line contract).
+        setLabelIfChanged   (statusLine,  lines.line1.text, toneColour (lines.line1.tone));
+        setTooltipIfChanged (statusLine,  lines.line1.tip);
+        setLabelIfChanged   (statusLineR, lines.line2.text, toneColour (lines.line2.tone));
+        setTooltipIfChanged (statusLineR, lines.line2.tip);
+        return;
+    }
+    if (st == EngineStatus::Error) {
         // Render the specific reason (e.g. a device disconnect) so it survives a later re-render that
         // would otherwise clobber a directly-set label back to a bare "Error".
         sText = statusErrorMsg_.isNotEmpty() ? statusErrorMsg_ : juce::String ("Error");
@@ -1567,28 +1456,20 @@ void MainComponent::updateStatusLine() {
         sCol  = Theme::textDim();
     }
 
-    // SECONDARY chain-config advisory (input-channels warn / 16-bit / non-2ch). Append it as a calm INFO
-    // tail ONLY when the RATE is fine (all48k) and the chosen statusLine state is CALM (ok-green or dim, never
-    // the red error or an amber warn). This must NOT override a hard error or the rate warn, and must NOT veto
-    // green: a verified line still shows, with the advisory hanging off it as a quiet note. We fold it into the
-    // statusLine text BEFORE the single commit (set-if-changed), so the appended line is computed once and
-    // stays put — no clear-then-reset re-append every tick (Bug B). For perEarDriven branches the per-ear
-    // renderer owns statusLine; we apply the same idempotent append to whatever it committed, guarded so the
-    // advisory is never double-appended on a subsequent tick.
-    if (! perEarDriven) {
-        const auto tail = chainAdvisoryTail();
-        if (tail.isNotEmpty() && ((sCol == Theme::ok()) || (sCol == Theme::textDim())))
-            sText = sText.isNotEmpty() ? (sText + tail) : chainVerdict_.advisory;
-        // SINGLE COMMIT (Bug B: set-if-changed, no clear-then-reset). Each branch wrote the desired
-        // statusLine/statusLineR (text, colour, tooltip) into locals; commit once, writing each label only
-        // when it actually changed so the lines persist and the notes don't flicker.
-        setLabelIfChanged (statusLine,  sText,  sCol);
-        setTooltipIfChanged (statusLine,  sTip);
-        setLabelIfChanged (statusLineR, s2Text, s2Col);
-        setTooltipIfChanged (statusLineR, s2Tip);
-    }
-    // perEarDriven: the advisory is composed INSIDE the per-ear/hasGrade commits themselves (#49) - the old
-    // append-after-commit here rewrote the label twice per tick (strip then re-suffix), churning repaints.
+    // SECONDARY chain-config advisory (input-channels warn / 16-bit / non-2ch): a calm INFO tail ONLY
+    // when the RATE is fine and the chosen line is CALM (ok/dim, never a warn/error). Folded into the
+    // text BEFORE the single commit so the appended note is computed once and stays put (Bug B). The
+    // Running branch returned above with its own commit - only the stopped/config states land here.
+    const auto tail = chainAdvisoryTail();
+    if (tail.isNotEmpty() && ((sCol == Theme::ok()) || (sCol == Theme::textDim())))
+        sText = sText.isNotEmpty() ? (sText + tail) : chainVerdict_.advisory;
+    // SINGLE COMMIT (Bug B: set-if-changed, no clear-then-reset). Each branch wrote the desired
+    // statusLine/statusLineR (text, colour, tooltip) into locals; commit once, writing each label only
+    // when it actually changed so the lines persist and the notes don't flicker.
+    setLabelIfChanged (statusLine,  sText,  sCol);
+    setTooltipIfChanged (statusLine,  sTip);
+    setLabelIfChanged (statusLineR, s2Text, s2Col);
+    setTooltipIfChanged (statusLineR, s2Tip);
 }
 
 // " - <advisory>" when the chain-config advisory should decorate a calm status line; empty otherwise.
@@ -1597,130 +1478,6 @@ juce::String MainComponent::chainAdvisoryTail() const {
          ? " - " + chainVerdict_.advisory : juce::String();
 }
 
-// Per-Ear Per-Channel Grading (Task 5): drive BOTH per-ear status lines. Called ONLY from the Running +
-// reference-loaded path in updateStatusLine — the hard/global ladder above it (device error, 48k veto,
-// pre-sweep activity, output-clip, combined low-SNR) has precedence and short-circuits before this. Pure
-// DISPLAY: it reads the ear-indexed engine getters and never touches grading, the match-gate, or thresholds.
-void MainComponent::renderPerEarStatusLines() {
-    renderEarStatusLine (0, "L", statusLine, /*appendAdvisory*/ true);   // line 1 carries the chain advisory (#49)
-    renderEarStatusLine (1, "R", statusLineR);
-}
-
-// Build ONE ear's status line from THAT ear's published refMonState + IR-SNR / THD / sweep-SNR (ear 0 = L,
-// 1 = R). The wording mirrors the (now-replaced) single-line ladder but scoped to one earcup:
-//   GradedClean   -> ok-colour "L: verified - IR-SNR N dB, THD N% (calibration pending)"   (INFO numbers);
-//   GradedSuspect -> while the cutoffs are UNRATIFIED, the SAME neutral/ok INFO line, NOT a warn (a clean
-//                    deconvolved ESS reads only ~13 dB and would false-warn) — mirrors kIrThresholdsRatified;
-//                    once ratified, a real below-cutoff measurement reads warn "L: low quality - N dB IR-SNR";
-//   ReferenceStale -> warn "L: re-learn the reference" (the match-gate failed -> nothing to grade);
-//   Learned / NotGraded / NotLearned -> dim "L: waiting for the sweep" (this ear hasn't graded yet this run).
-// Per-ear low SNR (this ear's sweep ran too close to the room floor) appends a short " (low SNR)". Lines are
-// kept SHORT for the title-bar width. NO grading logic here — display only.
-void MainComponent::renderEarStatusLine (int ear, const char* prefix, juce::Label& label, bool appendAdvisory) {
-    const auto  state    = (eb::RefMonState) engine.refMonState (ear);
-    const juce::String p = juce::String (prefix) + ": ";
-    // This ear's sweep-to-room-noise SNR is published (>0) only when it graded with a valid SNR; flag low
-    // only then — a 0 (not graded / SNR not assessable) must NOT read as "low SNR".
-    const float sweepSnr = engine.refSweepSnrDb (ear);
-    const bool  lowSnr   = sweepSnr > 0.0f && sweepSnr < eb::kMinSweepSnrDb;
-    const juce::String snrTail = lowSnr ? juce::String (" (low SNR)") : juce::String();
-
-    juce::String text;
-    juce::Colour col;
-    juce::String tip;
-
-    if (state == eb::RefMonState::GradingOffHardware) {
-        // Hardware Dirac: no loopback reference to grade against. CALM/neutral - NOT a warning, NOT green.
-        // Falls through the if-chain to the normal label application; the peak tail skips (not a graded state).
-        text = p + "grading off - hardware Dirac; per-ear calibration still active";
-        col  = Theme::textDim();
-    } else if (state == eb::RefMonState::GradedClean) {
-        const int snr = juce::roundToInt (engine.refIrSnrDb    (ear));
-        const int thd = juce::roundToInt (engine.refThdPercent (ear));
-        text = p + "verified - IR-SNR " + juce::String (snr) + " dB, THD "
-             + juce::String (thd) + "% (calibration pending)";
-        col  = Theme::ok();
-    } else if (state == eb::RefMonState::GradedMarginal || state == eb::RefMonState::GradedSuspect) {
-        // The sweepSNR gate (ACTIVE): GradedMarginal = orange (marginal noise, still usable); GradedSuspect =
-        // red (noisy capture or gross >10% distortion). Reconstruct THIS ear's bands from its published metrics
-        // so the note matches the headline verdict exactly (qualityNote). The IR-SNR/THD raw numbers remain
-        // calibration-pending, but the sweepSNR gate itself ships live.
-        const int snr = juce::roundToInt (engine.refIrSnrDb    (ear));
-        const int thd = juce::roundToInt (engine.refThdPercent (ear));
-        eb::QualityVerdict v;
-        v.state        = state;
-        v.sweepSnrBand = eb::classifySweepSnr (sweepSnr, sweepSnr != 0.0f);
-        v.irSnrBand    = eb::classifyIrSnr (engine.refIrSnrDb (ear));
-        v.thdBand      = eb::classifyThd (engine.refThdPercent (ear));
-        const juce::String note = eb::qualityNote (v);
-        text = p + (note.isNotEmpty() ? note : juce::String ("re-measure"));
-        col  = (state == eb::RefMonState::GradedMarginal) ? Theme::warn() : Theme::danger();
-        tip  = "Graded against the reference: sweep-SNR "
-             + (sweepSnr != 0.0f ? juce::String (sweepSnr, 0) + " dB" : juce::String ("n/a"))
-             + ", IR-SNR " + juce::String (snr) + " dB, distortion " + juce::String (thd) + "%.";
-    } else if (state == eb::RefMonState::ReferenceStale) {
-        // The match-gate failed for this ear -> there is nothing to grade; re-learn the reference.
-        text = p + "re-learn the reference";
-        col  = Theme::warn();
-        tip  = "This earcup's sweep didn't match the learned reference channel (the gate failed). Re-learn "
-               "the reference in Dirac's Windows Audio mode (Advanced -> Learn reference), then measure again.";
-    } else {
-        // Learned / NotGraded / NotLearned: this ear hasn't produced a gradeable sweep yet this run.
-        text = p + "waiting for the sweep";
-        col  = Theme::textDim();
-    }
-
-    // GAIN-STAGING READOUT (this ear's RAW input sweep peak in dBFS). The grade ring is fed the RAW pre-processing
-    // mic capture, so the published peak IS how hot the EARS float ran for THIS earcup. It is NOT clamped at 0, so a
-    // float that overshot full-scale reads POSITIVE (e.g. +1.6). Only meaningful once this ear graded (the engine
-    // resets it to the -120 floor otherwise), so gate on the two GRADED states. The correction is ONE shared output
-    // level, but reported PER EAR since one earcup can be hotter than the other.
-    //   peak >= 0 dBFS      -> WARN: clip, lower the output by ceil(peak)+3 dB (round up + a 3 dB margin). This WARN
-    //                          OVERRIDES the IR-SNR/THD INFO on this ear's line — a clipped capture is the actionable
-    //                          thing, and it must win over the neutral numbers above.
-    //   peak in [-1, 0)     -> caution: right at clipping, ease the output down (still a warn-coloured override).
-    //   peak in [-12, -1)   -> fine: append a SHORT neutral " (peak -N dBFS)" to the existing verdict line.
-    //   peak < -18 dBFS     -> low: append " (peak -N dBFS - low)" (the existing "level low" guidance owns the warn).
-    //   peak in [-18, -12)  -> nothing appended (a healthy-enough level; keep the line short).
-    const bool graded   = state == eb::RefMonState::GradedClean || state == eb::RefMonState::GradedMarginal
-                       || state == eb::RefMonState::GradedSuspect;
-    const float peakDb   = engine.referenceSweepPeakDb (ear);
-    const bool peakKnown = graded && peakDb > -119.0f;   // a real published peak (not the silent/never-graded floor)
-    juce::String peakTail;   // a short neutral info tail appended to the verdict line (fine / low cases)
-    if (peakKnown) {
-        if (peakDb >= 0.0f) {
-            // Clipped: quantify the overshoot and how much to lower the output. cut = ceil(peak) + 3 dB margin.
-            const int peakWhole = juce::roundToInt (std::ceil (peakDb));   // +1.6 -> 2 (headroom to clear full scale)
-            const int cutDb     = peakWhole + 3;                           // + a 3 dB margin (the spec's ceil(peak)+3)
-            text = p + "clipped +" + juce::String (peakDb, 1) + " dBFS - lower the output ~"
-                 + juce::String (cutDb) + " dB";
-            col  = Theme::warn();
-            tip  = "This earcup's sweep peaked at +" + juce::String (peakDb, 1) + " dBFS - it overshot full scale and "
-                   "clipped. Lower Dirac's output (or the system level) by about " + juce::String (cutDb)
-                 + " dB, then re-measure. The correction is one shared output level; the hotter earcup sets the cut.";
-        } else if (peakDb >= -1.0f) {
-            // Right at clipping: no headroom left. Ease the output down before it overshoots.
-            text = p + "peaked " + juce::String (peakDb, 1) + " dBFS - right at clipping, ease the output down";
-            col  = Theme::warn();
-            tip  = "This earcup's sweep peaked at " + juce::String (peakDb, 1) + " dBFS - right at full scale with no "
-                   "headroom. Ease the output down a few dB so the next sweep can't clip.";
-        } else if (peakDb < -1.0f && peakDb >= -12.0f) {
-            // A healthy peak: a short neutral note so the user sees their headroom, no warn.
-            peakTail = " (peak " + juce::String (peakDb, 0) + " dBFS)";
-        } else if (peakDb < -18.0f) {
-            // Low level: the existing "level low" guidance owns the warn; just note the peak (don't duplicate a warn).
-            peakTail = " (peak " + juce::String (peakDb, 0) + " dBFS - low)";
-        }
-    }
-
-    // Commit via set-if-changed (Bug B): the per-ear verdict persists tick-to-tick and only repaints when the
-    // ear's state/metrics actually change, so it never flickers. The chain advisory (when requested and this
-    // line lands CALM) is composed into this single commit (#49) - never appended after the fact.
-    const auto advisory = (appendAdvisory && (col == Theme::ok() || col == Theme::textDim()))
-                        ? chainAdvisoryTail() : juce::String();
-    setLabelIfChanged (label, text + snrTail + peakTail + advisory, col);
-    setTooltipIfChanged (label, tip);
-}
 
 // ---- Reference-Based Measurement Monitor (Plan 5): learn + grade ----------------------
 void MainComponent::loadStoredReference() {
