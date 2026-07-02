@@ -42,3 +42,14 @@ TEST_CASE("SweepScheduleStore: empty current hash / bad text / single segment ne
     auto one = juce::String ("v1\nABC123\nseg 0 5.0\n");                 // only ONE segment
     CHECK_FALSE (eb::deserializeSchedule (one, "ABC123").valid);         // needs >= 2
 }
+
+// #70: a corrupt / hand-edited sidecar (garbage duration -> getDoubleValue 0.0, negative gap, or a gap count
+// that doesn't match segments-1) must be REJECTED so the router falls back to the mic envelope, not wedge
+// AutoPerEar into permanent "routing ambiguous".
+TEST_CASE("SweepScheduleStore #70: rejects invalid durations, gaps, and gap-count", "[autoperear][store]") {
+    CHECK_FALSE (eb::deserializeSchedule ("v1\nH\nseg 0 5.0\nseg 1 0\ngap 0.5\n",    "H").valid);  // zero duration
+    CHECK_FALSE (eb::deserializeSchedule ("v1\nH\nseg 0 5.0\nseg 1 xyz\ngap 0.5\n",  "H").valid);  // non-numeric duration
+    CHECK_FALSE (eb::deserializeSchedule ("v1\nH\nseg 0 5.0\nseg 1 5.0\ngap -0.5\n", "H").valid);  // negative gap
+    CHECK_FALSE (eb::deserializeSchedule ("v1\nH\nseg 0 5.0\nseg 1 5.0\n",           "H").valid);  // 2 segs, 0 gaps
+    CHECK       (eb::deserializeSchedule ("v1\nH\nseg 0 5.0\nseg 1 5.0\ngap 0.5\n",  "H").valid);  // clean pair
+}

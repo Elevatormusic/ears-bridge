@@ -96,7 +96,7 @@ MainComponent::MainComponent (juce::File settingsDir, bool disableNetwork)
         juce::File::getSpecialLocation (juce::File::tempDirectory)
             .getChildFile ("EarsBridge").getChildFile ("logs"));
     // Launch banner: app version, build flavour, and the OS. The serial backstop is already armed
-    // (loggedSerial_ is empty until a cal loads, so redactSerial is a no-op here).
+    // (loggedSerials_ is empty until a cal loads, so redactSerial is a no-op here).
    #ifdef NDEBUG
     const char* buildFlavour = "Release";
    #else
@@ -418,6 +418,9 @@ MainComponent::MainComponent (juce::File settingsDir, bool disableNetwork)
     // Start gate (calibrationApplied()) closes instead of staying satisfied by the prior valid build.
     leftCal.onCalCleared  = [this] { settings.setLeftCalPath  ({}); engine.clearLeftCalFir();  logLine (eb::DiagnosticLog::Level::Info, "Cal cleared: LEFT");  rebuildFirsAsync(); updateStartGate(); syncPlotScales(); };
     rightCal.onCalCleared = [this] { settings.setRightCalPath ({}); engine.clearRightCalFir(); logLine (eb::DiagnosticLog::Level::Info, "Cal cleared: RIGHT"); rebuildFirsAsync(); updateStartGate(); syncPlotScales(); };
+    // #54: log a loaded cal's parse warnings (through the redacting logLine, since skipped-row text can embed header content).
+    leftCal.onParseWarnings  = [this] (const juce::StringArray& w) { for (auto& s : w) logLine (eb::DiagnosticLog::Level::Warn, "Cal parse (LEFT): "  + s); };
+    rightCal.onParseWarnings = [this] (const juce::StringArray& w) { for (auto& s : w) logLine (eb::DiagnosticLog::Level::Warn, "Cal parse (RIGHT): " + s); };
     addAndMakeVisible (leftCal);
     addAndMakeVisible (rightCal);
     styleEyebrow (levelsEyebrow, "LEVELS");
@@ -559,7 +562,9 @@ void MainComponent::logLine (eb::DiagnosticLog::Level level, const juce::String&
     // forms) before it can land on disk, so the EARS serial can NEVER leak even if a call site forgets.
     // Call sites already avoid the value; this is defense in depth. MESSAGE-THREAD ONLY.
     if (log_ == nullptr) return;
-    log_->write (level, eb::DiagnosticLog::redactSerial (msg, loggedSerial_));
+    juce::String scrubbed = msg;
+    for (const auto& s : loggedSerials_) scrubbed = eb::DiagnosticLog::redactSerial (scrubbed, s);   // #51: scrub ALL known serials
+    log_->write (level, scrubbed);
 }
 
 void MainComponent::logDeviceSnapshot (const juce::String& reason) {
@@ -842,7 +847,7 @@ void MainComponent::onLeftCalLoaded (const juce::File& f) {
     // only that a serial is present and its length, per the brief.
     juce::String serial;
     if (auto c = leftCal.calFile()) serial = c->serial;
-    if (serial.isNotEmpty()) loggedSerial_ = serial;
+    if (serial.isNotEmpty()) loggedSerials_.addIfNotAlreadyThere (serial);   // #51: accumulate both ears' serials
     logLine (eb::DiagnosticLog::Level::Info,
              "Cal load: LEFT serial present (" + juce::String (serial.length()) + " chars)");
     rebuildFirsAsync();
@@ -851,7 +856,7 @@ void MainComponent::onRightCalLoaded (const juce::File& f) {
     settings.setRightCalPath (f.getFullPathName());
     juce::String serial;
     if (auto c = rightCal.calFile()) serial = c->serial;
-    if (serial.isNotEmpty()) loggedSerial_ = serial;
+    if (serial.isNotEmpty()) loggedSerials_.addIfNotAlreadyThere (serial);   // #51: accumulate both ears' serials
     logLine (eb::DiagnosticLog::Level::Info,
              "Cal load: RIGHT serial present (" + juce::String (serial.length()) + " chars)");
     rebuildFirsAsync();

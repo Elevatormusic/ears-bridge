@@ -109,6 +109,19 @@ bool CalSlotComponent::loadFromFile (const juce::File& file) {
         resized(); repaint();
         return false;
     }
+    // #9: cap the accepted size BEFORE reading. Real EARS/FRD cals are a few KB; a multi-hundred-MB file at a
+    // persisted path (a renamed recording, a runaway export) would read the whole thing into one String on the
+    // message thread, copy it again in parse(), and could throw a std::bad_alloc that isn't a CalParseError ->
+    // terminate. This path is reloaded from Settings on EVERY launch, so it must fail gracefully, not freeze.
+    if (file.getSize() > 10 * 1024 * 1024) {
+        errorLabel.setColour (juce::Label::textColourId, Theme::danger());
+        errorLabel.setText ("File too large (" + juce::File::descriptionOfSizeInBytes (file.getSize())
+                            + ") - not an EARS calibration file.", juce::dontSendNotification);
+        errorLabel.setVisible (true);
+        removeBtn.setVisible (true);
+        resized(); repaint();
+        return false;
+    }
     try {
         auto parsed = eb::CalFile::parse (file.loadFileAsString());
         // Second ear-side signal: the FILENAME. The content side (parse()) is authoritative; the
@@ -170,6 +183,20 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
     } else {   // Idf (in-ear) - no headphone guidance note
         errorLabel.setText ({}, juce::dontSendNotification);
         errorLabel.setVisible (false);
+    }
+    // #54: surface parse warnings that were previously WRITE-ONLY (the filename/content side-conflict message
+    // + skipped/non-monotonic-row notes). Show the first on the card when no type note already occupies the
+    // label (amber); always hand them to the owner to LOG (skipped-row text can embed header content, so the
+    // owner logs through its redacting logLine). '+N more' when several.
+    if (! parsed.parseWarnings.isEmpty()) {
+        if (! errorLabel.isVisible()) {
+            const auto more = parsed.parseWarnings.size() > 1
+                            ? " (+" + juce::String (parsed.parseWarnings.size() - 1) + " more)" : juce::String();
+            errorLabel.setColour (juce::Label::textColourId, Theme::warn());
+            errorLabel.setText (parsed.parseWarnings[0] + more, juce::dontSendNotification);
+            errorLabel.setVisible (true);
+        }
+        if (onParseWarnings) onParseWarnings (parsed.parseWarnings);
     }
     thumbnail.setCalFile (parsed);
     thumbnail.setVisible (true);

@@ -31,6 +31,9 @@ public:
 
     std::function<void (const juce::File&)> onCalLoaded;
     std::function<void ()> onCalCleared;   // fired when the slot is emptied via Remove
+    // Fired with a loaded file's parse warnings (side-conflict, skipped/non-monotonic rows) so the owner can
+    // LOG them through its redacting logger - the card shows the first inline (#54: they were write-only before).
+    std::function<void (const juce::StringArray&)> onParseWarnings;
 
     bool isInterestedInFileDrag (const juce::StringArray&) override;
     void filesDropped (const juce::StringArray&, int, int) override;

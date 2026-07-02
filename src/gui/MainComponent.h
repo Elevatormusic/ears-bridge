@@ -321,12 +321,13 @@ private:
     // measurement run, so a failed run leaves a readable trail. MESSAGE-THREAD ONLY (the timer + the event
     // handlers) — the audio callback NEVER writes the log (DiagnosticLog does blocking file I/O).
     std::unique_ptr<eb::DiagnosticLog> log_;
-    // The serial that logLine() scrubs out of EVERY message as a backstop, so the EARS serial can never
-    // leak even if a call site forgets. Set whenever a cal loads (the cal carries the serial), cleared on
-    // remove. Call sites already avoid the value; this is defense in depth.
-    juce::String loggedSerial_;
-    // Every log line goes through here: it runs the message through DiagnosticLog::redactSerial against
-    // loggedSerial_ first, then writes it. A no-op when log_ is null.
+    // Serials that logLine() scrubs out of EVERY message as a backstop, so the EARS serial can never leak
+    // even if a call site forgets. #51: a StringArray, not one serial - a mismatched L/R pair carries TWO
+    // distinct serials and the single-value backstop left the other one unscrubbed. Accumulate every distinct
+    // loaded serial (an extra stale entry is harmless: it only scrubs a value that no longer appears).
+    juce::StringArray loggedSerials_;
+    // Every log line goes through here: it runs the message through DiagnosticLog::redactSerial against each
+    // known serial first, then writes it. A no-op when log_ is null.
     void logLine (eb::DiagnosticLog::Level level, const juce::String& msg);
     // 48k-everywhere chain-config check (Reference-Based Measurement Monitor). On the GUI timer (throttled
     // to ~once/sec) read the three endpoints — input = the selected input, cable = the selected OUTPUT,

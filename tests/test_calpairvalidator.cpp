@@ -113,3 +113,33 @@ TEST_CASE("CalPairValidator: a non-finite spl is rejected at Rule 5") {
     auto r = eb::validateCalibrationPair (L, R, eb::FirMode::MinPhaseMagnitude);
     CHECK_FALSE (r.valid);
 }
+
+// #8: side must resolve from the CHANNEL phrase, not the per-unit "sensitive side" word. On a left-sensitive
+// unit the RIGHT-channel file reads "...RIGHT channel. Your sensitive side is LEFT." - the old bare-word
+// parser tested "left" first and mis-sided it, rejecting the factory-correct pair (Start locked shut).
+TEST_CASE("CalFile #8: side reads the channel phrase, not the sensitive-side word") {
+    auto txt = juce::String (
+        "\"Sens Factor =0.9dB, EARS Serial 000-0000, compensation HEQ V1\"\n"
+        "\"Use this file on the RIGHT channel. Your sensitive side is LEFT.\"\n"
+        "* HEQ\n    20.0 -3.0 0\n    1000.0 0.0 0\n    20000.0 -6.0 0\n");
+    CHECK (eb::CalFile::parse (txt).side == eb::CalSide::Right);
+    // the matched (channel==sensitive) case still works
+    CHECK (eb::CalFile::parse (txt.replace ("is LEFT", "is RIGHT")).side == eb::CalSide::Right);
+}
+
+// #7: coverage is PER FILE. A band-limited file for one ear must fail (each ear's FIR is designed from its own
+// file, so a truncated one gets a flat wrong correction); the reason names the failing side.
+TEST_CASE("CalPairValidator #7: a band-limited single file fails per-file coverage") {
+    auto full = mk (eb::CalSide::Left, "000-0000", eb::CalType::Heq);   // 20 Hz - 20 kHz
+    eb::CalFile band; band.side = eb::CalSide::Right; band.serial = "000-0000"; band.type = eb::CalType::Heq;
+    for (double f = 200; f <= 8000; f *= 1.3) band.points.push_back ({ f, 0.0, 0.0 });
+    band.points.push_back ({ 8000.0, 0.0, 0.0 });                        // 200 Hz - 8 kHz only
+
+    auto v = eb::validateCalibrationPair (full, band, eb::FirMode::MinPhaseMagnitude);
+    CHECK_FALSE (v.valid);
+    CHECK (v.reason.containsIgnoreCase ("right"));
+    CHECK (v.reason.containsIgnoreCase ("cover"));
+    // the symmetric full/full pair still passes coverage
+    CHECK (eb::validateCalibrationPair (full, mk (eb::CalSide::Right, "000-0000", eb::CalType::Heq),
+                                        eb::FirMode::MinPhaseMagnitude).valid);
+}
