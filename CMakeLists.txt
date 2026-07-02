@@ -159,6 +159,12 @@ target_compile_definitions(eb_gui PUBLIC
 # used by the update checker. eb_gui is a plain static lib, so JUCE's generated ProjectInfo
 # is not available here -- this macro replaces it.
 target_compile_definitions(eb_gui PRIVATE EB_VERSION_STRING="${PROJECT_VERSION}")
+# Dev-only design-QA harness (EB_HIG_STATES state sweep). OFF by default so shipped Release builds cannot
+# be driven into fake UI states via an env var (audit #23); local dev opts in with -DEB_ENABLE_HIG_HARNESS=ON.
+option(EB_ENABLE_HIG_HARNESS "Compile the EB_HIG_STATES design-QA harness into the app" OFF)
+if(EB_ENABLE_HIG_HARNESS)
+    target_compile_definitions(eb_gui PRIVATE EB_ENABLE_HIG_HARNESS=1)
+endif()
 
 # ---- GUI app ----
 juce_add_gui_app(EarsBridge

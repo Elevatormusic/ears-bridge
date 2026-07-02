@@ -4,7 +4,9 @@
 #include "gui/StartGate.h"   // eb::startReady (Task 3 / #3 advanced override)
 #include "gui/StartNotes.h"  // eb::buildStartNotes (Task 4 / #8 calm bit-depth note)
 #include "gui/SystemA11y.h"  // eb::SystemA11y - Reduce Motion / Increase Contrast / Reduce Transparency (HIG)
-#include "gui/juce_design_probe.h"  // EB_HIG_STATES dev-QA harness: probe the header in every status state (vendored apple-hig)
+#if JUCE_DEBUG || defined (EB_ENABLE_HIG_HARNESS)
+ #include "gui/juce_design_probe.h" // EB_HIG_STATES dev-QA harness: probe the header in every status state (vendored apple-hig)
+#endif
 #include "platform/DiracCompat.h"
 #include "cal/CalibrationPairValidator.h"   // eb::validateCalibrationPair (P0-07)
 #include "audio/CalibrationGeneration.h"    // eb::CalibrationGeneration (generation lifecycle)
@@ -508,10 +510,10 @@ MainComponent::MainComponent (juce::File settingsDir, bool disableNetwork)
     // Initial device + Dirac snapshot for the log (after the saved devices/cals are restored).
     logDeviceSnapshot ("launch");
     logDiracSnapshot  ("launch");
-    if (! loadedReference_.empty())
+    if (! loadedReferenceL_.empty())
         logLine (eb::DiagnosticLog::Level::Info,
                  "Reference: reloaded a stored loopback reference ("
-               + juce::String (loadedReference_.size() / loadedReferenceRate_, 1) + " s)");
+               + juce::String (loadedReferenceL_.size() / loadedReferenceRateL_, 1) + " s)");
 
     updateStartGate();
     syncPlotScales();
@@ -537,6 +539,13 @@ MainComponent::MainComponent (juce::File settingsDir, bool disableNetwork)
 
 MainComponent::~MainComponent() {
     stopTimer();
+    // Arm the learn cancel token BEFORE waiting on the pool: a live Learn capture polls it every packet
+    // (~10 ms) and exits well inside the 2 s wait. Without this, quitting mid-learn timed out here, then
+    // ~ThreadPool force-killed (TerminateThread) the worker INSIDE a live WASAPI loopback - a ~7.5 s frozen
+    // shutdown + leaked COM/audio-client state (audit #2). Bump the grade generation for the same reason
+    // (a queued grade continuation must not land during teardown).
+    learnCancelRequested_.store (true);
+    gradeRunGen_.fetch_add (1);
     if (firPool) firPool->removeAllJobs (true, 2000);
     engine.stop();
     setLookAndFeel (nullptr);
@@ -1670,9 +1679,6 @@ void MainComponent::loadStoredReference() {
             loadedReferenceR_.assign (fR, fR + nR);
             loadedReferenceRateL_ = 48000.0;         // v1: 48k-only (the capture asserted 48k)
             loadedReferenceRateR_ = 48000.0;
-            // LEFT alias kept ONLY for the startup duration log (the grade path uses loadedReferenceL_/R_ directly).
-            loadedReference_     = loadedReferenceL_;
-            loadedReferenceRate_ = loadedReferenceRateL_;
             referenceStatePath_  = refL.getFullPathName();
             engine.setReferenceLoaded (true);
             // AutoPerEar: reload the schedule sidecar ONLY if it matches this reference (stale guard), then install
@@ -1864,14 +1870,11 @@ void MainComponent::onLearnReference() {
                 if (refOld.existsAsFile()) refOld.deleteFile();   // obsolete mono ref -> remove on a successful re-learn
                 mc->referenceStatePath_ = refL.getFullPathName();
                 // Hold both channels IN MEMORY so the per-ear grade path (gradeOneEar) can deconvolve each
-                // earcup against its own reference channel (ref_L / ref_R). loadedReference_/Rate_ is a LEFT
-                // alias kept ONLY for the startup duration log — the grade reads loadedReferenceL_/R_ directly.
+                // earcup against its own reference channel (ref_L / ref_R).
                 mc->loadedReferenceL_     = samplesL;   // copy (moved-in but still readable here)
                 mc->loadedReferenceR_     = samplesR;
                 mc->loadedReferenceRateL_ = capRate;
                 mc->loadedReferenceRateR_ = capRate;
-                mc->loadedReference_      = mc->loadedReferenceL_;
-                mc->loadedReferenceRate_  = capRate;
                 mc->engine.setReferenceLoaded (true);
                 // AutoPerEar: persist the learned schedule keyed to this reference's content hash, then install it
                 // (the bridge is STOPPED during Learn). A future re-learn changes the hash -> the stale schedule drops.
@@ -1967,7 +1970,8 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
     // Copy the FULL rolling-ring WINDOW for THIS ear out of the engine into our own buffer (the allocation lives
     // here, not the engine). The window is leading silence/room noise + the sweep somewhere inside it; the worker
     // aligns the reference inside it via cross-correlation, so we must NOT truncate it to the reference length.
-    std::vector<float> window ((size_t) juce::jmax (1, (int) std::lround (engine.gradingResponseRate() * 28.0)), 0.0f);
+    std::vector<float> window ((size_t) juce::jmax (1, (int) std::lround (engine.gradingResponseRate()
+                                                                          * eb::AudioEngine::gradingWindowSeconds())), 0.0f);
     const int got = engine.snapshotGradeRing (ear, window.data(), (int) window.size());
     if (got <= 0) return false;
     window.resize ((size_t) got);
@@ -2193,14 +2197,19 @@ void MainComponent::pollChainConfig() {
 }
 
 void MainComponent::timerCallback() {
+   #if JUCE_DEBUG || defined (EB_ENABLE_HIG_HARNESS)
     {   // HIG STATE-SWEEP HARNESS (dev-QA, inert unless EB_HIG_STATES=<dir> is set): drive the header through every
         // status state it can display and emit a native-render descriptor per state, so native-review can MEASURE
         // overlap/clip in states a single idle screenshot/probe never captures (e.g. the mid-sweep status next to
         // Start). Runs once after the window is shown. The next tick's normal status update restores the live text.
+        // COMPILE-GATED out of shipped Release builds (audit #23: a user with the env var set would get fake UI
+        // state - a phantom update link + fabricated dots). Dev builds opt in: cmake -DEB_ENABLE_HIG_HARNESS=ON.
         static bool higStatesDone = false;
-        const auto outDir = juce::SystemStats::getEnvironmentVariable ("EB_HIG_STATES", {});
-        if (! higStatesDone && outDir.isNotEmpty() && isShowing() && getWidth() > 0) {
-            higStatesDone = true;
+        if (! higStatesDone && isShowing() && getWidth() > 0) {
+            higStatesDone = true;   // latch on the FIRST shown tick: exactly one env read ever (audit #61 - was a
+                                    // Win32 call + String alloc at 30 Hz for the app's lifetime)
+            const auto outDir = juce::SystemStats::getEnvironmentVariable ("EB_HIG_STATES", {});
+            if (outDir.isNotEmpty()) {
             const juce::File dir (outDir);
             struct St { const char* name; const char* l; const char* r; bool update; bool dots; };
             static const St states[] = {
@@ -2227,8 +2236,10 @@ void MainComponent::timerCallback() {
                     dir.getChildFile (juce::String ("hig-") + s.name + ".json"),
                     dir.getChildFile (juce::String ("hig-") + s.name + ".png"));
             }
+            }   // if (outDir.isNotEmpty())
         }
     }
+   #endif // JUCE_DEBUG || EB_ENABLE_HIG_HARNESS
     // A device removed mid-run (unplug / sleep / gain-DIP re-enumerate) latches deviceDied_ from its
     // audioDeviceStopped() callback. Tear it down and surface it, instead of leaving the engine sitting
     // in a false "Running - clean" while the cable records silence.
@@ -2236,6 +2247,12 @@ void MainComponent::timerCallback() {
         statusErrorMsg_ = "EARS or audio cable disconnected - measurement stopped.";
         logLine (eb::DiagnosticLog::Level::Error, "Device lost mid-run: " + statusErrorMsg_);
         engine.onDeviceLost();              // closes devices, flips status -> Error
+        // Mirror the Stop path's grade teardown (audit #42): a matchAlign/grade job in flight for the
+        // just-captured sweep must not land its verdict + green quality dots INTO the Error state.
+        gradeRunGen_.fetch_add (1);
+        gradeInFlight_.store (false);
+        gradePollerL_.reset(); gradePollerR_.reset();
+        gradeDotsL_.clear();   gradeDotsR_.clear();
         startStop.setButtonText ("Start");
         updateStartGate();                  // -> updateStatusLine() renders statusErrorMsg_ in the Error branch
         return;

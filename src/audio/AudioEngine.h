@@ -195,6 +195,9 @@ public:
     // The rate the response buffers were captured at (the active capture rate, SHARED by both ears), for the
     // Farina offsets. Single getter — the input rate is the same for both mics.
     double gradingResponseRate() const noexcept { return grantedRate_; }
+    // The grade-ring length in seconds - the ONE source the GUI must size its match/grade window from
+    // (a duplicated literal would silently truncate the newest end of the window if the ring grows; audit #41).
+    static constexpr double gradingWindowSeconds() noexcept { return kGradingSeconds; }
 
     // Publish a reference-grade verdict for ONE EAR (message/worker thread, OFFLINE). ear 0 = LEFT, 1 = RIGHT.
     // Each earcup is graded against the channel that actually drove it (Dirac hard-pans), so the two verdicts
