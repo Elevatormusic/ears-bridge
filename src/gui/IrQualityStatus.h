@@ -2,6 +2,8 @@
 #include <juce_core/juce_core.h>   // juce::String / jmax / roundToInt
 #include <cmath>                    // std::log10 / std::sqrt / std::abs
 #include <vector>
+#include <limits>                   // #18: the harmonic-window spacing cap
+#include <utility>                  // #18: the (centre, half) exclusion zones
 
 namespace eb {
 
@@ -19,13 +21,15 @@ namespace eb {
 //            SPREAD, not a single tap) vs the MEAN POWER of the clean region (away from the gate AND from
 //            the harmonic-distortion spots, so distortion can't masquerade as noise). Per-sample, each
 //            window over its OWN count (Huszty & Sakamoto): irSnrDb = 10*log10(signalMean / noiseMean).
-//   THD   — for an exponential-sine-sweep (Farina) deconvolution, the k-th harmonic impulse
-//            lands at a known offset BEFORE the linear (main) impulse: dt_k = T*ln(k)/ln(w2/w1)
-//            seconds. In the circular IR those negative-time spots wrap to (peakIdx - dt_k + n)
-//            % n. We sum the energy at the first few harmonic spots (k=2,3,4) and express it as
-//            a % of the main-impulse energy: thdPercent = 100*sqrt(harmonicEnergy / mainEnergy).
-//            The offsets depend on the SWEEP params, so the CALLER (which knows the reference's
-//            sweep) passes them precomputed as harmonicOffsetsSamples (offsets before the peak).
+//   THD   — for an exponential-sine-sweep (Farina) deconvolution, distortion products land at
+//            NEGATIVE TIME before the linear impulse (dt_k = T*ln(k)/ln(w2/w1) for the k-th
+//            harmonic). #18: at a 48 kHz session they are NOT tight spikes at those offsets —
+//            the harmonic sweeps run past the reference band (regularization-boosted) and past
+//            Nyquist (aliased), smearing into a broad negative-time cluster — so the metric is
+//            the MIRROR-COMPENSATED ENERGY of the whole negative-time region bounded by the
+//            largest Farina offset: thd% = 100*sqrt(max(0, regionE - mirrorMean*regionN)/signalE).
+//            The caller passes harmonicOffsetsSamples computed from the MEASURED sweep length
+//            (measuredSweepLength) — they bound the region; empty => THD not assessed (0).
 //
 // Honest v1 limitations (deliberate per the "show now, ratify later" decision):
 //  - PROVISIONAL thresholds (kMinIrSnrDb / kMaxThdPct) — need on-device ratification.
@@ -54,7 +58,7 @@ static constexpr bool kIrThresholdsRatified = false;
 struct IrQuality {
     bool  matched    = false;   // mirrors the match-gate; if false we did NOT grade quality
     float irSnrDb    = 0.0f;    // main-peak energy vs the noise-tail energy (10*log10)
-    float thdPercent = 0.0f;    // Farina-harmonic energy as % of the main impulse
+    float thdPercent = 0.0f;    // negative-time (distortion-region) energy as % of the main impulse (#18)
     bool  lowQuality = false;   // warn: matched AND (irSnrDb < min || thdPercent > max)
 };
 
@@ -93,34 +97,72 @@ struct IrQuality {
         return d >= -preMargin && d <= signalSpan;
     };
 
-    // The harmonic spots wrap to (peakIdx - off + n) % n in the circular IR. Exclude them from BOTH the
-    // signal AND the noise (distortion is neither) so they can't masquerade as noise and depress the SNR.
-    constexpr int kHarmHalfWidth = 2;
-    auto inAnyHarmonic = [&] (int i) {
-        for (int off : harmonicOffsetsSamples) {
-            const int c = ((peakIdx - off) % n + n) % n;   // circular wrap of the negative-time spot
-            int d = std::abs (i - c);
-            d = std::min (d, n - d);                       // circular distance
-            if (d <= kHarmHalfWidth) return true;
-        }
-        return false;
+    // #18: distortion products live at NEGATIVE TIME before the linear impulse (Farina), but at a 48 kHz
+    // session they are NOT +-2-sample spikes at the textbook offsets: the harmonic sweeps run past the
+    // reference's band (their >f2 content is divided by ~nothing-but-regularization and BOOSTED) and past
+    // Nyquist (aliased down-chirps), smearing the distortion energy into a broad negative-time cluster.
+    // The old fixed +-2 spot windows therefore read thdPercent ~ 0 on every real measurement (the audit's
+    // finding: the spots were also displaced by the reference trim margin). The honest metric is the
+    // NOISE-COMPENSATED ENERGY of the whole negative-time distortion REGION:
+    //     region  = d in [-(1.2 * maxHarmonicOffset), -preMargin)  (before the impulse, outside the gate)
+    //     noise   = everything else outside the gate (the positive-time far field)
+    //     thd%    = 100 * sqrt( max(0, regionEnergy - noiseMean * regionCount) / signalEnergy )
+    // The subtraction removes the noise floor's expected contribution, so a clean capture still reads ~0
+    // while spread/misplaced/aliased distortion all register. The Farina offsets (from the MEASURED sweep
+    // length) only BOUND the region; empty offsets => THD not assessed (0, as before).
+    // The compensation baseline is the MIRROR region — the same width on the POSITIVE-time side, right
+    // after the signal gate. Band-limitation artifacts of the deconvolution (the reference has no
+    // content below f1 or above f2, so the recovered impulse rides on slow symmetric undulations) and
+    // the plain noise floor appear on BOTH sides of the impulse; distortion products appear ONLY at
+    // negative time. Subtracting the mirror's per-sample mean removes exactly the symmetric part, so a
+    // clean capture reads ~0% while spread/misplaced/aliased distortion registers. (A far-field noise
+    // mean under-compensates: the sub-f1 undulation is strongest near the peak.)
+    int maxOff = 0;
+    for (int off : harmonicOffsetsSamples) maxOff = std::max (maxOff, off);
+    const int distFar = std::min ((int) std::lround (1.2 * (double) maxOff),
+                                  std::max (0, n / 2 - 1));             // farthest-back distortion bound
+    auto circDelta = [&] (int i) {                    // shortest circular signed distance (as the gate)
+        int d = i - peakIdx;
+        if (d >  n / 2) d -= n;
+        if (d < -n / 2) d += n;
+        return d;
+    };
+    // The region starts at -signalSpan (NOT -preMargin) so it is EQUIDISTANT with the mirror: the
+    // impulse's symmetric skirt inside +-signalSpan is neither distortion nor baseline (its positive
+    // half sits inside the signal gate), and the nearest real image (k=2) is many thousands of samples
+    // out. Without this the pre-peak skirt counted as distortion with no counterpart in the mirror.
+    const int distWidth = std::max (0, distFar - signalSpan);
+    auto inDistortionRegion = [&] (int i) {
+        if (maxOff <= 0) return false;
+        const int d = circDelta (i);
+        return d < -signalSpan && d >= -distFar;
+    };
+    auto inMirrorRegion = [&] (int i) {               // positive-time counterpart, same width, past the gate
+        if (maxOff <= 0) return false;
+        const int d = circDelta (i);
+        return d > signalSpan && d <= signalSpan + distWidth;
     };
 
     // --- per-sample MEAN-power energies (signal / noise each divided by its OWN sample count) ---
-    double signalEnergy = 0.0, noiseEnergy = 0.0, harmEnergy = 0.0;
-    long   signalCount  = 0,   noiseCount  = 0;
+    double signalEnergy = 0.0, noiseEnergy = 0.0, distEnergy = 0.0, mirrorEnergy = 0.0;
+    long   signalCount  = 0,   noiseCount  = 0,   distCount  = 0,   mirrorCount  = 0;
     for (int i = 0; i < n; ++i) {
         const double e = (double) ir[i] * ir[i];
-        if (inSignalGate (i))       { signalEnergy += e; ++signalCount; }
-        else if (inAnyHarmonic (i))   harmEnergy   += e;   // distortion: not signal, not noise
-        else                        { noiseEnergy  += e; ++noiseCount; }
+        if (inSignalGate (i))            { signalEnergy += e; ++signalCount; }
+        else if (inDistortionRegion (i)) { distEnergy   += e; ++distCount;   }   // neither signal nor noise
+        else {
+            if (inMirrorRegion (i))      { mirrorEnergy += e; ++mirrorCount; }   // also ordinary noise
+            noiseEnergy += e; ++noiseCount;
+        }
     }
 
     const double tiny = 1.0e-20;
     const double signalMean = signalEnergy / (double) juce::jmax (1L, signalCount);
     const double noiseMean  = (noiseCount > 0) ? noiseEnergy / (double) noiseCount : tiny;
+    const double baseMean   = (mirrorCount > 0) ? mirrorEnergy / (double) mirrorCount : noiseMean;
+    const double distExcess = std::max (0.0, distEnergy - baseMean * (double) distCount);
     q.irSnrDb    = 10.0f * (float) std::log10 ((signalMean + tiny) / (noiseMean + tiny));
-    q.thdPercent = 100.0f * (float) std::sqrt (harmEnergy / (signalEnergy + tiny));
+    q.thdPercent = 100.0f * (float) std::sqrt (distExcess / (signalEnergy + tiny));
 
     // lowQuality only when we actually graded (matched). Honest: don't grade a non-match.
     q.lowQuality = matched && (q.irSnrDb < minIrSnrDb || q.thdPercent > maxThdPct);

@@ -1,7 +1,8 @@
 #include "audio/ReferenceGradePoller.h"
 
-#include <algorithm>   // std::min
+#include <algorithm>   // std::min / std::nth_element (#37)
 #include <cmath>       // std::isfinite
+#include <vector>      // #37: the noise-block ranking
 
 namespace eb {
 
@@ -116,6 +117,28 @@ float rmsOver (const float* buf, int first, int last) noexcept {
 }
 } // namespace
 
+// #37 (see the header): 25th-percentile block-RMS so crosstalk/transients in the noise region cannot
+// inflate the floor and collapse the SNR on a clean measurement.
+float ReferenceGradePoller::robustNoiseRms (const float* buf, int first, int last) noexcept {
+    constexpr int kBlock = 1024;
+    if (buf == nullptr) return -1.0f;
+    if (first < 0) first = 0;
+    const int len = last - first;
+    const int numBlocks = len / kBlock;
+    if (numBlocks < 4)
+        return rmsOver (buf, first, last);   // too short to rank blocks: the plain RMS is the best we have
+    std::vector<float> blocks;
+    blocks.reserve ((size_t) numBlocks);
+    for (int b = 0; b < numBlocks; ++b) {
+        const float r = rmsOver (buf, first + b * kBlock, first + (b + 1) * kBlock);
+        if (r >= 0.0f) blocks.push_back (r);   // a block with no finite samples doesn't vote
+    }
+    if (blocks.empty()) return -1.0f;
+    const size_t q = blocks.size() / 4;        // 25th percentile (lower quartile)
+    std::nth_element (blocks.begin(), blocks.begin() + (std::ptrdiff_t) q, blocks.end());
+    return blocks[q];
+}
+
 void ReferenceGradePoller::computeSweepSnr (const float* window, int winLen, int alignOffset, int refLen,
                                             GradePollResult& out) noexcept {
     out.sweepSnrDb    = 0.0f;
@@ -133,13 +156,16 @@ void ReferenceGradePoller::computeSweepSnr (const float* window, int winLen, int
     // The NOISE region: the LEADING room noise the ring captured BEFORE the sweep, [0, alignOffset). If that is
     // too short to be a floor (the sweep starts at/near the front), fall back to the TRAILING-silence region
     // after the sweep when it is the longer of the two. If NEITHER is usable, the SNR is invalid: skip it.
+    // #37: both regions use the ROBUST (25th-percentile block) estimate — in Auto per-ear the leading
+    // region routinely contains the OTHER ear's sweep, and a plain RMS over it collapsed the SNR on
+    // perfectly clean measurements.
     const int leadLen  = sweepStart;                        // [0, alignOffset)
     const int trailLen = winLen - sweepEnd;                 // [alignOffset+refLen, winLen)
     float noiseRms = -1.0f;
     if (leadLen >= kMinNoiseSamples)
-        noiseRms = rmsOver (window, 0, sweepStart);
+        noiseRms = robustNoiseRms (window, 0, sweepStart);
     if (! (noiseRms > 0.0f) && trailLen >= kMinNoiseSamples)
-        noiseRms = rmsOver (window, sweepEnd, winLen);      // fall back to trailing silence
+        noiseRms = robustNoiseRms (window, sweepEnd, winLen);   // fall back to trailing silence
     if (! (noiseRms > 0.0f)) return;                        // no usable noise region -> SNR invalid, no flag
 
     out.sweepSnrDb    = 20.0f * std::log10 (sweepRms / noiseRms);

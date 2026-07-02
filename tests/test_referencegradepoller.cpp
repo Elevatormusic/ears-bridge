@@ -758,3 +758,44 @@ TEST_CASE ("ReferenceGradePoller: decide() == matchAlign() + applyDebounce()", "
         CHECK (d.alignOffset == m.alignOffset);
     }
 }
+
+// ==================================================================================================
+// #37: the sweep-SNR noise floor must be ROBUST to contamination. In Auto per-ear the leading
+// "room noise" region routinely contains the OTHER ear's sweep (open-back crosstalk) — a plain RMS
+// over the region is energy-dominated by it and collapses the SNR on a clean measurement.
+// ==================================================================================================
+TEST_CASE("robustNoiseRms: a burst covering a third of the region cannot inflate the floor [#37]") {
+    const int n = 64 * 1024;
+    std::vector<float> region ((size_t) n);
+    for (int i = 0; i < n; ++i)                                     // stationary floor ~-60 dBFS
+        region[(size_t) i] = 0.001f * std::sin (0.7311f * (float) i);
+    for (int i = n / 3; i < 2 * n / 3; ++i)                         // the other ear's sweep ~-20 dBFS
+        region[(size_t) i] = 0.1f * std::sin (0.1234f * (float) i);
+
+    const float robust = eb::ReferenceGradePoller::robustNoiseRms (region.data(), 0, n);
+    // The plain RMS is dominated by the burst (~-25 dB); the robust floor stays at the true ~-63 dB.
+    const float burstRms = 0.1f / std::sqrt (2.0f);
+    CHECK (robust < 0.1f * burstRms);                               // nowhere near the contamination
+    CHECK (robust > 0.0002f);                                       // and not below the real floor
+    CHECK (robust < 0.002f);
+}
+
+TEST_CASE("computeSweepSnr: crosstalk in the leading region no longer collapses the SNR [#37]") {
+    // window = [leading region with the OTHER ear's sweep burst] + [this ear's clean loud sweep].
+    const int lead = 64 * 1024, sweepLen = 64 * 1024;
+    std::vector<float> window ((size_t) (lead + sweepLen));
+    for (int i = 0; i < lead; ++i)
+        window[(size_t) i] = 0.001f * std::sin (0.7311f * (float) i);        // floor ~-60 dB
+    for (int i = lead / 3; i < 2 * lead / 3; ++i)
+        window[(size_t) i] = 0.1f * std::sin (0.1234f * (float) i);          // crosstalk ~-20 dB
+    for (int i = 0; i < sweepLen; ++i)
+        window[(size_t) (lead + i)] = 0.5f * std::sin (0.31f * (float) i);   // the sweep ~-9 dB
+
+    eb::GradePollResult g;
+    eb::ReferenceGradePoller::computeSweepSnr (window.data(), (int) window.size(), lead, sweepLen, g);
+    REQUIRE (g.sweepSnrValid);
+    INFO ("sweepSnrDb = " << g.sweepSnrDb);
+    // True sweep-to-floor ratio ~ 20*log10(0.354/0.0007) ~ 54 dB. The old full-RMS floor (burst-
+    // dominated, ~-25 dB) read ~16 dB and false-flagged a clean capture below the 20 dB threshold.
+    CHECK (g.sweepSnrDb > 40.0f);
+}
