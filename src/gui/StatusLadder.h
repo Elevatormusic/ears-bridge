@@ -344,9 +344,20 @@ struct RunningSnapshot {
     }
 
     // Chain advisory tail (#49-composed): decorates a CALM line 1 only (ok/dim), never a warn/error.
+    // #68: only while the combined text still FITS the title bar at the app's minimum window — the
+    // render gate ratifies this budget at 780 px (a long multi-part advisory used to clip the line).
+    // An over-budget advisory rides in the tooltip instead: still discoverable, never truncated.
+    static constexpr int kLine1AdvisoryCharBudget = 78;
     if (s.advisoryTail.isNotEmpty()
-        && (out.line1.tone == StatusTone::Ok || out.line1.tone == StatusTone::Dim))
-        out.line1.text += s.advisoryTail;
+        && (out.line1.tone == StatusTone::Ok || out.line1.tone == StatusTone::Dim)) {
+        if (out.line1.text.length() + s.advisoryTail.length() <= kLine1AdvisoryCharBudget)
+            out.line1.text += s.advisoryTail;
+        else {
+            const auto advisory = s.advisoryTail.startsWith (" - ") ? s.advisoryTail.substring (3)
+                                                                    : s.advisoryTail.trimStart();
+            out.line1.tip = out.line1.tip.isEmpty() ? advisory : out.line1.tip + "\n" + advisory;
+        }
+    }
     return out;
 }
 

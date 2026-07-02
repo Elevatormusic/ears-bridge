@@ -256,3 +256,17 @@ TEST_CASE("StatusLadder: earStatusLine wording parity for the graded states") {
     const auto lowSnr = eb::earStatusLine ("L", ear (RefMonState::GradedClean, 54.0f, 0.3f, 12.0f, -6.0f));
     CHECK (lowSnr.text.contains ("(low SNR)"));
 }
+
+TEST_CASE("StatusLadder #68: an over-budget advisory tail rides in the tooltip, never clips the line") {
+    eb::RunningSnapshot s;
+    s.advisoryTail = " - input, cable 16-bit - 24-bit+ recommended for the cleanest measurement";  // 74 chars
+    const auto out = eb::runningStatus (s);                       // "clean so far" (Ok) headline
+    CHECK_FALSE (out.line1.text.contains ("16-bit"));             // NOT appended (would overflow at min window)
+    CHECK (out.line1.tip.contains ("16-bit"));                    // ...but fully present in the tooltip
+    CHECK_FALSE (out.line1.tip.startsWith (" - "));               // tooltip form drops the tail's separator
+
+    // A SHORT tail still decorates the line inline (the #49 behaviour, unchanged).
+    s.advisoryTail = " - input is 16-bit";
+    const auto short1 = eb::runningStatus (s);
+    CHECK (short1.line1.text.endsWith (" - input is 16-bit"));
+}

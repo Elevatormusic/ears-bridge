@@ -45,6 +45,12 @@ public:
     // colours + relayout) so the headless gate can score contrast in both modes deterministically.
     void forceThemeForTest (bool dark);
 
+    // #68 render-ratification seam: drive the title-bar header (both status lines + the per-ear quality
+    // dots) with GIVEN text so the headless gate can score the CAPTURED two-line state at the minimum
+    // window - those strings only appear mid-run, which a construct-and-probe test never reaches. Sets
+    // label text + representative dot metrics and relays out; display only, no engine/grading state.
+    void driveHeaderForTest (const juce::String& line1, const juce::String& line2, bool showDots);
+
 private:
     // The reference/schedule store dir: the TestConfig override (#24, hermetic tests), else %APPDATA%/EarsBridge.
     juce::File appDataDir() const {
@@ -223,6 +229,10 @@ private:
     // (pollReferenceGrade -> gradeOneEar) and the startup duration log use THESE two refs exclusively.
     std::vector<float> loadedReferenceL_, loadedReferenceR_;  // per-channel learned reference samples (empty until learned)
     double             loadedReferenceRateL_ = 0.0, loadedReferenceRateR_ = 0.0;
+    // #34: the Dirac output endpoint (stable UID, else display name) the reference was learned FROM -
+    // from the sidecar on reload, or resolved at learn time. "" = no binding (legacy sidecar / default
+    // render target). Start's preflight warns when the current Dirac output differs.
+    juce::String       loadedReferenceEndpoint_;
     std::atomic<bool>  gradeInFlight_ { false };      // guards against re-posting while a grade job runs
     std::atomic<uint32_t> gradeRunGen_ { 0 };         // bumped on Stop+Start; a grade job stamps it at post and a
                                                       // stale (prior-run) continuation is dropped, so run A's verdict
