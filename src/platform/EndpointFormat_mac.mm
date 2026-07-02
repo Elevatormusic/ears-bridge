@@ -37,10 +37,20 @@ double endpointMixSampleRateForName (const juce::String& deviceName, bool /*isIn
     return 0.0;
 }
 
-// macOS does not (yet) expose the full WASAPI-style mix-format struct here; the full read is a Windows
-// feature. Return {valid=false} so callers treat it as "couldn't read", never as a good format. (The
-// pure interpretMixFormat lives in the cross-platform body of EndpointFormat.cpp and is built on macOS.)
-EndpointFormat readEndpointFormat (const juce::String&, bool) { return {}; }
+// #55: RATE-ONLY read. macOS resolves the device's nominal sample rate (above) but not the full
+// WASAPI-style mix format. The old unconditional {valid=false} made the whole 48k chain gate INERT
+// on macOS: all three endpoints "unreadable" -> ConfigVerdict.checked == false -> total silence, the
+// exact fail-open the audit flagged. A rate-only VALID format lets the RATE gate (the one hard gate)
+// run on macOS; channels/bits stay 0 = "not reported", and the advisory layer skips zero fields
+// (DeviceConfigCheck guards on channels > 0 / bits > 0) so no false mono/16-bit notes appear.
+EndpointFormat readEndpointFormat (const juce::String& nameOrUid, bool isInput) {
+    const double rate = endpointMixSampleRateForName (nameOrUid, isInput);
+    if (rate <= 0.0) return {};   // couldn't resolve: honest "couldn't read", never a pass
+    EndpointFormat f;
+    f.valid     = true;
+    f.mixRateHz = rate;
+    return f;                     // channels/bits/isFloat left 0/false: "not reported" on this path
+}
 
 } // namespace eb
 #endif

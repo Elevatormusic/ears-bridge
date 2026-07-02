@@ -975,6 +975,10 @@ void MainComponent::onStartStop() {
         juce::String err;
         if (engine.start (err)) {
             startStop.setButtonText ("Stop");
+            // #10: record WHICH clock path this run took (macOS aggregate engaged vs the two-clock ASRC
+            // fallback) so an on-device validation can't test the wrong path unknowingly. Empty on Windows.
+            if (engine.aggregateNote().isNotEmpty())
+                logLine (eb::DiagnosticLog::Level::Info, "Clock path: " + engine.aggregateNote());
             inputClipHold_ = 0; silentTicks_ = 0; lowLevelTicks_ = 0; lowSnrTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
             // Live in-sweep readout: start a fresh run at the silent floor with the sweep-active attack/release
             // debounce, the text cadence, and the held live-line text reset, so a prior run's held level /
@@ -1330,7 +1334,9 @@ void MainComponent::updateStatusLine() {
         snap.snrL = engine.refSweepSnrDb (0);
         snap.snrR = engine.refSweepSnrDb (1);
         snap.snrCombined = engine.completedSweepSnrDb();
-        snap.rateVeto    = chainVerdict_.checked && ! chainVerdict_.all48k;
+        // #55: an UNVERIFIABLE chain (a poll ran, nothing readable) warns like a failed gate — the old
+        // checked-only key left it silent, so an unverifiable chain read as implicitly fine.
+        snap.rateVeto    = (chainVerdict_.checked && ! chainVerdict_.all48k) || chainVerdict_.unverifiable;
         snap.rateSummary = chainVerdict_.summary;
         snap.referenceLoaded = engine.referenceLoaded();
         auto earSnap = [this] (int ear) {
@@ -1426,10 +1432,11 @@ void MainComponent::updateStatusLine() {
         } else if (bothSideUnknown) {
             sText = "Couldn't confirm left/right from these files - double-check the slots.";
             sCol  = Theme::textDim();
-        } else if (chainVerdict_.checked && ! chainVerdict_.all48k) {
+        } else if ((chainVerdict_.checked && ! chainVerdict_.all48k) || chainVerdict_.unverifiable) {
             // 48k-everywhere warning surfaced PRE-START: devices + cals are ready and no higher-precedence
-            // gate (device/mode/override/side) is pending, but the chain isn't all-48k. Warn now so the user
-            // fixes the rate BEFORE running a sweep the reference monitor would have to invalidate.
+            // gate (device/mode/override/side) is pending, but the chain isn't all-48k — or (#55) it
+            // couldn't be verified at all. Warn now so the user fixes the rate BEFORE running a sweep the
+            // reference monitor would have to invalidate.
             sText = chainVerdict_.summary;
             sCol  = Theme::warn();
         } else {
@@ -2080,12 +2087,15 @@ void MainComponent::pollChainConfig() {
     chainPollTick_ = 0;
 
     eb::ChainConfig cfg;
+    // #28: key the reads on the STABLE endpoint UID when DeviceManager resolved one (uid != name) —
+    // readEndpointFormat's exact-UID tier then hits the precise endpoint even when Windows exposes
+    // duplicate friendly names ("Name" vs "Name (2)"). Unresolved uid falls back to the name tiers.
     if (const auto in = inputPicker.selectedDevice())
-        cfg.input = eb::readEndpointFormat (in->name, /*isInput*/ true);
+        cfg.input = eb::readEndpointFormat (in->uid.isNotEmpty() ? in->uid : in->name, /*isInput*/ true);
     if (const auto out = outputPicker.selectedDevice())
-        cfg.cable = eb::readEndpointFormat (out->name, /*isInput*/ false);   // the cable's CAPTURE-feeding render endpoint
+        cfg.cable = eb::readEndpointFormat (out->uid.isNotEmpty() ? out->uid : out->name, /*isInput*/ false);
     if (const auto diracOut = eb::readDiracOutputDeviceName(); diracOut.isNotEmpty())
-        cfg.diracOutput = eb::readEndpointFormat (diracOut, /*isInput*/ false);
+        cfg.diracOutput = eb::readEndpointFormat (diracOut, /*isInput*/ false);   // a NAME from Dirac's settings file
 
     chainVerdict_ = eb::checkChainConfig (cfg);
     chainFormats_ = cfg;   // keep the per-endpoint formats so the Signal-chain panel can render rate/channels/bits

@@ -88,9 +88,15 @@ void ClockBridge::pushCapture (const float* mono, int numFrames) {
 }
 
 int ClockBridge::pullRender (float* out, int numFrames) {
+    // #47: normalize every per-call coefficient by the actual block duration (see kRefBlockSeconds in
+    // the header) so the loop bandwidth is defined in seconds, not per-callback. Clamped so a degenerate
+    // block size can't blow the smoothers up or freeze them entirely; == 1.0 exactly at the reference.
+    const double dtScale = juce::jlimit (0.125, 8.0,
+        ((double) juce::jmax (1, numFrames) / juce::jmax (1.0, renderRate)) / kRefBlockSeconds);
+
     // --- Fill observation (always current, even while frozen, so fifoFill() stays honest). ---
     const double fillFrac = (double) fifo.getNumReady() / (double) juce::jmax (1, capacity);   // guard capacity==0 (pre-prepare)
-    smoothedFill += 0.01 * (fillFrac - smoothedFill);        // 1-pole smoother (steering only)
+    smoothedFill += juce::jmin (1.0, 0.01 * dtScale) * (fillFrac - smoothedFill);   // 1-pole smoother (steering only)
     publishedFill.store (smoothedFill);
 
     const double nominal = captureRate / renderRate;          // input samples per output sample
@@ -111,13 +117,16 @@ int ClockBridge::pullRender (float* out, int numFrames) {
         // --- FREE: normal PI fill-control, steering fill toward kTargetFill. ---
         freezeArmed_ = false;                                 // re-arm for the next sweep
         const double errFill = smoothedFill - kTargetFill;
-        integ = juce::jlimit (-0.02, 0.02, integ + 1.0e-4 * errFill);
+        // #47: the integrator accumulates PER CALL -> scale its step by the block duration. The
+        // proportional term is a per-block-held offset (bandwidth-independent) and stays unscaled.
+        integ = juce::jlimit (-0.02, 0.02, integ + (1.0e-4 * dtScale) * errFill);
         ratioTrim = juce::jlimit (kMinRatioTrim, kMaxRatioTrim, 1.0 + (2.0e-2 * errFill + integ));
         ratio = nominal * ratioTrim;
-        // Running mean early (alpha 1/n), settling to a slow EMA (floor 0.001) once warm. The 1/n term makes
-        // avgRatioTrim_ converge to the true ratio within a second or two of free-running, so a sweep that arrives
-        // soon after start() snapshots the real ratio, not the stale 1.0 init (the cold-start ppm-skew trap).
-        const double a = juce::jmax (0.001, 1.0 / (double) (++avgCount_));
+        // Running mean early (alpha 1/n), settling to a slow EMA (floor, #47: duration-scaled) once warm.
+        // The 1/n term makes avgRatioTrim_ converge to the true ratio within a second or two of
+        // free-running, so a sweep that arrives soon after start() snapshots the real ratio, not the
+        // stale 1.0 init (the cold-start ppm-skew trap).
+        const double a = juce::jmax (juce::jmin (1.0, 0.001 * dtScale), 1.0 / (double) (++avgCount_));
         avgRatioTrim_ += a * (ratioTrim - avgRatioTrim_);
     }
     publishedRatio.store (ratio);                             // expose to currentRatio() (lock-free)

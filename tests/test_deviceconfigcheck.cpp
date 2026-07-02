@@ -116,12 +116,17 @@ TEST_CASE ("an unreadable endpoint is NOT treated as good (honesty)", "[deviceco
     REQUIRE_FALSE (v.summary.containsIgnoreCase ("good"));
 }
 
-TEST_CASE ("all endpoints unreadable -> checked=false, no false alarm", "[deviceconfigcheck]") {
+TEST_CASE ("all endpoints unreadable -> checked=false, honest unverified summary", "[deviceconfigcheck]") {
+    // #55: this case used to pin an EMPTY summary ("no false alarm when we know nothing") — which was
+    // the fail-open the audit flagged: total silence read as implicitly fine, and on macOS the whole
+    // gate was inert. The new contract: checked stays false (no 48k VERDICT was formed) but the
+    // summary says honestly that the chain could not be verified.
     ChainConfig c { unreadable(), unreadable(), unreadable() };
     const auto v = eb::checkChainConfig (c);
-    REQUIRE_FALSE (v.checked);         // nothing was read -> don't warn, don't veto
+    REQUIRE_FALSE (v.checked);         // still no false 48k verdict
     REQUIRE_FALSE (v.all48k);
-    REQUIRE (v.summary.isEmpty());     // no false alarm when we know nothing
+    REQUIRE (v.unverifiable);
+    REQUIRE (v.summary.containsIgnoreCase ("unverified"));
 }
 
 TEST_CASE ("two endpoints wrong are both named on one line", "[deviceconfigcheck]") {
@@ -235,4 +240,44 @@ TEST_CASE ("the advisory is independent of a RATE veto (a wrong-rate chain still
     REQUIRE (v.summary.isNotEmpty());     // rate summary present (the only green-veto)
     REQUIRE (v.inputChannelsLow);         // advisory fields still populated
     REQUIRE (v.advisory.containsIgnoreCase ("input"));
+}
+
+// ==================================================================================================
+// #55: the all-unreadable case must be HONEST, not silent. checked=false previously muted every warn
+// (fail-open) - on macOS, where the full format read was unavailable, the entire 48k gate was inert.
+// ==================================================================================================
+TEST_CASE("checkChainConfig: nothing readable -> unverifiable with an honest summary [#55]") {
+    eb::ChainConfig c;                                    // all three endpoints invalid
+    const auto v = eb::checkChainConfig (c);
+    CHECK_FALSE (v.checked);
+    CHECK (v.unverifiable);
+    CHECK (v.summary.containsIgnoreCase ("unverified"));
+    CHECK_FALSE (v.all48k);
+
+    // A default-constructed verdict (no poll yet) stays quiet - unverifiable is a POLL result.
+    eb::ConfigVerdict fresh;
+    CHECK_FALSE (fresh.unverifiable);
+    CHECK (fresh.summary.isEmpty());
+}
+
+TEST_CASE("checkChainConfig: one readable endpoint -> checked, NOT unverifiable [#55]") {
+    eb::ChainConfig c;
+    c.input.valid = true; c.input.mixRateHz = 48000.0; c.input.channels = 2; c.input.bits = 24;
+    const auto v = eb::checkChainConfig (c);
+    CHECK (v.checked);
+    CHECK_FALSE (v.unverifiable);
+    CHECK_FALSE (v.all48k);                               // cable + Dirac still unreadable -> no pass
+}
+
+TEST_CASE("checkChainConfig: rate-only endpoints (channels/bits 0) never raise field advisories [#55]") {
+    // The macOS read resolves the RATE but not channels/bits (0 = "not reported"). Those zeros must
+    // not read as "mono input" / "not 2-channel".
+    eb::ChainConfig c;
+    c.input.valid = true;  c.input.mixRateHz = 48000.0;   // channels = 0, bits = 0
+    c.cable.valid = true;  c.cable.mixRateHz = 48000.0;
+    c.diracOutput.valid = true; c.diracOutput.mixRateHz = 48000.0;
+    const auto v = eb::checkChainConfig (c);
+    CHECK (v.all48k);                                     // the RATE gate runs on the mac rate-only path
+    CHECK_FALSE (v.inputChannelsLow);
+    CHECK (v.advisory.isEmpty());
 }

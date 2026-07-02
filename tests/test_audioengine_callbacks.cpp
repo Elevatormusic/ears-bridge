@@ -21,9 +21,11 @@ static juce::AudioBuffer<float> unitImpulse (int taps) {
 TEST_CASE("AudioEngine callbacks: capture forwards a clean block; render pulls it back") {
     eb::AudioEngine e;
     const int N = 64, cap = 8192;
-    e.prepareCallbacksForTest (48000.0, N, cap);
+    // #12: install the FIRs BEFORE the seam arms its synthetic Running (the STOPPED-only backstop
+    // now guards the legacy entries; JUCE's Convolution applies a pre-loaded IR at prepare()).
     e.setLeftCalFir  (unitImpulse (8));
     e.setRightCalFir (unitImpulse (8));
+    e.prepareCallbacksForTest (48000.0, N, cap);
     e.setCombineMode (eb::CombineMode::Average);
 
     std::vector<float> inL (N, 0.5f), inR (N, 0.3f);
@@ -168,9 +170,11 @@ void operator delete (void* p, std::size_t, std::align_val_t) noexcept { std::fr
 TEST_CASE("AudioEngine callbacks: steady-state capture+render are allocation-free") {
     eb::AudioEngine e;
     const int N = 256, cap = 8192;
-    e.prepareCallbacksForTest (48000.0, N, cap);
+    // #12: install the FIRs BEFORE the seam arms its synthetic Running (the STOPPED-only backstop
+    // now guards the legacy entries; JUCE's Convolution applies a pre-loaded IR at prepare()).
     e.setLeftCalFir  (unitImpulse (8));
     e.setRightCalFir (unitImpulse (8));
+    e.prepareCallbacksForTest (48000.0, N, cap);
     e.setCombineMode (eb::CombineMode::AutoPerEar);
 
     std::vector<float> inL (N, 0.25f), inR (N, 0.25f);
@@ -203,9 +207,11 @@ TEST_CASE("AudioEngine callbacks: steady-state capture+render are allocation-fre
 TEST_CASE("AudioEngine callbacks: buffering the response into the rolling ring is allocation-free") {
     eb::AudioEngine e;
     const int N = 256, cap = 8192;
-    e.prepareCallbacksForTest (48000.0, N, cap);
+    // #12: install the FIRs BEFORE the seam arms its synthetic Running (the STOPPED-only backstop
+    // now guards the legacy entries; JUCE's Convolution applies a pre-loaded IR at prepare()).
     e.setLeftCalFir  (unitImpulse (8));
     e.setRightCalFir (unitImpulse (8));
+    e.prepareCallbacksForTest (48000.0, N, cap);
     e.setReferenceLoaded (true);                       // arm the ring-write path (gates the memcpy)
 
     std::vector<float> loud (N, 0.5f);                 // loud constant drives a continuous ring write

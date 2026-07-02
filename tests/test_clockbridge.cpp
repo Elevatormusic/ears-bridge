@@ -315,3 +315,27 @@ TEST_CASE("ClockBridge: unfreezing resumes PI steering and recenters") {
     }
     CHECK (moved);                                          // steering resumed
 }
+
+// ==================================================================================================
+// #47: the PI/smoother loop bandwidth must be defined in SECONDS, not per-callback. The old per-call
+// constants ran the whole loop ~4x faster at a 120-frame block than at the 480-frame tuning point
+// (and ~4x slower at 2048), so the on-device tuning only held at one driver block size.
+// ==================================================================================================
+TEST_CASE("ClockBridge: fill-smoother tracking is block-size-invariant over the same wall time [#47]") {
+    auto runOneSecond = [] (int block) {
+        eb::ClockBridge b;
+        b.prepare (48000.0, 48000.0, 1, 48000);
+        std::vector<float> in ((size_t) 40000, 0.0f);
+        b.pushCapture (in.data(), 40000);                  // a large fill step for the smoother to chase
+        std::vector<float> out ((size_t) block, 0.0f);
+        for (int frames = 0; frames < 24000; frames += block)   // half a second of render pulls
+            b.pullRender (out.data(), block);
+        return b.fifoFill();                               // the published SMOOTHED fill
+    };
+    const double atRef   = runOneSecond (480);             // the on-device tuning block (dtScale == 1)
+    const double atSmall = runOneSecond (120);             // dtScale == 0.25
+    INFO ("smoothed fill after 0.5s: 480-block=" << atRef << " 120-block=" << atSmall);
+    // Same wall time, same underlying fill trajectory -> the smoothed readout must land together.
+    // (With the old per-call alpha the 120-block run tracked ~4x faster and landed visibly apart.)
+    CHECK (std::abs (atRef - atSmall) < 0.02);
+}

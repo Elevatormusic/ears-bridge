@@ -69,6 +69,8 @@ bool AggregateDevice::create (const juce::String& earsInputUid,
 
     // Aggregate description dictionary.
     juce::String aggUid = "eb.aggregate." + juce::String (juce::Time::currentTimeMillis());
+    // #10: this literal IS the JUCE open key (createDevice resolves by display name) — it must match
+    // AggregateDevice::aggregateName() in the header exactly.
     CFStringRef cfName = CFSTR ("EARS Bridge Aggregate");
     CFStringRef cfUid  = CFStringCreateWithCString (kCFAllocatorDefault,
                                                     aggUid.toRawUTF8(), kCFStringEncodingUTF8);

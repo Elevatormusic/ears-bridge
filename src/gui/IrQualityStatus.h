@@ -2,8 +2,6 @@
 #include <juce_core/juce_core.h>   // juce::String / jmax / roundToInt
 #include <cmath>                    // std::log10 / std::sqrt / std::abs
 #include <vector>
-#include <limits>                   // #18: the harmonic-window spacing cap
-#include <utility>                  // #18: the (centre, half) exclusion zones
 
 namespace eb {
 
@@ -103,13 +101,14 @@ struct IrQuality {
     // Nyquist (aliased down-chirps), smearing the distortion energy into a broad negative-time cluster.
     // The old fixed +-2 spot windows therefore read thdPercent ~ 0 on every real measurement (the audit's
     // finding: the spots were also displaced by the reference trim margin). The honest metric is the
-    // NOISE-COMPENSATED ENERGY of the whole negative-time distortion REGION:
-    //     region  = d in [-(1.2 * maxHarmonicOffset), -preMargin)  (before the impulse, outside the gate)
-    //     noise   = everything else outside the gate (the positive-time far field)
-    //     thd%    = 100 * sqrt( max(0, regionEnergy - noiseMean * regionCount) / signalEnergy )
-    // The subtraction removes the noise floor's expected contribution, so a clean capture still reads ~0
-    // while spread/misplaced/aliased distortion all register. The Farina offsets (from the MEASURED sweep
-    // length) only BOUND the region; empty offsets => THD not assessed (0, as before).
+    // MIRROR-COMPENSATED ENERGY of the whole negative-time distortion REGION:
+    //     region  = d in [-(1.2 * maxHarmonicOffset), -signalSpan)   (before the impulse, past the gate)
+    //     mirror  = d in (signalSpan, signalSpan + regionWidth]      (the equidistant positive-time twin)
+    //     thd%    = 100 * sqrt( max(0, regionEnergy - mirrorMean * regionCount) / signalEnergy )
+    // The subtraction removes everything SYMMETRIC around the impulse (the noise floor AND the slow
+    // band-limitation undulation from the reference having no content below f1 / above f2), so a clean
+    // capture reads ~0 while spread/misplaced/aliased distortion — negative-time-only — registers. The
+    // Farina offsets (from the MEASURED sweep length) only BOUND the region; empty => THD not assessed.
     // The compensation baseline is the MIRROR region — the same width on the POSITIVE-time side, right
     // after the signal gate. Band-limitation artifacts of the deconvolution (the reference has no
     // content below f1 or above f2, so the recovered impulse rides on slow symmetric undulations) and

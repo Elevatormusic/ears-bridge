@@ -254,10 +254,18 @@ void AudioEngine::setOutputBitDepth (int bits) {   // 16/24/32; anything else ->
     outputBits = (bits == 16 || bits == 24 || bits == 32) ? bits : 24;
 }
 
-void AudioEngine::setLeftCalFir  (juce::AudioBuffer<float> fir) { graph.setFir (0, std::move (fir)); }
-void AudioEngine::setRightCalFir (juce::AudioBuffer<float> fir) { graph.setFir (1, std::move (fir)); }
-void AudioEngine::clearLeftCalFir()  { graph.clearFir (0); }   // back to unity + headroom 1.0
-void AudioEngine::clearRightCalFir() { graph.clearFir (1); }
+// #12: the legacy direct FIR entries are STOPPED-only (see the header) — a mid-run install bypasses the
+// R1 generation lifecycle. Release-mode early-return, mirroring setSweepSchedule's backstop.
+void AudioEngine::setLeftCalFir  (juce::AudioBuffer<float> fir) {
+    if (! reconfigAllowed()) { jassertfalse; return; }
+    graph.setFir (0, std::move (fir));
+}
+void AudioEngine::setRightCalFir (juce::AudioBuffer<float> fir) {
+    if (! reconfigAllowed()) { jassertfalse; return; }
+    graph.setFir (1, std::move (fir));
+}
+void AudioEngine::clearLeftCalFir()  { if (! reconfigAllowed()) { jassertfalse; return; } graph.clearFir (0); }
+void AudioEngine::clearRightCalFir() { if (! reconfigAllowed()) { jassertfalse; return; } graph.clearFir (1); }
 void AudioEngine::setCombineMode (eb::CombineMode m) { graph.setCombineMode (m); }
 void AudioEngine::setSweepSchedule (const SweepSchedule& s) {
     // STOPPED-only: loadSchedule allocates + is not mid-run safe (Task-3 verifier hand-off). The release-mode
@@ -272,10 +280,12 @@ void AudioEngine::setOutputTrimDb (double db) {
 }
 
 void AudioEngine::loadLeftCal (const CalFile& cal) {
+    if (! reconfigAllowed()) { jassertfalse; return; }   // #12: legacy design+install, STOPPED-only
     FirDesignParams p; p.sampleRate = activeRate; p.numTaps = firTapsForRate (activeRate);
     graph.setFir (0, FirDesigner::design (cal, p));
 }
 void AudioEngine::loadRightCal (const CalFile& cal) {
+    if (! reconfigAllowed()) { jassertfalse; return; }   // #12: legacy design+install, STOPPED-only
     FirDesignParams p; p.sampleRate = activeRate; p.numTaps = firTapsForRate (activeRate);
     graph.setFir (1, FirDesigner::design (cal, p));
 }
@@ -639,18 +649,31 @@ bool AudioEngine::start (juce::String& errorOut) {
     {
         juce::String aggErr;
         if (aggregate_.create (inputId.uid, outputId.uid, aggErr)) {
-            const auto aggName = aggregate_.aggregateUid();
-            eb::DeviceId aggDev; aggDev.typeName = "CoreAudio"; aggDev.name = aggName; aggDev.uid = aggName;
+            // #10: open by the aggregate's DISPLAY NAME — JUCE's CoreAudio list resolves createDevice()
+            // by name, so passing the UID here returned nullptr on every Start and the aggregate path
+            // silently never engaged (every mac run fell to the two-clock ASRC while looking healthy).
+            // The real UID stays in .uid for identity/logging.
+            eb::DeviceId aggDev;
+            aggDev.typeName = "CoreAudio";
+            aggDev.name     = eb::AggregateDevice::aggregateName();
+            aggDev.uid      = aggregate_.aggregateUid();
             auto eAggIn  = devices.openInput  (aggDev, activeRate, 512);
             auto eAggOut = devices.openOutput (aggDev, activeRate, 512, outputBits);
             if (eAggIn.isEmpty() && eAggOut.isEmpty()) {
                 usingAggregate_ = true;   // proceed with the aggregate; skip the ClockBridge prepare below
+                aggregateNote_ = "CoreAudio aggregate ENGAGED (single-clock; ASRC trivial 1:1)";
             } else {
                 devices.closeAll();
                 aggregate_.destroy();     // partial open: fall through to the ClockBridge path
+                aggregateNote_ = "CoreAudio aggregate unavailable (open failed: "
+                               + (eAggIn.isNotEmpty() ? eAggIn : eAggOut) + ") - two-clock ASRC path";
             }
+        } else {
+            aggregateNote_ = "CoreAudio aggregate unavailable (" + aggErr + ") - two-clock ASRC path";
         }
         // If usingAggregate_ stayed false, fall through to the Plan-2 two-device open + ClockBridge.
+        // #10: aggregateNote_ records engaged-vs-fallback so the GUI can LOG which clock path a run
+        // actually used — Gate-7 validation must not test the fallback while believing it's the aggregate.
     }
 #endif
 
@@ -730,17 +753,24 @@ bool AudioEngine::start (juce::String& errorOut) {
     outD->start (renderCb.get());
     // A device can open yet fail to begin streaming (in use, driver glitch); don't claim Running with
     // no callbacks (which would show a false "Running - clean" while Dirac records silence).
+    // #43: publish Running BEFORE the verification. audioDeviceStopped() only latches deviceDied_
+    // while status()==Running, so a death in the old gap (isPlaying-check -> Running store) was never
+    // latched — a dead stream stayed "Running" forever with no teardown. With Running published first,
+    // a death in this window either fails the re-check below (torn down to Error right here) or
+    // latches deviceDied_ for the GUI timer's normal device-loss teardown. No gap remains.
+    engineStatus.store ((int) EngineStatus::Running);
     if (! inD->isPlaying() || ! outD->isPlaying()) {
         errorOut = "Device opened but did not start streaming: "
                  + (! inD->isPlaying() ? inD->getLastError() : outD->getLastError());
+        engineStatus.store ((int) EngineStatus::Stopped);   // leave Running before closing (no self-latch)
         devices.closeAll();
         aggregate_.destroy(); usingAggregate_ = false;
         bridge.reset();
         rawRail_ = RawRailState {};   // streams never came up: drop the snapshot latched above
+        deviceDied_.store (false);    // a latch from this failed window must not leak into the Error state
         engineStatus.store ((int) EngineStatus::Error);
         return false;
     }
-    engineStatus.store ((int) EngineStatus::Running);
     return true;
 }
 
@@ -863,6 +893,8 @@ void AudioEngine::prepareCallbacksForTest (double sampleRate, int block, int fif
     renderCb->mono.assign  ((size_t) juce::jmax (1, block), 0.0f);
 
     engineStatus.store ((int) EngineStatus::Running);   // so audioDeviceStopped()-style guards behave as in a run
+    // #12: the synthetic Running arms the STOPPED-only reconfig backstop too — seam tests that install
+    // FIRs must do so BEFORE this call (matching production, where FIRs are installed before start()).
 }
 
 void AudioEngine::driveCaptureCallback (const float* inL, const float* inR, int numSamples) {
