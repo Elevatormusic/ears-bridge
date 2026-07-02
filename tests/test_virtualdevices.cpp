@@ -25,6 +25,8 @@ TEST_CASE("VirtualDevices: capture-frame accounting realises the requested bridg
 
     ebsim::FeederSpec f; f.blockFrames = 480; f.bridgePpm = +500.0;
     const auto out = ebsim::streamSession (e, mic, f);
+    // Drift is realised as extra WHOLE capture blocks (production: callback RATE, never block size):
+    // +500 ppm over ~60 s = 100 blocks/s * 60 s * 5e-4 = ~3 extra 480-frame blocks.
     const long long expected = (long long) std::llround ((double) out.captureFramesFed / 1.0005);
     INFO ("captured=" << out.captureFramesFed << " rendered=" << out.mono.size());
     CHECK (std::llabs ((long long) out.mono.size() - expected) <= 2 * 480);   // within a couple blocks

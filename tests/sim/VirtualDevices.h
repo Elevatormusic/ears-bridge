@@ -45,27 +45,29 @@ inline RenderedOutput streamSession (eb::AudioEngine& e, const StereoTimeline& m
     std::vector<float> capL ((size_t) N + 8, 0.0f), capR ((size_t) N + 8, 0.0f);
     std::vector<float> outL ((size_t) N, 0.0f),     outR ((size_t) N, 0.0f);
 
-    double debt = 0.0;          // fractional capture frames owed by the clock skew
-    size_t pos  = 0;            // mic read position
+    // Drift is realised as callback RATE, never block SIZE: production capture callbacks always
+    // deliver the negotiated block; a faster capture clock fires MORE callbacks per render block.
+    // (The first cut varied nCap by +-1 frame - the engine's prepared per-block scratch rightly
+    // flagged the over-size delivery as a fault, which no real driver produces.) blockDebt accrues
+    // (1 + ppm) capture blocks per render block; whole blocks fire, the fraction carries.
+    double blockDebt = 0.0;
+    size_t pos = 0;             // mic read position
 
-    while (pos < total) {
-        debt += (double) N * f.bridgePpm * 1e-6;
-        int nCap = N;
-        if (debt >= 1.0)       { const int d = (int) debt; nCap += d; debt -= d; }
-        else if (debt <= -1.0) { const int d = (int) (-debt); nCap -= d; debt += d; }
-        nCap = std::min (nCap, (int) capL.size());
-
-        // Fill the capture block from the mic timeline (zero-padded past the end).
-        for (int i = 0; i < nCap; ++i) {
+    auto pushCaptureBlock = [&] {
+        for (int i = 0; i < N; ++i) {
             const size_t j = pos + (size_t) i;
             capL[(size_t) i] = j < total ? mic.L[j] : 0.0f;
             capR[(size_t) i] = j < total ? mic.R[j] : 0.0f;
         }
-        pos += (size_t) nCap;
-        out.captureFramesFed += nCap;
+        pos += (size_t) N;
+        out.captureFramesFed += N;
+        e.driveCaptureCallback (capL.data(), capR.data(), N);
+    };
 
-        e.driveCaptureCallback (capL.data(), capR.data(), nCap);
-        e.driveRenderCallback  (outL.data(), outR.data(), N);
+    while (pos < total) {
+        blockDebt += 1.0 + f.bridgePpm * 1e-6;
+        while (blockDebt >= 1.0) { pushCaptureBlock(); blockDebt -= 1.0; }
+        e.driveRenderCallback (outL.data(), outR.data(), N);
         out.mono.insert (out.mono.end(), outL.begin(), outL.end());
         if (perBlock) perBlock();
     }
