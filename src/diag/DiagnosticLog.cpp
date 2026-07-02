@@ -134,8 +134,15 @@ void DiagnosticLog::rotateIfNeeded() {
         backupOf (current_, i).moveFileTo (backupOf (current_, i + 1));
 
     // <base> becomes <base>.1, then reopen a fresh, empty <base>.
-    current_.moveFileTo (backupOf (current_, 1));
+    // #52: CHECK the rename - an AV/indexer briefly holding the file makes moveFileTo fail, and reopening
+    // the same >=cap file in append mode meant the size cap never held (unbounded growth + the rename storm
+    // re-running on every write). On failure fall back to truncate-in-place so the cap ALWAYS holds; if even
+    // the delete fails (hard lock) stop writing until the lock clears rather than grow unbounded.
+    if (! current_.moveFileTo (backupOf (current_, 1)))
+        current_.deleteFile();
     out_ = std::make_unique<juce::FileOutputStream> (current_);
+    if (out_ != nullptr && out_->openedOk() && out_->getPosition() >= kMaxBytes)
+        out_.reset();
 }
 
 juce::String DiagnosticLog::redactSerial (const juce::String& message, const juce::String& serial) {

@@ -36,7 +36,10 @@ UpdateInfo parseRelease (const juce::String& jsonBody, const juce::String& curre
         info.updateAvailable = true;
         info.latestVersion = tag.startsWithIgnoreCase ("v") ? tag.substring (1) : tag;
         auto html = json.getProperty ("html_url", juce::var()).toString();
-        info.releaseUrl = html.isNotEmpty()
+        // #27: the URL is launched in the OS browser (ShellExecute honours ANY registered scheme - file://,
+        // UNC, ms-msdt:, ...). Accept the response's html_url ONLY when it is a github.com https URL;
+        // anything else (a tampered/malicious response body) falls back to the hardcoded releases page.
+        info.releaseUrl = html.startsWithIgnoreCase ("https://github.com/")
             ? html
             : juce::String ("https://github.com/Elevatormusic/ears-bridge/releases");
     }

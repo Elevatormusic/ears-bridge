@@ -18,14 +18,13 @@ bool enableDiracSharedMode (juce::String& messageOut) {
     }
     // Tell already-running apps (notably Explorer, which spawns Start-menu launches) that the
     // environment changed, so the NEXT Dirac Live launch inherits the variable -- no reboot needed.
-    // Broadcast off the message thread so the click handler returns immediately; nothing reads
-    // the broadcast result.
-    juce::Thread::launch ([]
-    {
-        DWORD_PTR result = 0;
-        ::SendMessageTimeoutW (HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM) L"Environment",
-                               SMTO_ABORTIFHUNG, 5000, &result);
-    });
+    // #56: broadcast SYNCHRONOUSLY with a short per-window timeout. The old detached-thread broadcast was
+    // fire-and-forget: quitting inside its window killed the thread before Explorer processed the message,
+    // so the env change silently failed to propagate while the UI claimed success. ~100 ms per hung window
+    // is fine for a click handler, and returning AFTER the broadcast makes the success message honest.
+    DWORD_PTR result = 0;
+    ::SendMessageTimeoutW (HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM) L"Environment",
+                           SMTO_ABORTIFHUNG, 100, &result);
     messageOut = "Now fully close and reopen Dirac Live (no reboot needed).";
     return true;
 }

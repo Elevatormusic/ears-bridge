@@ -11,11 +11,7 @@ void ClockBridge::prepare (double capRate, double renRate, int /*channels*/, int
     fifo.reset();
     resampler_.prepare (captureRate, renderRate);
     readPhase_ = resampler_.halfLength() - 1;            // first output centers on primed history
-    // Scratch must hold the worst-case needIn so the stateless FIR never reads OOB (even on starve): up to
-    // (kMaxRatio*kMaxRatioTrim)*kMaxRenderBlock output span + the filter length. The *kMaxRatioTrim is essential -
-    // the PI raises the effective ratio to nominal*1.03, so kMaxRatio alone undersizes the scratch (review fix).
-    srcInput.assign ((size_t) juce::jmax (capacity,
-                     (int) std::ceil (kMaxRatio * kMaxRatioTrim * kMaxRenderBlock) + eb::PolyphaseResampler::kMaxLen + 8), 0.0f);
+    resizeScratch();
     smoothedFill = kTargetFill; ratioTrim = 1.0; integ = 0.0; avgRatioTrim_ = 1.0; avgCount_ = 0;
     sweepActive_.store (false); emergencyCorrection_.store (false);
     freezeArmed_ = false; frozenRatio_ = captureRate / juce::jmax (1.0, renderRate);
@@ -28,6 +24,20 @@ void ClockBridge::setRenderRate (double r) {
     renderRate = r;
     resampler_.prepare (captureRate, renderRate);        // rebuild the prototype for the new ratio (setup thread)
     readPhase_ = resampler_.halfLength() - 1;
+    resizeScratch();   // #19: a granted rate can push the nominal ratio past the fixed sizing floor; this runs
+                       // in audioDeviceAboutToStart (setup thread, pre-stream) where realloc is already done above
+}
+
+// Scratch must hold the worst-case needIn so the stateless FIR never reads OOB (even on starve): up to
+// (worstRatio*kMaxRatioTrim)*kMaxRenderBlock output span + the filter length. #19: worstRatio = the LARGER of
+// the fixed floor kMaxRatio and the ACTUAL nominal ratio - the fixed 4.0 was billed as "the worst case" but
+// 192k->44.1k is already 4.354, and a device unilaterally granting a very low render rate goes higher still.
+// The *kMaxRatioTrim is essential - the PI raises the effective ratio to nominal*1.03 (review fix).
+void ClockBridge::resizeScratch() {
+    const double nominal = captureRate / juce::jmax (1.0, renderRate);
+    const double worst   = juce::jmax (kMaxRatio, nominal) * kMaxRatioTrim;
+    srcInput.assign ((size_t) juce::jmax (capacity,
+                     (int) std::ceil (worst * kMaxRenderBlock) + eb::PolyphaseResampler::kMaxLen + 8), 0.0f);
 }
 
 void ClockBridge::reset() {

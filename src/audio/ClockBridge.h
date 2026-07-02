@@ -73,7 +73,9 @@ private:
     double readPhase_ = 0.0;            // fractional input position of the next output (consumer thread only)
     std::vector<float> srcInput;        // peeked from FIFO, fed to the resampler
     double captureRate = 48000.0, renderRate = 48000.0;
-    static constexpr double kMaxRatio       = 4.0;      // 192k -> 48k, the worst-case input:output ratio
+    void resizeScratch();   // #19: size srcInput from max(kMaxRatio, the ACTUAL nominal ratio) * kMaxRatioTrim
+    static constexpr double kMaxRatio       = 4.0;      // sizing FLOOR, not the true worst case (#19: 192k->44.1k
+                                                        // = 4.354; resizeScratch() folds in the actual ratio)
     static constexpr double kMaxRatioTrim   = 1.03;     // PI ratioTrim CEILING (the jlimit in pullRender). The
     static constexpr double kMinRatioTrim   = 0.97;     // scratch MUST be sized for kMaxRatio*kMaxRatioTrim, NOT
                                                         // kMaxRatio: the PI raises the effective inc to 4.0*1.03=

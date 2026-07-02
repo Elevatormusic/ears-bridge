@@ -104,13 +104,24 @@ void DeviceManager::rescan() {
     type->scanForDevices();
     const auto typeName = type->getTypeName();
 
+    // #63: resolve ALL endpoint UIDs in ONE enumeration per flow. The per-name resolver re-enumerated the
+    // complete property store for EVERY device - O(N^2) COM reads on the message thread at launch and on
+    // every hot-plug. An empty map (non-Windows / COM failure) or a missing name falls back to the per-name
+    // path, preserving the old behaviour exactly.
+    const auto uidsIn  = endpointUidsForFlow (true);
+    const auto uidsOut = endpointUidsForFlow (false);
+    const auto uidFor  = [] (const juce::StringPairArray& m, const juce::String& name, bool isInput) {
+        const auto v = m.getValue (name, {});
+        return v.isNotEmpty() ? v : stableUidFor (name, isInput);
+    };
+
     for (auto& name : type->getDeviceNames (true)) {   // true => input devices
-        DeviceId d; d.typeName = typeName; d.name = name; d.uid = stableUidFor (name, true);
+        DeviceId d; d.typeName = typeName; d.name = name; d.uid = uidFor (uidsIn, name, true);
         d.model = detectEarsModel (name);
         inputList.push_back (d);
     }
     for (auto& name : type->getDeviceNames (false)) {  // false => output devices
-        DeviceId d; d.typeName = typeName; d.name = name; d.uid = stableUidFor (name, false);
+        DeviceId d; d.typeName = typeName; d.name = name; d.uid = uidFor (uidsOut, name, false);
         d.isVirtualSink = looksLikeVirtualSink (name);
         outputList.push_back (d);
     }

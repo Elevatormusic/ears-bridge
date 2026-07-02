@@ -30,7 +30,7 @@ public:
     bool         advancedOverride() const; void setAdvancedOverride (bool);
     bool         diracHardwareProcessor() const; void setDiracHardwareProcessor (bool);
 
-    void flush();   // force the PropertiesFile to disk immediately
+    bool flush();   // force the PropertiesFile to disk immediately; false = the save FAILED (#53 - log it once)
 
 private:
     juce::PropertiesFile& props();

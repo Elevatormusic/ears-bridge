@@ -805,9 +805,13 @@ void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR
     // SNR: per-sweep verdict at the SweepActive->Complete edge (mirror the capture callback) -- raise
     // LowSnr on a noisy sweep, SNAPSHOT the verdict dB, then scope the per-ear peaks to ONE sweep.
     if (session_.consumeSweepComplete()) {
-        const bool useFloor = hm.floorValid() && hm.measuredFloorLinear (0) > 1.0e-5f;
-        const float snrFloor = useFloor ? hm.measuredFloorLinear (0) : session_.armNoiseFloor();
-        const auto v = eb::evaluateSnr (snrFloor,
+        // #46 (kept byte-mirroring the production capture callback): per-ear floors, both trusted or neither.
+        const bool useFloor = hm.floorValid()
+                           && hm.measuredFloorLinear (0) > 1.0e-5f
+                           && hm.measuredFloorLinear (1) > 1.0e-5f;
+        const float floorL = useFloor ? hm.measuredFloorLinear (0) : session_.armNoiseFloor();
+        const float floorR = useFloor ? hm.measuredFloorLinear (1) : session_.armNoiseFloor();
+        const auto v = eb::evaluateSnr (floorL, floorR,
                                         hm.maxSweepPeakL(), hm.maxSweepPeakR(),
                                         session_.completedFloorStable() || useFloor);
         if (v.lowSnr) hm.raiseLowSnr();

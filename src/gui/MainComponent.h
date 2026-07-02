@@ -339,6 +339,10 @@ private:
     // distinct serials and the single-value backstop left the other one unscrubbed. Accumulate every distinct
     // loaded serial (an extra stale entry is harmless: it only scrubs a value that no longer appears).
     juce::StringArray loggedSerials_;
+    // #53: flush settings and surface a silent save failure ONCE per session (read-only profile / AV lock -
+    // the user's selections would otherwise vanish on restart with zero indication).
+    void flushSettings();
+    bool settingsSaveWarned_ = false;
     // Every log line goes through here: it runs the message through DiagnosticLog::redactSerial against each
     // known serial first, then writes it. A no-op when log_ is null.
     void logLine (eb::DiagnosticLog::Level level, const juce::String& msg);
