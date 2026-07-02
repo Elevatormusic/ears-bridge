@@ -114,4 +114,111 @@ inline StereoTimeline makeDiracSession (const SessionSpec& spec, SessionTruth& t
     return tl;
 }
 
+// ==================================================================================================
+// Impairment transforms — pure, composable, applied to the MIC-side copy of the session. Each maps
+// to a real failure mode the pipeline must grade honestly (spec S2–S8).
+// ==================================================================================================
+
+// Per-ear headphone/coupler IR: main tap + a decaying early cluster inside ~2.5 ms, scaled to unity
+// peak. ▸RV: the point is to land the match-gate's mainLobeConcentration in the 0.2–0.4 band the
+// gate was on-device-tuned against (real spread IRs), away from the unrealistic-delta corner.
+inline void convolveIr (StereoTimeline& tl) {
+    static constexpr struct { int at; float g; } taps[] = {
+        { 0, 1.00f }, { 7, 0.55f }, { 16, 0.40f }, { 28, 0.28f }, { 45, 0.18f }, { 120, 0.10f } };
+    auto conv = [] (std::vector<float>& x) {
+        std::vector<float> y (x.size(), 0.0f);
+        float norm = 0.0f; for (auto& t : taps) norm += t.g;      // unity-ish peak preservation
+        for (auto& t : taps) {
+            const float g = t.g / norm;
+            for (size_t i = (size_t) t.at; i < x.size(); ++i) y[i] += g * x[i - (size_t) t.at];
+        }
+        x.swap (y);
+    };
+    conv (tl.L); conv (tl.R);
+}
+
+// Deterministic room floor: the repo's seeded-LCG idiom (uniform in [-amp, amp]).
+inline void addSeededNoise (StereoTimeline& tl, float amp, unsigned seed) {
+    auto add = [&seed, amp] (std::vector<float>& x) {
+        for (auto& v : x) {
+            seed = seed * 1664525u + 1013904223u;
+            v += amp * ((float) (seed >> 9) / (float) (1u << 23) - 0.5f) * 2.0f;
+        }
+    };
+    add (tl.L); add (tl.R);
+}
+
+// Flat open-back leak: each ear receives the OTHER ear's original signal at leakDb.
+inline void mixCrosstalk (StereoTimeline& tl, float leakDb) {
+    const float g = std::pow (10.0f, leakDb / 20.0f);
+    const auto srcL = tl.L, srcR = tl.R;               // originals (no double-leak)
+    for (size_t i = 0; i < tl.L.size(); ++i) {
+        tl.L[i] += g * srcR[i];
+        tl.R[i] += g * srcL[i];
+    }
+}
+
+// ▸RV robustness variant: the SAME leak level but 4–8 kHz-emphasised (open-back leak peaks there) —
+// an RBJ bandpass biquad (constant-peak-gain) centred at 5.66 kHz spanning the band, so the leak's
+// in-band level matches leakDb while low/high frequencies leak much less.
+inline void mixCrosstalkShaped (StereoTimeline& tl, float leakDb) {
+    const double fs = tl.fs, f0 = std::sqrt (4000.0 * 8000.0);
+    const double w0 = 2.0 * 3.14159265358979323846 * f0 / fs;
+    const double bw = std::log2 (8000.0 / 4000.0);
+    const double alpha = std::sin (w0) * std::sinh (std::log (2.0) / 2.0 * bw * w0 / std::sin (w0));
+    // RBJ "constant 0 dB peak gain" bandpass.
+    const double b0 = alpha, b1 = 0.0, b2 = -alpha, a0 = 1.0 + alpha, a1 = -2.0 * std::cos (w0), a2 = 1.0 - alpha;
+    const float g = std::pow (10.0f, leakDb / 20.0f);
+    auto bp = [&] (const std::vector<float>& x) {
+        std::vector<float> y (x.size(), 0.0f);
+        double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        for (size_t i = 0; i < x.size(); ++i) {
+            const double yi = (b0 * x[i] + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2) / a0;
+            x2 = x1; x1 = x[i]; y2 = y1; y1 = yi;
+            y[i] = (float) yi;
+        }
+        return y;
+    };
+    const auto leakToR = bp (tl.L);
+    const auto leakToL = bp (tl.R);
+    for (size_t i = 0; i < tl.L.size(); ++i) {
+        tl.L[i] += g * leakToL[i];
+        tl.R[i] += g * leakToR[i];
+    }
+}
+
+// Memoryless amp distortion: y = x + a2 x^2 + a3 x^3. ▸RV (FFT-verified at full-scale drive A=1):
+// ~5% THD -> a2 = 0.10; ~10% -> a2 = 0.22 (H2 = a2 A^2 / 2, H3 = a3 A^3 / 4). THD scales with the
+// drive, so scenarios PIN the amplitude. Harmonics past 24 kHz alias deliberately — so does the
+// real 48 kHz chain; do not band-limit.
+inline void applyDistortion (StereoTimeline& tl, float a2, float a3) {
+    auto d = [a2, a3] (std::vector<float>& x) {
+        for (auto& v : x) v = v + a2 * v * v + a3 * v * v * v;
+    };
+    d (tl.L); d (tl.R);
+}
+
+inline void applyGainDb (StereoTimeline& tl, float dB) {
+    const float g = std::pow (10.0f, dB / 20.0f);
+    for (auto& v : tl.L) v *= g;
+    for (auto& v : tl.R) v *= g;
+}
+
+// Hard rail clamp (drives the ClipConfirmed rail-run detector honestly).
+inline void clipHard (StereoTimeline& tl) {
+    for (auto& v : tl.L) v = std::clamp (v, -1.0f, 1.0f);
+    for (auto& v : tl.R) v = std::clamp (v, -1.0f, 1.0f);
+}
+
+// One-pole low-pass: the stand-in for the HISTORICAL corruption class (HF loss in the capture
+// path — the ratio-creep / interpolator-droop family). y += a (x - y).
+inline void applyHfDroop (StereoTimeline& tl, float cutoffHz) {
+    const float a = 1.0f - std::exp (-2.0f * 3.14159265f * cutoffHz / (float) tl.fs);
+    auto lp = [a] (std::vector<float>& x) {
+        float y = 0.0f;
+        for (auto& v : x) { y += a * (v - y); v = y; }
+    };
+    lp (tl.L); lp (tl.R);
+}
+
 } // namespace ebsim
