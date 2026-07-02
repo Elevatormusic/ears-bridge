@@ -747,6 +747,44 @@ TEST_CASE("Live grade [NEG-2]: a sweep written ACROSS the ring wrap still snapsh
     CHECK (e.lastMatchCoherence() > 0.0f);
 }
 
+// ==================================================================================================
+// #30: the POSITIVE path of the RefMismatch / RefLowQuality guidance flags. The suite proved the flags
+// stay CLEAR on a clean grade (CHECK_FALSE above) but never that a bad grade actually RAISES them —
+// a deleted raiseRefMismatch()/raiseRefLowQuality() call would have kept every test green.
+// ==================================================================================================
+TEST_CASE("publishReferenceGrade: mismatch raises RefMismatch, guidance-only, cleared on prepare [#30]") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 512);
+    REQUIRE_FALSE (eb::any (e.health().flags & eb::HealthFlag::RefMismatch));
+
+    // The rate-guard / failed-match publish path: ReferenceStale with mismatch=true (either ear).
+    e.publishReferenceGrade (1, (int) eb::RefMonState::ReferenceStale, 0.0f, 0.0f,
+                             /*mismatch*/ true, /*lowQuality*/ false);
+    CHECK (eb::any (e.health().flags & eb::HealthFlag::RefMismatch));
+    CHECK_FALSE (eb::any (e.health().flags & eb::HealthFlag::RefLowQuality));
+    CHECK (e.cleanCapture());   // GUIDANCE only: a bad reference grade never invalidates the capture
+
+    // Re-prepare = a new run: the sticky guidance flag must not leak into it.
+    e.prepareForTest (48000.0, 512);
+    CHECK_FALSE (eb::any (e.health().flags & eb::HealthFlag::RefMismatch));
+}
+
+TEST_CASE("publishReferenceGrade: suspect quality raises RefLowQuality, guidance-only, cleared on prepare [#30]") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 512);
+    REQUIRE_FALSE (eb::any (e.health().flags & eb::HealthFlag::RefLowQuality));
+
+    // The matched-but-suspect publish path: a graded verdict with lowQuality=true.
+    e.publishReferenceGrade (0, (int) eb::RefMonState::GradedSuspect, 12.0f, 0.4f,
+                             /*mismatch*/ false, /*lowQuality*/ true);
+    CHECK (eb::any (e.health().flags & eb::HealthFlag::RefLowQuality));
+    CHECK_FALSE (eb::any (e.health().flags & eb::HealthFlag::RefMismatch));
+    CHECK (e.cleanCapture());   // GUIDANCE only
+
+    e.prepareForTest (48000.0, 512);
+    CHECK_FALSE (eb::any (e.health().flags & eb::HealthFlag::RefLowQuality));
+}
+
 // NOTE: the RT-safety / allocation-free assertion for the in-callback ring write lives in
 // tests/test_audioengine_callbacks.cpp, which already owns the global operator new/delete counter
 // harness (a program can only replace operator new ONCE).

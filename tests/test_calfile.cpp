@@ -61,6 +61,37 @@ TEST_CASE("CalFile reads the real R_HPN fixture") {
     CHECK_THAT(cal.points.back().freqHz, Catch::Matchers::WithinAbs(20000.0, 1e-9));
 }
 
+// #59: the HEQ fixtures were shipped but never loaded by any test, so an HEQ-header parsing regression
+// (the type users are TOLD to use for headphones) would ship silently. Exercise both real factory files:
+// type, side (the "Use this file on the LEFT/RIGHT channel" phrase), serial, and a full-band curve.
+TEST_CASE("CalFile reads the real HEQ fixtures (type + side + curve) [#59]") {
+    const auto dir = juce::File (EB_TEST_DATA_DIR);
+    struct Fx { const char* name; eb::CalSide side; };
+    for (const auto& fx : { Fx { "L_HEQ_0000000.txt", eb::CalSide::Left },
+                            Fx { "R_HEQ_0000000.txt", eb::CalSide::Right } }) {
+        auto f = dir.getChildFile (fx.name);
+        INFO (fx.name);
+        REQUIRE (f.existsAsFile());
+        auto cal = eb::CalFile::parse (f.loadFileAsString());
+        CHECK (cal.type == eb::CalType::Heq);
+        CHECK (cal.side == fx.side);
+        CHECK (cal.serial == juce::String ("000-0000"));
+        REQUIRE (cal.points.size() >= 130);
+        CHECK_THAT (cal.points.front().freqHz, Catch::Matchers::WithinAbs (10.0, 1e-9));
+        CHECK_THAT (cal.points.back().freqHz,  Catch::Matchers::WithinAbs (20000.0, 1e-9));
+    }
+}
+
+// And the remaining unloaded fixture (L_HPN): side + type from a real left-channel HPN header.
+TEST_CASE("CalFile reads the real L_HPN fixture (side Left) [#59]") {
+    auto f = juce::File (EB_TEST_DATA_DIR).getChildFile ("L_HPN_0000000.txt");
+    REQUIRE (f.existsAsFile());
+    auto cal = eb::CalFile::parse (f.loadFileAsString());
+    CHECK (cal.type == eb::CalType::Hpn);
+    CHECK (cal.side == eb::CalSide::Left);
+    REQUIRE (cal.points.size() >= 130);
+}
+
 TEST_CASE("CalFile: parses side + serial from header, hashes content, exposes freq range") {
     juce::String txt =
         "* Serial 000-0000 Left\n"
