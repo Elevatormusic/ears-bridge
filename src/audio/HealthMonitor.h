@@ -67,7 +67,8 @@ public:
                              bool frozen = false) noexcept;   // D6: frozen => held ratio is intentional, skip drift accrual
 
     HealthFlag     flags() const noexcept;        // latched sticky condition flags
-    bool           cleanCapture() const noexcept; // latched false on a measurement-invalidating condition
+    bool           cleanCapture() const noexcept; // false while a measurement-invalidating flag is latched
+                                                  // (#40: DERIVED from flags(), never a separate latch)
 
     // Edge-triggered "did the raw input clip since you last asked" — set on the audio thread, drained
     // (read-and-cleared) by the GUI poll. Unlike the sticky ClipInput flag this self-clears once
@@ -227,8 +228,9 @@ private:
     std::atomic<int>       fifoFillMilli { 500 };   // fill * 1000
     std::atomic<int>       ratioMicro { 1000000 };  // ratio * 1e6
 
-    std::atomic<unsigned>  flagBits { 0 };
-    std::atomic<bool>      clean { true };
+    std::atomic<unsigned>  flagBits { 0 };          // #40: cleanCapture DERIVES from this word (bits &
+                                                    // invalidating mask) — no separate clean bool, so the
+                                                    // verdict can never disagree with its explaining flags
     std::atomic<bool>      recentClip_ { false };   // edge-triggered input clip, drained by recentInputClip()
     std::atomic<bool>      reachedGood_ { false };  // latched true once a healthy input peak is seen this run
 

@@ -624,6 +624,40 @@ TEST_CASE("HealthMonitor: FormatChanged co-occurs with other flags correctly") {
 }
 
 // ---- Noise-floor primitive (Task 3): HealthMonitor owns + exposes the measured floor ----
+// #40: cleanCapture is DERIVED from the invalidating-flag mask (single atomic word), never a separate
+// bool. The old two-step resetMeasurementLatches (clean.store(true) THEN flagBits.fetch_and) could
+// interleave with a render-thread raise() so cleanCapture read false with its explaining flag wiped —
+// "measurement invalid" with no reason. Derivation makes the inconsistent state UNREPRESENTABLE: these
+// tests pin the contract that !cleanCapture always co-occurs with a surviving invalidating flag.
+TEST_CASE("HealthMonitor: !cleanCapture always has an explaining invalidating flag [#40]") {
+    eb::HealthMonitor h; h.prepare (eb::EarsModel::Ears, 4096);
+    constexpr auto invalidating = eb::HealthFlag::Xrun | eb::HealthFlag::Dropout
+                                | eb::HealthFlag::ExcessDrift | eb::HealthFlag::FifoStarved
+                                | eb::HealthFlag::ClipConfirmed | eb::HealthFlag::NonFinite
+                                | eb::HealthFlag::SweepRetimed | eb::HealthFlag::FormatChanged;
+
+    // An invalidating raise sets BOTH the flag and !clean, atomically the same word.
+    h.reportXrun();
+    REQUIRE_FALSE (h.cleanCapture());
+    CHECK (eb::any (h.snapshot().flags & invalidating));
+
+    // The sweep-onset re-scope clears the fault AND the verdict TOGETHER: no state where the
+    // verdict says invalid but every explaining flag is gone.
+    h.resetMeasurementLatches();
+    CHECK (h.cleanCapture());
+    CHECK_FALSE (eb::any (h.snapshot().flags & invalidating));
+
+    // A fault raised AFTER the re-scope belongs to the new sweep: flag AND verdict both survive.
+    h.reportDroppedFrames (8);
+    CHECK_FALSE (h.cleanCapture());
+    CHECK (eb::any (h.snapshot().flags & eb::HealthFlag::Dropout));
+
+    // Guidance flags never invalidate through the derived read either.
+    h.resetMeasurementLatches();
+    h.raiseLowSnr();
+    CHECK (h.cleanCapture());
+}
+
 TEST_CASE("HealthMonitor: exposes the measured noise floor once a quiet window is captured") {
     eb::HealthMonitor hm; hm.prepareNoiseFloor (48000.0, 480);
     CHECK_FALSE (hm.floorValid());
