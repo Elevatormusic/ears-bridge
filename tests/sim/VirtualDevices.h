@@ -1,5 +1,5 @@
 #pragma once
-#include "sim/SimSignals.h"
+#include "SimSignals.h"   // same-directory: clang resolves quote-includes against THIS header's dir (MSVC's includer-chain quirk masked "sim/..." on Windows)
 #include "audio/AudioEngine.h"
 #include <vector>
 #include <functional>
