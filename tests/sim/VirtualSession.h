@@ -34,6 +34,8 @@ struct SessionOutcome {
     float coherenceL = 0, coherenceR = 0, mainLobeL = 0, mainLobeR = 0;
     eb::HealthFlag flags {};
     bool  cleanCapture = true;
+    float renderedPeak = 0.0f;            // peak |sample| of the rendered cable feed (the render path ran)
+    bool  renderedSweepCarried = false;   // mid-session render RMS >> lead RMS (the sweep actually crossed)
 };
 
 using MicTransform = std::function<void (StereoTimeline&)>;
@@ -76,7 +78,9 @@ inline LearnResult learnFromSession (const StereoTimeline& clean) {
 // ring snapshot. Two polls through a fresh poller realise the two-consecutive-matched debounce.
 inline void gradeEar (eb::AudioEngine& e, int ear, const std::vector<float>& reference,
                       double referenceRate, SessionOutcome& out) {
-    const int winLen = (int) std::llround (eb::AudioEngine::gradingWindowSeconds() * referenceRate);
+    // Verifier MINOR-2: production sizes the window by the GRANTED rate, not the reference rate
+    // (identical at 48 k, but a future rate-mismatch scenario must mirror production's geometry).
+    const int winLen = (int) std::llround (eb::AudioEngine::gradingWindowSeconds() * e.gradingResponseRate());
     std::vector<float> window ((size_t) winLen, 0.0f);
     const int got = e.snapshotGradeRing (ear, window.data(), winLen);
     if (got <= 0) return;                                     // nothing buffered for this ear
@@ -116,6 +120,9 @@ inline void gradeEar (eb::AudioEngine& e, int ear, const std::vector<float>& ref
         if (eb::wouldRaiseLowSnr (g.sweepSnrValid, g.sweepSnrDb))
             e.raiseLowSnr();
     }
+    // Verifier MINOR-1: production publishes the raw sweep peak UNCONDITIONALLY after the SNR block
+    // (gradeOneEar), so the engine's referenceSweepPeakDb(ear) store must be fed here too.
+    e.publishCompletedSweepPeakDb (ear, g.sweepPeakDb);
 }
 
 } // namespace detail
@@ -129,15 +136,17 @@ inline SessionOutcome runVirtualSession (const SessionSpec& spec, const MicTrans
                                          double contentPpm = 0.0) {
     SessionOutcome out;
     SessionTruth truth;
-    const auto cleanSession = makeDiracSession (spec, truth, contentPpm);
-
-    // LEARN (from the clean digital session, or the wrong-reference source for S9).
+    // LEARN always uses the UNDRIFTED session (the reference was learned earlier, before any content
+    // skew) - contentPpm applies only to the MEASURE-phase mic timeline (S6: drift SINCE learn).
+    const auto cleanSession = makeDiracSession (spec, truth, 0.0);
     const auto learn = detail::learnFromSession (wrongReference ? *wrongReference : cleanSession);
     out.learnOk = learn.ok; out.learnReason = learn.reason;
     if (! learn.ok) return out;
 
-    // MIC timeline = impaired copy of the clean session.
-    StereoTimeline mic = cleanSession;
+    // MIC timeline = impaired copy of the (possibly content-drifted) session.
+    SessionTruth micTruth;
+    StereoTimeline mic = (contentPpm != 0.0) ? makeDiracSession (spec, micTruth, contentPpm)
+                                             : cleanSession;
     if (impair) impair (mic);
 
     // ENGINE setup — the #12 ordering: every STOPPED-only install BEFORE prepareCallbacksForTest.
@@ -156,7 +165,7 @@ inline SessionOutcome runVirtualSession (const SessionSpec& spec, const MicTrans
     // ready for the grade poll - the exact test_refmon_live recipe, which mirrors production timing.
     const int winLen = (int) std::llround (eb::AudioEngine::gradingWindowSeconds() * spec.fs);
     std::vector<float> drainScratch ((size_t) winLen, 0.0f);
-    (void) streamSession (e, mic, feeder, [&] {
+    const auto rendered = streamSession (e, mic, feeder, [&] {
         if (e.gradingResponseReady (0)) (void) e.snapshotGradeRing (0, drainScratch.data(), winLen);
         if (e.gradingResponseReady (1)) (void) e.snapshotGradeRing (1, drainScratch.data(), winLen);
     });
@@ -164,6 +173,22 @@ inline SessionOutcome runVirtualSession (const SessionSpec& spec, const MicTrans
     tail.L.assign ((size_t) std::llround (2.0 * spec.fs), 0.0f); tail.R = tail.L;
     if (impair) impair (tail);                                  // the room floor continues after the sweep
     (void) streamSession (e, tail, feeder);                     // NO drain: leaves a fresh snapshot ready
+
+    // Rendered-output integrity (spec S1): the cable feed must have CARRIED the measurement - peak
+    // plus a mid-vs-lead RMS ratio (the lead is the FIFO-primed silence + tone; the middle holds
+    // sweeps). Pure accounting on the collected render; no extra streaming.
+    {
+        for (float v : rendered.mono) out.renderedPeak = std::max (out.renderedPeak, std::abs (v));
+        const size_t n3 = rendered.mono.size() / 3;
+        auto rms = [&] (size_t a, size_t b) {
+            double acc = 0.0; for (size_t i = a; i < b && i < rendered.mono.size(); ++i)
+                acc += (double) rendered.mono[i] * rendered.mono[i];
+            return std::sqrt (acc / (double) std::max<size_t> (1, b - a));
+        };
+        const double lead = rms (0, (size_t) std::llround (0.3 * spec.fs));
+        const double mid  = rms (n3, 2 * n3);
+        out.renderedSweepCarried = mid > 10.0 * (lead + 1e-9);
+    }
 
     // GRADE both ears via the production composition, then snapshot health.
     detail::gradeEar (e, 0, learn.refL, spec.fs, out);
