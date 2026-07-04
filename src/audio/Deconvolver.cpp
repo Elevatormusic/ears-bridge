@@ -176,18 +176,37 @@ std::vector<float> deconvolve (const float* ref, const float* resp, int n, float
     forwardReal (fft, fftSize, ref,  n, Ref);
     forwardReal (fft, fftSize, resp, n, Resp);
 
-    // H = Resp * conj(Ref) / (|Ref|^2 + reg)
+    // Banded eps(k) derived from the reference itself on the sentinel default (research-validated
+    // Kirkeby-Nelson; see deriveBandedRegularization). A degenerate reference (no plausible band)
+    // falls back to the legacy flat 1e-3 - an already-broken learn never behaves WORSE than
+    // today. An explicit positive eps is the legacy escape hatch.
+    const int half = fftSize / 2;
+    BandedRegularization banded;
+    if (regularization < 0.0f) {
+        std::vector<float> P ((size_t) half + 1, 0.0f);
+        for (int k = 0; k <= half; ++k) {
+            const float re = Ref[(size_t) k * 2], im = Ref[(size_t) k * 2 + 1];
+            P[(size_t) k] = re * re + im * im;
+        }
+        banded = deriveBandedRegularization (P.data(), half + 1);
+    }
+    const float flatEps = regularization >= 0.0f ? regularization : 1.0e-3f;
+
+    // H = Resp * conj(Ref) / (|Ref|^2 + eps(k))
     std::vector<float> H ((size_t) fftSize * 2, 0.0f);
     for (int k = 0; k < fftSize; ++k) {
         const float rRe = Ref[(size_t) k * 2],  rIm = Ref[(size_t) k * 2 + 1];
         const float yRe = Resp[(size_t) k * 2], yIm = Resp[(size_t) k * 2 + 1];
-        const float denom = rRe * rRe + rIm * rIm + regularization;
+        const int   kb  = k <= half ? k : fftSize - k;           // conjugate-symmetric mirror bin
+        const float e   = banded.valid ? banded.epsilon[(size_t) kb] : flatEps;
+        const float denom = std::max (rRe * rRe + rIm * rIm + e, 1.0e-20f);
         // Resp * conj(Ref) = (yRe + j yIm)(rRe - j rIm)
         const float numRe = yRe * rRe + yIm * rIm;
         const float numIm = yIm * rRe - yRe * rIm;
         H[(size_t) k * 2]     = numRe / denom;
         H[(size_t) k * 2 + 1] = numIm / denom;
     }
+    if (banded.valid) { H[0] = 0.0f; H[1] = 0.0f; }              // DC carries no IR information
 
     std::vector<float> imp ((size_t) fftSize * 2, 0.0f);
     fft.perform (reinterpret_cast<juce::dsp::Complex<float>*> (H.data()),
