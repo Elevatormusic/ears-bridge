@@ -45,6 +45,120 @@ void forwardReal (juce::dsp::FFT& fft, int fftSize,
 } // namespace
 
 // ---------------------------------------------------------------------------
+// Reference-derived banded regularization (sub-project 2). See the header for
+// the scheme; every constant here is the research-validated spec value.
+// ---------------------------------------------------------------------------
+BandedRegularization deriveBandedRegularization (const float* power, int numBins) {
+    BandedRegularization out;
+    if (power == nullptr || numBins < 16) return out;
+
+    // 1) Fractional-octave smoothing: variable-window moving average whose half-width is
+    //    ~1/6 octave at every bin (h = k*(2^(1/12) - 2^(-1/12))), evaluated over a prefix sum so
+    //    each bin costs O(1); two cascaded passes (~triangular kernel) tame the ripple.
+    const double kHalfWidth = std::pow (2.0, 1.0 / 12.0) - std::pow (2.0, -1.0 / 12.0);
+    auto smooth = [] (const std::vector<double>& src, double halfWidth) {
+        const int nb = (int) src.size();
+        std::vector<double> prefix ((size_t) nb + 1, 0.0);
+        for (int i = 0; i < nb; ++i) prefix[(size_t) i + 1] = prefix[(size_t) i] + src[(size_t) i];
+        std::vector<double> dst ((size_t) nb, 0.0);
+        for (int k = 0; k < nb; ++k) {
+            const int h  = std::max (1, (int) std::lround ((double) k * halfWidth));
+            const int lo = std::max (0, k - h);
+            const int hi = std::min (nb - 1, k + h);
+            dst[(size_t) k] = (prefix[(size_t) hi + 1] - prefix[(size_t) lo]) / (double) (hi - lo + 1);
+        }
+        return dst;
+    };
+    std::vector<double> P ((size_t) numBins, 0.0);
+    for (int k = 0; k < numBins; ++k) P[(size_t) k] = (double) power[(size_t) k];
+    const std::vector<double> Ps = smooth (smooth (P, kHalfWidth), kHalfWidth);
+
+    // 2) Tilt-whiten: Pw(k) = Ps(k)*k cancels the ESS 1/f power tilt (research Q2) so the in-band
+    //    region is flat to within ripple and both edges get the SAME margin. DC/Nyquist excluded.
+    std::vector<double> Pw ((size_t) numBins, 0.0);
+    for (int k = 1; k < numBins - 1; ++k) Pw[(size_t) k] = Ps[(size_t) k] * (double) k;
+
+    // 3) Plateau level = MEDIAN of the whitened bins within 6 dB of the whitened max (median,
+    //    not max: ripple-robust).
+    double maxPw = 0.0;
+    for (int k = 1; k < numBins - 1; ++k) maxPw = std::max (maxPw, Pw[(size_t) k]);
+    if (! (maxPw > 0.0) || ! std::isfinite (maxPw)) return out;
+    std::vector<double> plateau;
+    const double plateauFloor = maxPw * 0.25118864;              // -6 dB
+    for (int k = 1; k < numBins - 1; ++k)
+        if (Pw[(size_t) k] >= plateauFloor) plateau.push_back (Pw[(size_t) k]);
+    if (plateau.empty()) return out;
+    const size_t midIdx = plateau.size() / 2;
+    std::nth_element (plateau.begin(), plateau.begin() + (std::ptrdiff_t) midIdx, plateau.end());
+    const double refLevel = plateau[midIdx];
+    if (! (refLevel > 0.0)) return out;
+
+    // 4) Classify: in-band <=> Pw within 12 dB of the plateau median; band = the LONGEST
+    //    contiguous run (mirrors measuredSweepLength's longest-run pattern).
+    const double thr = refLevel * 0.063095734;                   // -12 dB
+    int bestLo = -1, bestHi = -2, runLo = -1;
+    for (int k = 1; k < numBins - 1; ++k) {
+        if (Pw[(size_t) k] >= thr) {
+            if (runLo < 0) runLo = k;
+            if (k - runLo > bestHi - bestLo) { bestLo = runLo; bestHi = k; }
+        } else {
+            runLo = -1;
+        }
+    }
+    constexpr int kMinRunBins = 64;                              // an impulse is not a sweep
+    if (bestLo < 0 || bestHi - bestLo + 1 < kMinRunBins) return out;
+
+    // 4b) Edge refinement on the RAW whitened spectrum. The variable-window smoothing smears the
+    //     band edges OUTWARD by up to ~1/3 octave, and the whitening (*k) amplifies exactly the
+    //     smeared HIGH-side skirt - measured on the synthetic spectrum: with f2 only ~1/4 octave
+    //     below Nyquist the smeared run reached the rail, handing near-Nyquist noise the FULL
+    //     inverse (a reopened F1 zone above f2). The smoothed run guarantees contiguity; the true
+    //     edge is the OUTERMOST raw bin still above threshold inside it. Shrinking from the run
+    //     ends inward can never cross an interior ripple notch, and raw edge ripple only moves
+    //     the result by a few bins (conservative: a hair narrower band = a hair more suppression).
+    std::vector<double> PwRaw ((size_t) numBins, 0.0);
+    for (int k = 1; k < numBins - 1; ++k) PwRaw[(size_t) k] = P[(size_t) k] * (double) k;
+    while (bestHi > bestLo && PwRaw[(size_t) bestHi] < thr) --bestHi;
+    while (bestLo < bestHi && PwRaw[(size_t) bestLo] < thr) ++bestLo;
+    if (bestHi - bestLo + 1 < kMinRunBins) return out;
+
+    // 5) Anchor = max UN-whitened smoothed power over the run: eps scales with the reference's
+    //    real power (scale-invariant; fixes the latent absolute-eps defect).
+    double anchor = 0.0;
+    for (int k = bestLo; k <= bestHi; ++k) anchor = std::max (anchor, Ps[(size_t) k]);
+    if (! (anchor > 0.0) || ! std::isfinite (anchor)) return out;
+
+    // 6) eps in the log domain: eps_in = A*1e-6, eps_out = A*10, raised-cosine crossfade of
+    //    log10(eps) over 1/2 octave (sqrt 2) each side (research Q4/Q5). Log-space interpolation
+    //    because eps spans 7 decades; exponent clamped so no denormals reach the division.
+    const double logIn  = std::log10 (anchor) - 6.0;
+    const double logOut = std::log10 (anchor) + 1.0;
+    const double kSqrt2 = std::sqrt (2.0);
+    const double lnS2   = std::log (kSqrt2);
+    const float  epsOut = (float) std::pow (10.0, logOut);
+    out.epsilon.assign ((size_t) numBins, epsOut);               // rails (DC/Nyquist) stay eps_out
+    auto raisedCos = [] (double t) { return 0.5 * (1.0 - std::cos (3.14159265358979323846 * t)); };
+    for (int k = 1; k < numBins - 1; ++k) {
+        double w = 0.0;                                          // weight toward eps_in
+        if (k >= bestLo && k <= bestHi) {
+            w = 1.0;
+        } else if (k < bestLo) {
+            const double lo = (double) bestLo / kSqrt2;
+            if ((double) k > lo) w = raisedCos (std::log ((double) k / lo) / lnS2);
+        } else {
+            const double hi = (double) bestHi * kSqrt2;
+            if ((double) k < hi) w = raisedCos (1.0 - std::log ((double) k / (double) bestHi) / lnS2);
+        }
+        const double logEps = logOut + w * (logIn - logOut);
+        out.epsilon[(size_t) k] = (float) std::pow (10.0, std::max (logEps, -37.0));
+    }
+    out.binLo = bestLo;
+    out.binHi = bestHi;
+    out.valid = true;
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // Regularized frequency-domain deconvolution
 //   IR = IFFT( FFT(resp) * conj(FFT(ref)) / (|FFT(ref)|^2 + reg) )
 // Out-of-place forward and inverse. Returns the time-domain IR at the padded
