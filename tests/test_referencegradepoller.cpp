@@ -155,7 +155,13 @@ TEST_CASE("ReferenceGradePoller: a clean matching window grades on two consecuti
     auto r2 = p.poll (resp.data(), (int) resp.size(), ref.data(), (int) ref.size(), fs);
     CHECK (r2.matched);
     CHECK (r2.didGrade);
-    CHECK ((r2.state == RefMonState::GradedClean || r2.state == RefMonState::GradedSuspect));
+    // SP2 re-pin: was {Clean, Suspect} - under the FLAT regularization this window's Suspect came
+    // from the noise-inflated THD reading Red (the F1 defect escalating via aggregateVerdict's
+    // worst-wins). With the banded eps the THD is honest, so the state falls through to what the
+    // (unchanged, pre-deconvolution) sweepSNR says - Marginal at this -25 dBFS + noise floor. The
+    // subject under test is the two-poll DEBOUNCE, so the pin is "a graded verdict", any band.
+    CHECK ((r2.state == RefMonState::GradedClean || r2.state == RefMonState::GradedMarginal
+            || r2.state == RefMonState::GradedSuspect));
     CHECK (r2.state != RefMonState::ReferenceStale);
     CHECK_FALSE (r2.mismatch);
     CHECK (std::isfinite (r2.irSnrDb));
