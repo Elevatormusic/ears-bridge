@@ -2424,6 +2424,29 @@ void MainComponent::timerCallback() {
                         dir.getChildFile (stem + ".png"));
                 }
             }
+            // COMPONENT-STATE SCENES: the status sweep above leaves the body in its launch config
+            // (cals loaded from Settings, Start DISABLED, Advanced collapsed), so the enabled accent
+            // CTA (its fill only paints when enabled) and the Advanced rail cluster never render.
+            // Capture both in dark+light, then restore. (Empty-cal / drop-zone states are left to the
+            // structural review - clearing a slot would mutate persisted calibration.)
+            const bool advWas = advancedToggle.getToggleState();
+            for (const bool dk : { true, false }) {
+                forceThemeForTest (dk);
+                const juce::String mtag = dk ? "dark" : "light";
+                startStop.setEnabled (true);                                    // enabled primary CTA (M3)
+                advancedToggle.setToggleState (false, juce::sendNotificationSync);
+                resized();
+                hig::writeDesignProbe (*getTopLevelComponent(),
+                    dir.getChildFile ("hig-" + mtag + "-normal-startready.json"),
+                    dir.getChildFile ("hig-" + mtag + "-normal-startready.png"));
+                advancedToggle.setToggleState (true, juce::sendNotificationSync); // Advanced rail expanded
+                resized();
+                hig::writeDesignProbe (*getTopLevelComponent(),
+                    dir.getChildFile ("hig-" + mtag + "-normal-advanced.json"),
+                    dir.getChildFile ("hig-" + mtag + "-normal-advanced.png"));
+            }
+            advancedToggle.setToggleState (advWas, juce::sendNotificationSync);
+
             eb::SystemA11y::setForTest (false, false, false);       // restore; the next theme tick re-reads the OS
             forceThemeForTest (wasDark);
             }   // if (outDir.isNotEmpty())
