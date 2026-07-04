@@ -1,4 +1,5 @@
 #include "audio/ResponseShape.h"
+#include "audio/Deconvolver.h"     // deriveBandedRegularization: shared -12 dB band-edge derivation (D3)
 #include <juce_dsp/juce_dsp.h>
 #include <algorithm>
 #include <cmath>
@@ -249,6 +250,222 @@ CombReport detectComb (const WindowedSpectrum& ws, const float* ir, int n) {
                                                   / (1.0f - std::pow (10.0f, echoDb / 20.0f)));
             }
         }
+    }
+    return out;
+}
+
+// D3 - Band truncation (spec 4.D3). Named provisional constants (all PROVISIONAL pending #54C).
+namespace {
+constexpr double kHfPositionOct = 1.0 / 3.0;   // eff hi edge must be >= 1/3 oct INSIDE the ref hi
+constexpr double kCliffDropDb    = 30.0;       // sustained drop >= 30 dB within 1/3 oct (>= 90 dB/oct)
+constexpr double kPlateauRangeDb = 6.0;        // plateau flatness: max-min <= 6 dB over the next 1/3 oct
+constexpr double kLfPositionOct  = 1.0;        // eff lo edge must be >= 1 octave above the ref lo
+constexpr double kLfPivotHz      = 150.0;      // ...AND above 150 Hz (provisional pivot; seal loss below)
+}
+
+TruncationReport detectTruncation (const WindowedSpectrum& ws, double refLoHz, double refHiHz) {
+    TruncationReport out;
+    if (! ws.valid) return out;
+    const int numBins = ws.fftSize / 2 + 1;
+
+    // Reuse the SAME tilt-whitened -12 dB band-edge derivation as the reference banding, now on the
+    // MEASUREMENT's own windowed power (spec 4.D3). An invalid derivation over a valid reference band
+    // means "no measurable band" - report valid with both flags false and zero edges (Task 5 words
+    // that state separately); a spurious flag there would be worse than silence.
+    const auto banded = deriveBandedRegularization (ws.power.data(), numBins);
+    out.valid = true;
+    if (! banded.valid) return out;
+
+    const double binHz = ws.fs / (double) ws.fftSize;
+    const int kLoE = banded.binLo, kHiE = banded.binHi;
+    out.effLoHz = (float) (kLoE * binHz);
+    out.effHiHz = (float) (kHiE * binHz);
+
+    // 1/6-oct-smoothed dB curve over the full one-sided spectrum (prefix-sum idiom, matched to
+    // computeBandCurve's smoothedAt); the cliff/plateau test walks it beyond the effective edge.
+    const double kHalfWidth = std::pow (2.0, 1.0 / 12.0) - std::pow (2.0, -1.0 / 12.0);
+    std::vector<double> prefix ((size_t) numBins + 1, 0.0);
+    for (int k = 0; k < numBins; ++k)
+        prefix[(size_t) k + 1] = prefix[(size_t) k] + std::max ((double) ws.power[(size_t) k], 1e-30);
+    auto smoothedDb = [&] (int k) {
+        const int h  = std::max (1, (int) std::lround ((double) k * kHalfWidth));
+        const int lo = std::max (0, k - h);
+        const int hi = std::min (numBins - 1, k + h);
+        const double p = (prefix[(size_t) hi + 1] - prefix[(size_t) lo]) / (double) (hi - lo + 1);
+        return 10.0 * std::log10 (std::max (p, 1e-30));
+    };
+
+    // HF flag = BOTH the position condition AND the digital-cliff criterion. A brick-wall SRC/BT
+    // cliff drops >= 30 dB in <= 1/3 oct then sits on the noise floor (flat); an acoustic rolloff
+    // (12-30 dB/oct) keeps falling and never plateaus - that is the whole discriminator.
+    const bool hfPosition = out.effHiHz <= (float) (refHiHz * std::pow (2.0, -kHfPositionOct));
+    if (hfPosition && kHiE > 0) {
+        const int kDrop = (int) std::lround ((double) kHiE * std::pow (2.0, kHfPositionOct));
+        const int kEnd  = (int) std::lround ((double) kHiE * std::pow (2.0, 2.0 * kHfPositionOct));
+        // Need >= 1/6 octave of bins beyond the edge still below Nyquist to judge the plateau; if the
+        // edge already sits near Nyquist there is no room for a cliff+plateau and we do NOT flag.
+        const int kPlateauLo = std::min (kDrop, numBins - 1);
+        if (kEnd <= numBins - 1 && kPlateauLo < numBins - 1
+            && (double) (numBins - 1 - kEnd) >= 0.0) {
+            const double drop = smoothedDb (kHiE) - smoothedDb (kPlateauLo);
+            double pMin = 1e300, pMax = -1e300;
+            for (int k = kPlateauLo; k <= kEnd; ++k) {
+                const double db = smoothedDb (k);
+                pMin = std::min (pMin, db); pMax = std::max (pMax, db);
+            }
+            if (drop >= kCliffDropDb && (pMax - pMin) <= kPlateauRangeDb)
+                out.truncatedHi = true;
+        }
+    }
+
+    // LF flag = POSITION-ONLY (spec 4.D3: slope cannot separate a 2nd-order chain HPF from broken-seal
+    // rolloff). Fire only when the eff lo edge is >= 1 octave above the ref lo AND above 150 Hz.
+    if (out.effLoHz >= (float) std::max (refLoHz * std::pow (2.0, kLfPositionOct), kLfPivotHz))
+        out.truncatedLo = true;
+
+    return out;
+}
+
+void extractPeakSegment (const float* ir, int n, float* dst, int dstLen) {
+    for (int i = 0; i < dstLen; ++i) dst[i] = 0.0f;
+    if (ir == nullptr || n <= 0 || dst == nullptr || dstLen <= 0) return;
+    int peak = 0; float peakMag = 0.0f;
+    for (int i = 0; i < n; ++i) { const float m = std::abs (ir[i]); if (m > peakMag) { peakMag = m; peak = i; } }
+    // Center dstLen samples on the peak, circular (the pre-peak region wraps for a linear IR near 0);
+    // zero-padding already applied above for n < dstLen positions that fall outside the source.
+    const int start = peak - dstLen / 2;
+    for (int i = 0; i < dstLen; ++i) {
+        const int src = ((start + i) % n + n) % n;
+        dst[i] = ir[src];
+    }
+}
+
+// D4 shipping verdict (spec 4.D4). Cross-ear polarity via the sign of the normalized L-vs-R IR
+// cross-correlation peak (US9560461). Energy-normalize both, scan lags +/-240, key off max |rho|.
+namespace { constexpr int kPolarityMaxLag = 240; constexpr float kPolarityRhoMin = 0.4f; }
+
+PolarityReport crossEarPolarity (const float* segL, int nL, const float* segR, int nR) {
+    PolarityReport out;
+    if (segL == nullptr || segR == nullptr || nL <= 0 || nR <= 0) return out;
+
+    double eL = 0.0, eR = 0.0;
+    for (int i = 0; i < nL; ++i) eL += (double) segL[i] * segL[i];
+    for (int i = 0; i < nR; ++i) eR += (double) segR[i] * segR[i];
+    const double norm = std::sqrt (eL * eR);
+    if (! (norm > 1e-30)) return out;
+
+    // Full normalized cross-correlation over lags +/-240; the peak's |rho| decides validity, its
+    // sign decides inversion (a negative peak = the two ears measure with opposite polarity).
+    float bestRho = 0.0f; double bestAbs = -1.0;
+    for (int lag = -kPolarityMaxLag; lag <= kPolarityMaxLag; ++lag) {
+        double acc = 0.0;
+        const int lo = std::max (0, -lag), hi = std::min (nL, nR - lag);
+        for (int i = lo; i < hi; ++i) acc += (double) segL[i] * segR[i + lag];
+        const double rho = acc / norm;
+        if (std::abs (rho) > bestAbs) { bestAbs = std::abs (rho); bestRho = (float) rho; }
+    }
+    out.rho      = bestRho;
+    out.valid    = std::abs (bestRho) >= kPolarityRhoMin;   // below 0.4 = indeterminate, no verdict
+    out.inverted = out.valid && bestRho < 0.0f;
+    return out;
+}
+
+// D4 per-ear diagnostic (spec 4.D4). Conditioned absolute sign (US8842846): band-limit the IR
+// (one-pole HP at 300 Hz then one-pole LP at 3 kHz, forward offline passes) so phase rotation on
+// the band-limited mixed-phase IR cannot flip the verdict, then take the sign of the extreme
+// onset-weighted sample. Diagnostics-only - never a shipping verdict.
+namespace { constexpr double kCondHpHz = 300.0, kCondLpHz = 3000.0, kOnsetTauSec = 0.005; }
+
+int conditionedPolaritySign (const float* ir, int n, double fs) {
+    if (ir == nullptr || n <= 0 || fs <= 0.0) return 0;
+
+    // One-pole HP at 300 Hz (y = a*(y_prev + x - x_prev)) then one-pole LP at 3 kHz, forward.
+    const double dt   = 1.0 / fs;
+    const double rcHp = 1.0 / (2.0 * kPiD * kCondHpHz);
+    const double aHp  = rcHp / (rcHp + dt);
+    std::vector<double> x ((size_t) n, 0.0);
+    double yPrev = 0.0, xPrev = 0.0;
+    for (int i = 0; i < n; ++i) {
+        const double xin = (double) ir[i];
+        const double y = aHp * (yPrev + xin - xPrev);
+        x[(size_t) i] = y; yPrev = y; xPrev = xin;
+    }
+    const double rcLp = 1.0 / (2.0 * kPiD * kCondLpHz);
+    const double aLp  = dt / (rcLp + dt);
+    double lp = 0.0;
+    for (int i = 0; i < n; ++i) { lp += aLp * (x[(size_t) i] - lp); x[(size_t) i] = lp; }
+
+    double xMax = 0.0;
+    for (int i = 0; i < n; ++i) xMax = std::max (xMax, std::abs (x[(size_t) i]));
+    if (xMax < 1e-6) return 0;
+
+    // Onset = first sample above 0.1*max on the filtered segment; exponential weight decaying from it.
+    int i0 = 0;
+    for (int i = 0; i < n; ++i) if (std::abs (x[(size_t) i]) > 0.1 * xMax) { i0 = i; break; }
+    const double tau = kOnsetTauSec * fs;
+    double extreme = 0.0, extAbs = -1.0;
+    for (int i = i0; i < n; ++i) {
+        const double w = std::exp (-(double) (i - i0) / tau);
+        const double v = x[(size_t) i] * w;
+        if (std::abs (v) > extAbs) { extAbs = std::abs (v); extreme = v; }
+    }
+    return extreme > 0.0 ? 1 : (extreme < 0.0 ? -1 : 0);
+}
+
+// D5b - Resonance spike (spec 4.D5b). Named provisional constants (PROVISIONAL pending #54C).
+namespace {
+constexpr double kResProminenceDb = 6.0;               // narrow spike >= 6 dB over the 1/6-oct trend
+constexpr double kResMaxWidthOct  = 1.0 / 24.0;        // -3 dB width <= 1/24 oct (Q >~ 35): a resonance
+constexpr double kResEdgeGuardOct = 1.0 / 12.0;        // exclude the outer 1/12 oct (edge effects)
+}
+
+SpikeReport detectResonance (const WindowedSpectrum& ws) {
+    SpikeReport out;
+    if (! ws.valid || ws.kHi - ws.kLo < 16) return out;
+
+    // Residual = raw in-band dB minus its own 1/6-oct-smoothed trend (same trend the curve carries).
+    const double kHalfWidth = std::pow (2.0, 1.0 / 12.0) - std::pow (2.0, -1.0 / 12.0);
+    const int nb = ws.kHi - ws.kLo + 1;
+    std::vector<double> rawDb ((size_t) nb, 0.0), prefix ((size_t) nb + 1, 0.0);
+    for (int i = 0; i < nb; ++i) {
+        const double p = std::max ((double) ws.power[(size_t) (ws.kLo + i)], 1e-30);
+        rawDb[(size_t) i] = 10.0 * std::log10 (p);
+        prefix[(size_t) i + 1] = prefix[(size_t) i] + p;
+    }
+    std::vector<double> resid ((size_t) nb, 0.0);
+    for (int i = 0; i < nb; ++i) {
+        const int k  = ws.kLo + i;
+        const int h  = std::max (1, (int) std::lround ((double) k * kHalfWidth));
+        const int lo = std::max (ws.kLo, k - h) - ws.kLo;
+        const int hi = std::min (ws.kHi, k + h) - ws.kLo;
+        const double trend = 10.0 * std::log10 (
+            std::max ((prefix[(size_t) hi + 1] - prefix[(size_t) lo]) / (double) (hi - lo + 1), 1e-30));
+        resid[(size_t) i] = rawDb[(size_t) i] - trend;
+    }
+
+    // Exclude the outer 1/12 octave each side (edge effects of the variable-width smoother).
+    const double binHz = ws.fs / (double) ws.fftSize;
+    const int iLo = std::max (0, (int) std::lround (((double) ws.kLo * std::pow (2.0, kResEdgeGuardOct)) - ws.kLo));
+    const int iHi = std::min (nb - 1, (int) std::lround (((double) ws.kHi * std::pow (2.0, -kResEdgeGuardOct)) - ws.kLo));
+    if (iHi - iLo < 4) return out;
+
+    int iPk = iLo; double resPk = -1e300;
+    for (int i = iLo; i <= iHi; ++i) if (resid[(size_t) i] > resPk) { resPk = resid[(size_t) i]; iPk = i; }
+    if (resPk < kResProminenceDb) return out;
+
+    // -3 dB width of the residual peak: walk left/right until residual < peak - 3 dB; width in octaves
+    // = log2(kR/kL). A high-Q resonance is <= 1/24 oct; a fractional-octave bump is far wider.
+    const double thr = resPk - 3.0;
+    int iL = iPk, iR = iPk;
+    while (iL > iLo && resid[(size_t) (iL - 1)] >= thr) --iL;
+    while (iR < iHi && resid[(size_t) (iR + 1)] >= thr) ++iR;
+    const int kL = ws.kLo + iL, kR = ws.kLo + iR;
+    const double widthOct = std::log2 ((double) std::max (kR, 1) / (double) std::max (kL, 1));
+
+    if (resPk >= kResProminenceDb && widthOct <= kResMaxWidthOct) {
+        out.found        = true;
+        out.hz           = (float) ((ws.kLo + iPk) * binHz);
+        out.prominenceDb = (float) resPk;
     }
     return out;
 }

@@ -179,3 +179,107 @@ TEST_CASE("detectComb envelope arm catches a 35 ms echo beyond the cepstral wind
     CHECK (c.fromEnvelope);
     CHECK (std::abs (c.delayMs - 35.0) < 2.0);
 }
+
+// SP3 Task 3: D3 truncation + D4 polarity + D5b resonance spike.
+static eb::WindowedSpectrum synthSpectrum (int fftSize, double fs, double loHz, double hiHz,
+                                           double cliffHz = 0.0, double rolloffDbOct = 0.0,
+                                           double floorRel = 1e-12) {
+    eb::WindowedSpectrum ws;
+    ws.fftSize = fftSize; ws.fs = fs;
+    const int half = fftSize / 2;
+    ws.power.assign ((size_t) half + 1, (float) floorRel);
+    const double binHz = fs / fftSize;
+    const int kLo = std::max (1, (int) (loHz / binHz)), kHi = std::min (half - 1, (int) (hiHz / binHz));
+    for (int k = kLo; k <= kHi; ++k) {
+        double p = (double) kLo / k;                          // the ESS 1/f tilt
+        if (cliffHz > 0.0 && k * binHz > cliffHz) p = floorRel;               // digital cliff
+        if (rolloffDbOct > 0.0 && k * binHz > cliffHz && cliffHz > 0.0) { /* unused combo */ }
+        ws.power[(size_t) k] = (float) p;
+    }
+    if (rolloffDbOct > 0.0 && cliffHz > 0.0) {                // acoustic rolloff variant: replace
+        for (int k = kLo; k <= kHi; ++k) {
+            const double f = k * binHz;
+            double p = (double) kLo / k;
+            if (f > cliffHz) p *= std::pow (10.0, -rolloffDbOct * std::log2 (f / cliffHz) / 10.0);
+            ws.power[(size_t) k] = (float) std::max (p, floorRel);
+        }
+    }
+    ws.kLo = std::max (1, (int) std::lround (loHz * std::pow (2.0, 1.0/12.0) / binHz));
+    ws.kHi = std::min (half - 1, (int) std::lround (hiHz * std::pow (2.0, -1.0/12.0) / binHz));
+    ws.valid = true;
+    return ws;
+}
+
+TEST_CASE("detectTruncation: digital cliff fires; acoustic rolloff and clean band do not") {
+    const double fs = 48000.0; const int fftSize = 32768;
+    auto cliff = synthSpectrum (fftSize, fs, 20.0, 20000.0, 12000.0);          // brick wall at 12k
+    auto r1 = eb::detectTruncation (cliff, 20.0, 20000.0);
+    REQUIRE (r1.valid);
+    CHECK (r1.truncatedHi);
+    CHECK (r1.effHiHz > 12000.0 / 1.3); CHECK (r1.effHiHz < 12000.0 * 1.3);
+    auto roll = synthSpectrum (fftSize, fs, 20.0, 20000.0, 8000.0, 24.0);      // 24 dB/oct from 8k
+    auto r2 = eb::detectTruncation (roll, 20.0, 20000.0);
+    REQUIRE (r2.valid);
+    CHECK_FALSE (r2.truncatedHi);                             // steep-but-falling acoustics: no plateau
+    auto clean = synthSpectrum (fftSize, fs, 20.0, 20000.0);
+    CHECK_FALSE (eb::detectTruncation (clean, 20.0, 20000.0).truncatedHi);
+    // LF: content starts at 400 Hz vs a 20 Hz reference -> position-only flag (>= 1 oct AND > 150).
+    auto hp = synthSpectrum (fftSize, fs, 400.0, 20000.0);
+    auto r3 = eb::detectTruncation (hp, 20.0, 20000.0);
+    CHECK (r3.truncatedLo);
+    // 60 Hz start (seal-loss territory, below the 150 Hz pivot): NOT flagged.
+    auto seal = synthSpectrum (fftSize, fs, 60.0, 20000.0);
+    CHECK_FALSE (eb::detectTruncation (seal, 20.0, 20000.0).truncatedLo);
+}
+
+TEST_CASE("polarity: cross-ear inversion is caught; indeterminate stays silent") {
+    const int n = 1 << 15; const double fs = 48000.0;
+    auto irL = bandIr (n, fs, 18000.0);
+    auto irR = irL;                                           // matched drivers
+    std::vector<float> segL (2048, 0.0f), segR (2048, 0.0f);
+    eb::extractPeakSegment (irL.data(), n, segL.data(), 2048);
+    eb::extractPeakSegment (irR.data(), n, segR.data(), 2048);
+    auto ok = eb::crossEarPolarity (segL.data(), 2048, segR.data(), 2048);
+    REQUIRE (ok.valid);
+    CHECK_FALSE (ok.inverted);
+    CHECK (ok.rho > 0.9f);
+    for (auto& v : irR) v = -v;                               // wiring/cal inversion
+    eb::extractPeakSegment (irR.data(), n, segR.data(), 2048);
+    auto bad = eb::crossEarPolarity (segL.data(), 2048, segR.data(), 2048);
+    REQUIRE (bad.valid);
+    CHECK (bad.inverted);
+    // Uncorrelated noise: indeterminate -> no verdict (|rho| < 0.4).
+    std::vector<float> nz (2048, 0.0f);
+    unsigned s = 7u; for (auto& v : nz) { s = s * 1664525u + 1013904223u; v = ((float)(s >> 9) / (float)(1u << 23)) - 0.5f; }
+    CHECK_FALSE (eb::crossEarPolarity (segL.data(), 2048, nz.data(), 2048).valid);
+    // Conditioned per-ear sign (diagnostic): flips with the IR.
+    const int sPos = eb::conditionedPolaritySign (irL.data(), n, fs);
+    std::vector<float> neg = irL; for (auto& v : neg) v = -v;
+    CHECK (sPos != 0);
+    CHECK (eb::conditionedPolaritySign (neg.data(), n, fs) == -sPos);
+}
+
+TEST_CASE("detectResonance: narrow high-Q spike fires; wide bump does not") {
+    const double fs = 48000.0; const int fftSize = 32768;
+    auto base = synthSpectrum (fftSize, fs, 20.0, 20000.0);
+    // Narrow spike at ~2.3 kHz: +10 dB over ~1/40 octave TOTAL. Plan-bug fix (post-restart
+    // adoption): the original expression kc*(2^(1/80)-2^(-1/80)) is the bin span of a FULL
+    // 1/40-oct interval, but it was used as the HALF-width - planting a ~1/20-oct plateau that
+    // the detector CORRECTLY rejected against the spec's <= 1/24-oct width gate. Halve it so
+    // the planted spike is genuinely inside the gate; the detector was right all along.
+    auto spiky = base;
+    { const double binHz = fs / fftSize; const int kc = (int) (2300.0 / binHz);
+      const int w = std::max (1, (int) (kc * (std::pow (2.0, 1.0/80.0) - std::pow (2.0, -1.0/80.0)) / 2.0));
+      for (int k = kc - w; k <= kc + w; ++k) spiky.power[(size_t) k] *= 10.0f; }
+    auto r = eb::detectResonance (spiky);
+    CHECK (r.found);
+    CHECK (r.hz > 2000.0f); CHECK (r.hz < 2700.0f);
+    CHECK (r.prominenceDb > 6.0f);
+    // A 1/3-octave-wide bump is tonal balance, not a resonance.
+    auto bump = base;
+    { const double binHz = fs / fftSize; const int kc = (int) (2300.0 / binHz);
+      const int w = (int) (kc * (std::pow (2.0, 1.0/6.0) - std::pow (2.0, -1.0/6.0)));
+      for (int k = kc - w; k <= kc + w; ++k) bump.power[(size_t) k] *= 10.0f; }
+    CHECK_FALSE (eb::detectResonance (bump).found);
+    CHECK_FALSE (eb::detectResonance (base).found);
+}

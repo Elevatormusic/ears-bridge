@@ -75,4 +75,44 @@ struct CombReport {
 // ripple amplitude a >= 0.1 (== a -20 dB echo); envelope arm fires at a secondary peak >= -20 dB.
 [[nodiscard]] CombReport detectComb (const WindowedSpectrum& ws, const float* ir, int n);
 
+struct TruncationReport {
+    bool  valid = false, truncatedHi = false, truncatedLo = false;
+    float effLoHz = 0.0f, effHiHz = 0.0f;   // measured band edges in Hz (0 = no measurable band)
+};
+// D3 (spec 4.D3). Band truncation vs the reference band. Reuses the SAME tilt-whitened -12 dB
+// band-edge derivation as the reference banding (deriveBandedRegularization) on the measurement's
+// own windowed power, then compares effective edges to the reference. HF flag needs BOTH a
+// position condition (eff hi edge >= 1/3 oct INSIDE the reference hi) AND a digital-cliff
+// criterion (a >=30 dB drop within 1/3 oct followed by a flat plateau) - acoustic rolloffs keep
+// falling and never plateau. LF is POSITION-ONLY (slope cannot separate a 2nd-order chain HPF from
+// broken-seal rolloff): flag only when the eff lo edge sits >= 1 octave above the reference lo AND
+// above the 150 Hz provisional pivot. refLoHz/refHiHz = the reference's derived band in Hz.
+[[nodiscard]] TruncationReport detectTruncation (const WindowedSpectrum& ws,
+                                                 double refLoHz, double refHiHz);
+
+// D4 per-ear diagnostic (spec 4.D4). Conditioned absolute sign: band-limit (HP 300 Hz -> LP 3 kHz,
+// forward one-pole passes), then take the sign of the extreme onset-weighted sample. Raw main-peak
+// sign is UNRELIABLE for band-limited mixed-phase IRs (phase rotation flips it - the cal FIR's
+// phase sits in the path), so this is diagnostics-only, never a verdict. Returns +1 / -1 / 0.
+[[nodiscard]] int conditionedPolaritySign (const float* ir, int n, double fs);
+
+struct PolarityReport { bool valid = false, inverted = false; float rho = 0.0f; };
+// D4 shipping verdict (spec 4.D4): cross-ear consistency via the sign of the L-vs-R IR
+// cross-correlation peak (US9560461). Energy-normalized full cross-correlation over lags +/-240;
+// valid only when the peak |rho| >= 0.4 (below: indeterminate, no verdict); inverted when that
+// peak is negative. Run only when both ears graded + matched in the same session (Task 5).
+[[nodiscard]] PolarityReport crossEarPolarity (const float* segL, int nL,
+                                               const float* segR, int nR);
+
+// Copy dstLen samples of the IR centered on its |ir| peak (circular indexing handles the pre-peak
+// region); zero-pads when n < dstLen. Feeds the cross-ear polarity segments.
+void extractPeakSegment (const float* ir, int n, float* dst, int dstLen);
+
+struct SpikeReport { bool found = false; float hz = 0.0f, prominenceDb = 0.0f; };
+// D5b (spec 4.D5b). Narrow high-Q resonance in the DE-TRENDED residual (raw in-band dB minus its
+// own 1/6-oct-smoothed trend). found = prominence >= 6 dB AND the residual peak's -3 dB width <=
+// 1/24 octave (Q >~ 35) - a wide bump is tonal balance, not a resonance. Nonlinear pinna rattle is
+// out of scope (deferred to high-order Farina harmonics - see spec 4.D5b scope note).
+[[nodiscard]] SpikeReport detectResonance (const WindowedSpectrum& ws);
+
 } // namespace eb
