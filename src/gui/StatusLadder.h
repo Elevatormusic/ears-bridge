@@ -190,6 +190,22 @@ struct RunningSnapshot {
     return out;
 }
 
+// PROVISIONAL — on-device ratification gate for the SHAPE-note copy (mirrors IrQualityStatus.h's
+// kIrThresholdsRatified block). FALSE until the #54C threshold campaign ratifies the shape cutoffs on
+// real hardware. Two of the shape findings fire STRUCTURALLY on healthy headphone hardware at the
+// provisional thresholds, so their accusatory one-liners would mislead a good-hardware user:
+//   - kStep: D7's ratio is the headphone's spectral envelope vs the flat reference; EVERY real headphone
+//     exceeds the 2 dB step tolerance (the synthetic coupler measures ~11.4 dB — see SIM F4). "level
+//     changed mid-sweep - disable enhancements / AGC" is wrong for that user.
+//   - kTruncLo: fired on the rig's CLEAN run at the provisional LF pivot ("no low-frequency content -
+//     check the seal…" would accuse a healthy seal).
+// The synthetic end-to-end rig's CLEAN run published flags 0x30a (kStep|kComb|kTruncLo|kBaselineSet)
+// with NO impairment — that is the ground truth this gate responds to. While FALSE, shapeInfoNote SKIPS
+// the kStep and kTruncLo branches: the flags STILL publish and the measured numbers STILL ride the
+// tooltip (shapeInfoTip), so nothing is hidden — only the accusatory worst-offender one-liner waits for
+// ratified thresholds. Precedence is otherwise unchanged. Flip to true once #54C ratifies the cutoffs.
+static constexpr bool kShapeCopyRatified = false;
+
 // ---- SP3 shape-anomaly INFO note (Task 5) --------------------------------------------------------
 // The single worst-offender INFO line for one ear's published shape anomalies. INFO-ONLY — this NEVER
 // changes a grade, a tone, or cleanCapture; the GUI renders it in the neutral info style (never Warn/
@@ -210,7 +226,9 @@ struct RunningSnapshot {
     if (flags & ShapeFlag::kTruncHi)
         return "content ends near " + juce::String (effHiHz / 1000.0f, 1)
              + " kHz - the chain may be resampling";
-    if (flags & ShapeFlag::kTruncLo)
+    // kTruncLo copy gated (see kShapeCopyRatified): fires clean at the provisional LF pivot. Flag+number
+    // stay live; the accusatory "check the seal" one-liner waits for #54C.
+    if (kShapeCopyRatified && (flags & ShapeFlag::kTruncLo))
         return "no low-frequency content - check the seal or the chain";
     if (flags & ShapeFlag::kComb)
         return "possible duplicate path - echo ~" + juce::String (combDelayMs, 1) + " ms";
@@ -225,7 +243,9 @@ struct RunningSnapshot {
         return "possible narrow resonance in the response";
     if (flags & ShapeFlag::kSkew)
         return "clock skew suspected - check the device sample rates";
-    if (flags & ShapeFlag::kStep)
+    // kStep copy gated (see kShapeCopyRatified): D7's ratio is confounded by the headphone envelope, so
+    // every real headphone trips it. Flag+number stay live; the one-liner waits for #54C.
+    if (kShapeCopyRatified && (flags & ShapeFlag::kStep))
         return "level changed mid-sweep - disable enhancements / AGC";
     return {};   // no anomaly (or only the baseline-set bit): no note
 }

@@ -316,6 +316,16 @@ TEST_CASE("SIM shape negatives: two clean passes raise NO DRIFT (D1 monitor, CLA
     CHECK (std::abs (tp.driftMax2L) < 1.0f);                          // and the D1 scalar stays ~0
     // The per-measurement coupler-IR bits are STABLE across passes (not manufactured by the second run):
     CHECK ((tp.shapeFlags1L & ~eb::ShapeFlag::kBaselineSet) == (tp.shapeFlags2L & ~eb::ShapeFlag::kBaselineSet));
+    // MINOR-2 (final verifier): the equality check above only proves pass 1 and pass 2 AGREE - a
+    // deterministic false positive present in BOTH passes (both ears) would slip through it. Assert
+    // OUTRIGHT that the clean coupler raises NONE of the corruption bits it must never invent on healthy
+    // hardware, on both passes and both ears.
+    const unsigned mustBeClear = eb::ShapeFlag::kPolarity | eb::ShapeFlag::kHum
+                               | eb::ShapeFlag::kResonance | eb::ShapeFlag::kSkew;
+    CHECK ((tp.first.shapeFlagsL  & mustBeClear) == 0u);
+    CHECK ((tp.first.shapeFlagsR  & mustBeClear) == 0u);
+    CHECK ((tp.second.shapeFlagsL & mustBeClear) == 0u);
+    CHECK ((tp.second.shapeFlagsR & mustBeClear) == 0u);
 }
 
 TEST_CASE("SIM shape comb: an echo raises kShapeComb on the first pass") {
@@ -402,17 +412,25 @@ TEST_CASE("SIM shape hum: mains hum in the pre-sweep noise raises kShapeHum") {
 //       shaping coupler IR has a per-block RMS envelope that differs from the flat reference, so the
 //       capture/reference ratio ramps across the sweep. Measured clean stepDb = 11.4 dB (that is the
 //       coupler envelope, not a level jump) - this is a real production D7 sensitivity the rig surfaces.
-//   (2) applyGainStepAt is INVISIBLE to D7 through this pipeline. Measured, on a FLAT IR (coupler
-//       removed, so the coupler ramp cannot mask it) the D7 stepDb is 0.0 dB for a +0, +3, +6 AND +12
-//       dB injected step - the flag never even sets. On the coupler IR the reported stepDb is a flat
-//       11.4 dB across +3/+6/+12 dB injected steps (identical) - the coupler ramp is the max |diff| D7
-//       reports and the injected step never exceeds it.
-// The injected step lands mid-L-sweep, inside the graded segment; why D7's median-split does not
-// resolve it here (block-boundary geometry vs the FIFO-primed / match-aligned window, or the step's
-// energy spreading under deconvolution alignment) is UNRESOLVED and needs a focused D7-through-pipeline
-// investigation - it is NOT tuned around here. This test PINS the two measured facts so the gap is
-// documented; the D7 unit test (test_responseshape) still proves the detector fires on a clean aligned
-// pair, so this is a pipeline-integration gap, not a broken detector.
+//   (2) applyGainStepAt mid-FIRST-L-sweep is INVISIBLE to D7 - and the mechanism is now PROVEN (final
+//       verifier). The measure phase streams TWO L sweeps (Dirac's schedule repeats them); the grade
+//       aligns the window with crossCorrelateAlign, an UNNORMALIZED matched filter that takes the RAW
+//       magnitude peak (Deconvolver.cpp:282-288 - `if (m > peak) { peak = m; peakIdx = i; }`, no
+//       energy normalization). applyGainStepAt boosts EVERYTHING from the mid-first-sweep point onward
+//       by the full step, so the FIRST sweep is only HALF-boosted (avg gain 0.5 + 0.5*10^(s/20)) while
+//       the TRAILING sweep is boosted UNIFORMLY by the full 10^(s/20). The trailing copy therefore has
+//       the strictly larger correlation peak, so windowStart lands on the TRAILING, STEP-FREE sweep ->
+//       D7 sees a within-segment ratio trajectory that is the flat coupler envelope with NO step ->
+//       found == false -> stepDb is the 0.0 struct default (never overwritten). This is why the FLAT-IR
+//       run below reads exactly stepDb == 0.0 with kStep unset: the aligner grades the clean copy.
+//   PRODUCTION IMPLICATION: a level step BETWEEN sweeps (the classic AGC re-lock / ASRC re-lock case) is
+//   STRUCTURALLY INVISIBLE to D7 - the aligner just selects whichever sweep the step spared, and D7
+//   measures within ONE aligned segment. The honest closure is NOT D7 tuning; it is a future CROSS-SWEEP
+//   level-consistency check (compare the per-sweep levels the schedule already locates), added to the
+//   drift-monitor backlog. D7 stays a within-sweep detector.
+// This test PINS the two measured facts + the windowStart mechanism so the gap is documented; the D7
+// unit test (test_responseshape) still proves the detector fires on a clean aligned pair, so this is a
+// pipeline-integration property, not a broken detector.
 // ==================================================================================================
 TEST_CASE("SIM F4: D7 step fires on the coupler envelope but does not resolve an injected level step (pinned)") {
     ebsim::SessionSpec sp = spec();
@@ -420,7 +438,8 @@ TEST_CASE("SIM F4: D7 step fires on the coupler envelope but does not resolve an
     // (1) The clean coupler measurement already raises kStep, from the sweep's spectral-envelope RMS ramp.
     auto clean = ebsim::runVirtualSession (sp, cleanImpair(), {});
     REQUIRE (clean.learnOk);
-    INFO ("clean coupler: flagsL=0x" << std::hex << clean.shapeFlagsL << std::dec << " stepDb=" << clean.stepL);
+    INFO ("clean coupler: flagsL=0x" << std::hex << clean.shapeFlagsL << std::dec << " stepDb=" << clean.stepL
+          << " windowStartL=" << clean.windowStartL);
     CHECK ((clean.shapeFlagsL & eb::ShapeFlag::kStep) != 0u);
     CHECK (std::abs (clean.stepL) > 2.0f);                            // the coupler envelope reads as a step
     // (2) An injected +3 dB step through the coupler does NOT push stepDb beyond that coupler baseline
@@ -429,8 +448,17 @@ TEST_CASE("SIM F4: D7 step fires on the coupler envelope but does not resolve an
         ebsim::convolveIr (m); ebsim::applyGainStepAt (m, stepAt, +3.0f);
         ebsim::addSeededNoise (m, 0.00002f, 42u); }, {});
     REQUIRE (stepped.learnOk);
-    INFO ("stepped(+3): flagsL=0x" << std::hex << stepped.shapeFlagsL << std::dec << " stepDb=" << stepped.stepL);
+    INFO ("stepped(+3): flagsL=0x" << std::hex << stepped.shapeFlagsL << std::dec << " stepDb=" << stepped.stepL
+          << " windowStartL=" << stepped.windowStartL << " (clean windowStartL=" << clean.windowStartL << ")");
     CHECK (std::abs (stepped.stepL - clean.stepL) < 1.0f);           // the injected step barely moves D7's reading
+    // MECHANISM PIN (final verifier): the unnormalized aligner picks the TRAILING, step-free sweep, so the
+    // stepped run's graded segment starts PAST the first L sweep - strictly later than the clean run, by at
+    // least half a sweep. This is the proof the injected step never reaches D7's input. The first L sweep
+    // ends ~(tone + gap + sweep) into the session; half a sweep in samples is the conservative separation.
+    const int halfSweepSamples = (int) std::llround (0.5 * sp.sweepSeconds * sp.fs);
+    REQUIRE (clean.windowStartL   >= 0);
+    REQUIRE (stepped.windowStartL >= 0);
+    CHECK (stepped.windowStartL > clean.windowStartL + halfSweepSamples);
     // (3) On a FLAT IR (coupler removed) the injected step is fully invisible: no kStep, stepDb == 0. If
     //     this starts FAILING, D7 has gained real injected-step sensitivity end-to-end - flip to a
     //     positive pin and celebrate (mirrors the F1/F2 resolution pattern).

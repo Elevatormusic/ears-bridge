@@ -289,7 +289,11 @@ TEST_CASE("shapeInfoNote: worst-offender precedence truncation>comb>polarity>dri
                  | ShapeFlag::kDrift | ShapeFlag::kHum | ShapeFlag::kResonance | ShapeFlag::kSkew | ShapeFlag::kStep;
     CHECK (eb::shapeInfoNote (all, 5.0f, 5.0f, dHz, lHz, 60).contains ("content ends near"));        // TruncHi wins
     all &= ~ShapeFlag::kTruncHi;
-    CHECK (eb::shapeInfoNote (all, 5.0f, 5.0f, dHz, lHz, 60).contains ("no low-frequency content")); // TruncLo
+    // SP3 final-verifier suppression (kShapeCopyRatified == false): kTruncLo's copy is GATED (it fired on
+    // the rig's clean run at the provisional LF pivot), so precedence now SKIPS PAST it to Comb even
+    // though the kTruncLo flag is set. Old pin (pre-suppression, restore when kShapeCopyRatified flips):
+    //   CHECK (...contains ("no low-frequency content"));  // TruncLo
+    CHECK (eb::shapeInfoNote (all, 5.0f, 5.0f, dHz, lHz, 60).contains ("duplicate path"));           // TruncLo gated -> Comb
     all &= ~ShapeFlag::kTruncLo;
     CHECK (eb::shapeInfoNote (all, 5.0f, 5.0f, dHz, lHz, 60).contains ("duplicate path"));           // Comb
     all &= ~ShapeFlag::kComb;
@@ -303,22 +307,26 @@ TEST_CASE("shapeInfoNote: worst-offender precedence truncation>comb>polarity>dri
     all &= ~ShapeFlag::kResonance;
     CHECK (eb::shapeInfoNote (all, 5.0f, 5.0f, dHz, lHz, 60).contains ("clock skew"));               // Skew
     all &= ~ShapeFlag::kSkew;
-    CHECK (eb::shapeInfoNote (all, 5.0f, 5.0f, dHz, lHz, 60).contains ("level changed mid-sweep"));  // Step (last)
+    // kStep's copy is GATED too (D7's ratio is confounded by the headphone envelope), so kStep-alone now
+    // returns EMPTY. Old pin (restore when kShapeCopyRatified flips):
+    //   CHECK (...contains ("level changed mid-sweep"));  // Step (last)
+    CHECK (eb::shapeInfoNote (all, 5.0f, 5.0f, dHz, lHz, 60).isEmpty());                             // Step gated -> no note
 }
 
 TEST_CASE("shapeInfoNote: each line quantifies its finding and stays <= ~70 chars") {
     // The #8 lesson: no INFO line may overflow the header. Assert every single-flag note is short.
+    // SP3 final-verifier suppression: kTruncLo and kStep copy is GATED (kShapeCopyRatified == false), so
+    // their single-flag notes are EMPTY (numbers still ride shapeInfoTip — asserted separately below).
+    // Old expectation (restore when kShapeCopyRatified flips): both were listed here and asserted non-empty.
     struct Case { unsigned flag; float drift; float delay; float hi; float lo; int hum; };
     const Case cases[] = {
         { ShapeFlag::kTruncHi, 0, 0, 12000.0f, 0, 0 },
-        { ShapeFlag::kTruncLo, 0, 0, 0, 180.0f, 0 },
         { ShapeFlag::kComb, 0, 5.3f, 0, 0, 0 },
         { ShapeFlag::kPolarity, 0, 0, 0, 0, 0 },
         { ShapeFlag::kDrift, 6.4f, 0, 0, 0, 0 },
         { ShapeFlag::kHum, 0, 0, 0, 0, 60 },
         { ShapeFlag::kResonance, 0, 0, 0, 0, 0 },
         { ShapeFlag::kSkew, 0, 0, 0, 0, 0 },
-        { ShapeFlag::kStep, 0, 0, 0, 0, 0 },
     };
     for (const auto& c : cases) {
         const auto note = eb::shapeInfoNote (c.flag, c.drift, c.delay, c.hi, c.lo, c.hum);
@@ -326,10 +334,17 @@ TEST_CASE("shapeInfoNote: each line quantifies its finding and stays <= ~70 char
         CHECK (note.isNotEmpty());
         CHECK (note.length() <= 70);
     }
+    // The two GATED findings produce NO note while unratified (the flags/numbers still publish; only the
+    // accusatory one-liner is withheld pending #54C).
+    CHECK (eb::shapeInfoNote (ShapeFlag::kTruncLo, 0, 0, 0, 180.0f, 0).isEmpty());
+    CHECK (eb::shapeInfoNote (ShapeFlag::kStep,    0, 0, 0, 0, 0).isEmpty());
     // The quantified notes actually carry their number.
     CHECK (eb::shapeInfoNote (ShapeFlag::kTruncHi, 0, 0, 12000.0f, 0, 0).contains ("12.0 kHz"));
     CHECK (eb::shapeInfoNote (ShapeFlag::kComb, 0, 5.3f, 0, 0, 0).contains ("5.3 ms"));
     CHECK (eb::shapeInfoNote (ShapeFlag::kHum, 0, 0, 0, 0, 50).contains ("50 Hz"));
+    // The gated numbers still ride the tooltip (kShapeCopyRatified withholds only the note, not the data).
+    CHECK (eb::shapeInfoTip (ShapeFlag::kTruncLo, 0, 0, 0, 0, 180.0f, 0, 0, 0, 0, 0).contains ("180"));
+    CHECK (eb::shapeInfoTip (ShapeFlag::kStep, 0, 0, 0, 0, 0, 0, 0, 2.5f, 0, 0).contains ("2.5"));
 }
 
 // MAJOR-1 (verifier gate): the spec §6 "no measurable band" finding is the loudest note.

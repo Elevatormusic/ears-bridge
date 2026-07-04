@@ -46,6 +46,11 @@ struct SessionOutcome {
     float    effHiL = 0.0f, effHiR = 0.0f, combDelayL = 0.0f, combDelayR = 0.0f;
     float    stepL = 0.0f, stepR = 0.0f;
     int      humBaseL = 0, humBaseR = 0;
+    // SP3 SIM F4: where the (unnormalized) matched-filter aligner located the graded sweep inside the
+    // grade window (art.windowStart), per ear. Load-bearing for F4: a mid-first-sweep gain step makes the
+    // TRAILING (step-free) sweep win the raw correlation peak, so the graded segment lands PAST the first
+    // sweep — pinning windowStart proves the step never reaches D7's input. -1 = that ear never graded.
+    int      windowStartL = -1, windowStartR = -1;
 };
 
 using MicTransform = std::function<void (StereoTimeline&)>;
@@ -93,6 +98,9 @@ inline LearnResult learnFromSession (const StereoTimeline& clean) {
 struct RigShapeResult {
     unsigned flags = 0u;
     float driftMaxDb = 0.0f, hfShelfDb = 0.0f, combDelayMs = 0.0f, effHiHz = 0.0f, stepDb = 0.0f;
+    // Verifier MINOR-1: the rig now carries the SAME scalar set production's ShapeResult publishes, so the
+    // rig's publishShapeAnomalies mirrors production 1:1 (was hardcoding 0 for these four).
+    float combDepthDb = 0.0f, effLoHz = 0.0f, lobeWidth = 0.0f, resonanceHz = 0.0f;
     int   humBaseHz = 0;
     std::vector<float> peakSeg;               // 2048-sample IR peak segment for D4 cross-ear
     eb::BandCurve newBaseline; bool setBaseline = false;
@@ -121,10 +129,11 @@ inline RigShapeResult runShapeDetectorsRig (bool gradedClean, const eb::BandCurv
             } else if (gradedClean) { res.newBaseline = cur; res.setBaseline = true; }
         }
         const eb::CombReport comb = eb::detectComb (ws, ir.data(), (int) ir.size());      // D2
-        if (comb.found) { res.flags |= eb::ShapeFlag::kComb; res.combDelayMs = comb.delayMs; }
+        if (comb.found) { res.flags |= eb::ShapeFlag::kComb; res.combDepthDb = comb.depthDb; res.combDelayMs = comb.delayMs; }
         if (haveBand) {                                                                    // D3
             const eb::TruncationReport tr = eb::detectTruncation (ws, bandLoHz, bandHiHz);
             if (tr.valid) {
+                res.effLoHz = tr.effLoHz;
                 res.effHiHz = tr.effHiHz;
                 if (tr.effLoHz == 0.0f && tr.effHiHz == 0.0f) res.flags |= eb::ShapeFlag::kNoBand;
                 if (tr.truncatedHi) res.flags |= eb::ShapeFlag::kTruncHi;
@@ -132,10 +141,10 @@ inline RigShapeResult runShapeDetectorsRig (bool gradedClean, const eb::BandCurv
             }
         }
         const eb::SpikeReport spk = eb::detectResonance (ws);                             // D5b
-        if (spk.found) res.flags |= eb::ShapeFlag::kResonance;
+        if (spk.found) { res.flags |= eb::ShapeFlag::kResonance; res.resonanceHz = spk.hz; }
     }
     const float lobe = eb::mainLobeWidthSamples (ir.data(), (int) ir.size());            // D6
-    if (lobe > 0.0f && lobe > 10.0f) res.flags |= eb::ShapeFlag::kSkew;                  // kLobeWidthMax = 10
+    if (lobe > 0.0f) { res.lobeWidth = lobe; if (lobe > 10.0f) res.flags |= eb::ShapeFlag::kSkew; }  // kLobeWidthMax = 10
     if (windowStart >= 16384 && (int) window.size() >= windowStart) {                    // D5a
         const eb::HumReport hum = eb::detectMainsHum (window.data(), windowStart, rate);
         if (hum.found) { res.flags |= eb::ShapeFlag::kHum; res.humBaseHz = (int) std::lround (hum.baseHz); }
@@ -168,6 +177,11 @@ inline void gradeEar (eb::AudioEngine& e, int ear, const std::vector<float>& ref
     std::vector<float> window ((size_t) winLen, 0.0f);
     const int got = e.snapshotGradeRing (ear, window.data(), winLen);
     if (got <= 0) return;                                     // nothing buffered for this ear
+    // Verifier MINOR-3: PARITY PIN - production resizes the snapshot buffer to the returned length
+    // (MainComponent.cpp:2070 `window.resize((size_t) got)`) so the D5a/D7 size guards (which compare
+    // window.size() against windowStart(+gradedLen)) see the SAME geometry production would. Without this
+    // the rig's oversized winLen window could pass a guard production's `got`-sized one would fail.
+    window.resize ((size_t) got);
 
     // #32/#36: the PRODUCTION rate guard, from the same predicate header the GUI uses.
     if (! eb::rateAllowsGrade (referenceRate, e.gradingResponseRate())) {
@@ -201,6 +215,8 @@ inline void gradeEar (eb::AudioEngine& e, int ear, const std::vector<float>& ref
     (ear == 0 ? out.irSnrL : out.irSnrR)   = g.irSnrDb;
     (ear == 0 ? out.thdL   : out.thdR)     = g.thdPercent;
     (ear == 0 ? out.peakDbL : out.peakDbR) = g.sweepPeakDb;
+    // SP3 SIM F4: expose where the aligner placed the graded segment (the raw matched-filter peak lag).
+    (ear == 0 ? out.windowStartL : out.windowStartR) = art.windowStart;
     if (g.sweepSnrValid) {
         (ear == 0 ? out.sweepSnrL : out.sweepSnrR) = g.sweepSnrDb;
         e.publishCompletedSweepSnrDb (ear, g.sweepSnrDb);
@@ -244,10 +260,12 @@ inline void gradeEar (eb::AudioEngine& e, int ear, const std::vector<float>& ref
                 }
             }
         }
+        // Verifier MINOR-1: publish the FULL measured scalar set, mirroring production's publishShapeAnomalies
+        // (MainComponent.cpp ~2225) 1:1 - decisions AND the scalar set now both mirror production.
         e.publishShapeAnomalies (ear, shape.flags, shape.driftMaxDb, shape.hfShelfDb,
-                                 /*combDepthDb*/ 0.0f, shape.combDelayMs, /*effLoHz*/ 0.0f,
-                                 shape.effHiHz, /*lobeWidth*/ 0.0f, shape.stepDb,
-                                 shape.humBaseHz, /*resonanceHz*/ 0.0f);
+                                 shape.combDepthDb, shape.combDelayMs, shape.effLoHz,
+                                 shape.effHiHz, shape.lobeWidth, shape.stepDb,
+                                 shape.humBaseHz, shape.resonanceHz);
         // Read the engine's PUBLISHED shape state back into the outcome (the acquire load + relaxed scalars,
         // exactly the GUI's read path — so the scenarios assert on what the app would show).
         (ear == 0 ? out.shapeFlagsL : out.shapeFlagsR) = e.shapeFlags (ear);
