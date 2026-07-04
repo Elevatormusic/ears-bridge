@@ -103,6 +103,10 @@ TEST_CASE("banded eps refuses degenerate spectra (guards)") {
     std::vector<float> spike ((size_t) 8192, 1e-12f);
     spike[99] = spike[100] = spike[101] = 1.0f;
     CHECK_FALSE (eb::deriveBandedRegularization (spike.data(), 8192).valid);
+    // Numerical dust (anchor below the 1e-12 spec floor): geometrically a fine band, but no real
+    // learn produces it - refuse rather than regularize noise-shaped nothing.
+    auto dust = essPower (8192, 60, 6800, 1.0e-15f);
+    CHECK_FALSE (eb::deriveBandedRegularization (dust.data(), 8192).valid);
 }
 
 TEST_CASE("banded eps treats DC and Nyquist as out-of-band") {

@@ -126,7 +126,9 @@ BandedRegularization deriveBandedRegularization (const float* power, int numBins
     //    real power (scale-invariant; fixes the latent absolute-eps defect).
     double anchor = 0.0;
     for (int k = bestLo; k <= bestHi; ++k) anchor = std::max (anchor, Ps[(size_t) k]);
-    if (! (anchor > 0.0) || ! std::isfinite (anchor)) return out;
+    if (! (anchor > 1.0e-12) || ! std::isfinite (anchor)) return out;   // spec 3.7 dust floor: a
+    // real learn's |REF|^2 sits orders of magnitude above this even at absurdly low capture
+    // levels - never derive a "band" from numerical dust (scale-invariance is for signals).
 
     // 6) eps in the log domain: eps_in = A*1e-6, eps_out = A*10, raised-cosine crossfade of
     //    log10(eps) over 1/2 octave (sqrt 2) each side (research Q4/Q5). Log-space interpolation
@@ -143,6 +145,8 @@ BandedRegularization deriveBandedRegularization (const float* power, int numBins
         if (k >= bestLo && k <= bestHi) {
             w = 1.0;
         } else if (k < bestLo) {
+            // bestLo <= 2 leaves no integer bins inside the half-octave foot -> the crossfade
+            // degenerates to a hard step: monotone, bounds-safe, unreachable for real sweeps.
             const double lo = (double) bestLo / kSqrt2;
             if ((double) k > lo) w = raisedCos (std::log ((double) k / lo) / lnS2);
         } else {
