@@ -37,11 +37,20 @@ WindowedSpectrum windowedBandSpectrum (const float* ir, int n, double fs,
         const int src = ((peak - pre + i) % n + n) % n;      // circular
         seg[(size_t) i] = ir[src];
     }
-    const int taper = std::max (1, len / 10);
-    for (int i = 0; i < taper; ++i) {
-        const float w = 0.5f * (1.0f - std::cos ((float) kPiD * (float) i / (float) taper));
-        seg[(size_t) i]              *= w;
-        seg[(size_t) (len - 1 - i)]  *= w;
+    // ASYMMETRIC tapers: the leading taper must end BEFORE the main arrival (segment index
+    // `pre`), or the peak gets attenuated relative to later content and every echo reads
+    // amplified (Task 2's comb test measured exactly this: a symmetric len/10 taper swallowed
+    // the whole 5 ms pre-region and the first ~15 ms post-peak, inflating a -10 dB echo's
+    // apparent depth from ~5.7 dB to 27.6 dB at tau=5 ms and INVERTING dominance at 15 ms).
+    const int taperIn  = std::max (1, std::min (pre - 32, len / 10));
+    const int taperOut = std::max (1, len / 10);
+    for (int i = 0; i < taperIn; ++i) {
+        const float w = 0.5f * (1.0f - std::cos ((float) kPiD * (float) i / (float) taperIn));
+        seg[(size_t) i] *= w;
+    }
+    for (int i = 0; i < taperOut; ++i) {
+        const float w = 0.5f * (1.0f - std::cos ((float) kPiD * (float) i / (float) taperOut));
+        seg[(size_t) (len - 1 - i)] *= w;
     }
 
     const int fftSize = nextPow2R (len);

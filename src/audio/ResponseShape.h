@@ -8,7 +8,8 @@
 // kIrThresholdsRatified pattern.
 //
 // The shared analysis pass (spec section 3): the deconvolved IR is TIME-WINDOWED before any
-// spectral analysis (-5 ms pre-peak .. +200 ms post-peak, half-Hann tapers) - an unwindowed
+// spectral analysis (-5 ms pre-peak .. +200 ms post-peak, half-Hann tapers (leading taper
+// capped inside the 5 ms pre-region; trailing 10%)) - an unwindowed
 // 2^18 FFT keeps stationary noise at full weight; windowing is standard measurement practice
 // (REW / Muller-Massarani) and load-bearing for the hum-placement decision (D5a lives on the
 // pre-sweep NOISE region, not here). The analysis band is the reference's derived band pulled
