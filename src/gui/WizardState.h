@@ -190,15 +190,10 @@ struct WizardState {
             break;
         }
     }
-    if (out.banner.isEmpty() && out.active == WizardStep::Measure) {
-        for (int i = 0; i <= (int) WizardStep::Calibrate; ++i) {
-            if (out.steps[i].state != StepState::Done) {
-                out.banner       = juce::String ("Needs attention - ") + out.steps[i].reason;
-                out.bannerTarget = (WizardStep) i;
-                break;
-            }
-        }
-    }
+    // (The former "active == Measure with a regressed Connect/Calibrate" clause was DEAD: when active is
+    // Measure, every earlier step is Done — a regressed Connect/Calibrate is Error, not Todo/Blocked, and
+    // an Error step BEFORE the active one is already caught by the loop above (its bannerTarget/text are
+    // identical). Blocked upstream would keep Measure Blocked so active could never be Measure. Removed.)
 
     return out;
 }

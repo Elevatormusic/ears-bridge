@@ -102,6 +102,11 @@ private:
     void updateStartGate();          // enable Start only when a valid calibration generation is applied
     void updateDiracMicGainHint();   // refresh the "add ~+N dB on Dirac's Mic gain" caption from the live headroom
     void updateCalProblems();        // surface a rejected swap/serial/type loudly ON the offending cal card
+    // Pure shared computation of the per-card problem strings (per-slot side check + pair diagnostic).
+    // updateCalProblems() sets the card text from it; anyCalProblem() collapses it to a bool for the
+    // wizard snapshot so BOTH branches drive the Calibrate step's Error (#M3).
+    void computeCalProblems (juce::String& leftProblem, juce::String& rightProblem) const;
+    bool anyCalProblem() const;
     void updateControlsEnabled();    // freeze config (cals/rate/mode/FIR) while capturing; re-enable when stopped
     // Returns true when the selected input is a detected EARS / EARS Pro (the Dirac path).
     // Shared by isRealEarsWithCable and the physical-output gate (P1-09).
@@ -118,6 +123,9 @@ private:
     // the spine (always) + show the resolved stage. P1 calls this from the same places updateStartGate is
     // called (Task 4 folds it into the tick proper). pinnedStep_ carries the user's navigation pin.
     void refreshWizardView();
+    // Render a resolved WizardState into the view (spine + stage host). Split out of refreshWizardView so
+    // the test seam forceWizardStepForTest can feed a state with `.active` overridden (see the seam's note).
+    void renderWizardView (const WizardState& ws);
     // Fill a WizardInputs from the existing members (GateSnapshot fields + engine state). Pure reads.
     WizardInputs snapshotWizardInputs() const;
     std::optional<WizardStep> pinnedStep_;   // user navigation pin (empty = launch/first-unmet resolution)

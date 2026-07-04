@@ -32,6 +32,14 @@ public:
     // Navigation: reveal the requested stage, hide the rest, and place focus on the new stage.
     // setVisible switching ONLY — nothing is reparented, constructed, or destroyed here.
     void showStage (WizardStep step) {
+        // Focus discipline: refreshWizardView() runs on EVERY updateStartGate, so showStage is called on
+        // unrelated events (e.g. an override-toggle click). If the requested stage is already the shown,
+        // visible one this is a no-op re-render — grabbing focus here would yank it back to the stage's
+        // first control (stealing it from whatever the user just clicked). Only act on a REAL switch.
+        if (step == shown_)
+            if (auto* cur = stages_[(size_t) step]; cur != nullptr && cur->isVisible())
+                return;
+
         shown_ = step;
         for (int i = 0; i < kWizardStepCount; ++i)
             if (auto* st = stages_[(size_t) i])

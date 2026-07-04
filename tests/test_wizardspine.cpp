@@ -2,6 +2,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "gui/WizardSpine.h"
 #include "gui/juce_design_probe.h"
+#include "gui/Theme.h"   // Theme::ok()/textDim() — reference-value tone assertions
 
 using eb::WizardSpine;
 using eb::WizardState;
@@ -110,6 +111,31 @@ TEST_CASE("WizardSpine: a DONE viewMeta overrides the machine reason") {
     CHECK (spine.rowMetaForTest ((int) WizardStep::Connect) == juce::String ("miniDSP EARS -> VB-Audio Cable"));
     // Calibrate (Active) has an empty viewMeta -> keeps its machine reason.
     CHECK (spine.rowMetaForTest ((int) WizardStep::Calibrate) == juce::String ("Load both ear calibration files"));
+}
+
+// The reference value is toned BY CONTENT: green (ok) only for a positive status; dimmed otherwise.
+TEST_CASE("WizardSpine: reference value tone follows content (positive green, negative dimmed)") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    WizardSpine spine;
+    spine.setSize (spine.preferredWidth(), 560);
+    juce::String metas[eb::kWizardStepCount];
+    for (int i = 0; i < eb::kWizardStepCount; ++i) metas[i] = kViewMetas[i];
+
+    // Positive: "matched" (and "learned") read as success -> ok() green.
+    spine.setState (makeSnapshot(), metas, "matched", "Windows Audio");
+    CHECK (spine.refValueColourForTest() == eb::Theme::ok());
+    spine.setState (makeSnapshot(), metas, "learned", "Windows Audio");
+    CHECK (spine.refValueColourForTest() == eb::Theme::ok());
+
+    // Negative: "not learned" must NOT be green (it is not a success) -> dimmed. "not " vetoes the
+    // "learned" substring match.
+    spine.setState (makeSnapshot(), metas, "not learned", "");
+    CHECK (spine.refValueColourForTest() == eb::Theme::textDim());
+    CHECK (spine.refValueColourForTest() != eb::Theme::ok());
+
+    // Neutral: "n/a (hardware Dirac)" -> dimmed too.
+    spine.setState (makeSnapshot(), metas, "n/a (hardware Dirac)", "");
+    CHECK (spine.refValueColourForTest() == eb::Theme::textDim());
 }
 
 // Probe sanity: at the production width x 560 the given metas must not overflow any label.

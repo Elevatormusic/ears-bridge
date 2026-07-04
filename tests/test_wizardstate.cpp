@@ -120,6 +120,25 @@ TEST_CASE("WizardState error navigability: deviceError + pinned Connect -> activ
     CHECK (s.banner.isEmpty());
 }
 
+// ---- 6b. Error pin navigability while an earlier step is un-started ------------------------------
+// An Error step must be navigable EVEN WHEN it is not the first-unmet — otherwise an implementation
+// that only honored a pin on the first-unmet step (rejecting Error pins) would still pass all the
+// cases above. Here Connect is Todo (no devices) and Calibrate is Error (calProblem); pinning
+// Calibrate must land there in Error, not fall back to first-unmet (Connect).
+TEST_CASE("WizardState error pin: Connect Todo + calProblem, pinned Calibrate -> active Calibrate, Error") {
+    WizardInputs in;            // no devices -> Connect Todo (Active), Calibrate would be Error
+    in.calProblem = true;
+    const auto s = eb::computeWizardState (in, WizardStep::Calibrate);
+    CHECK (s.active == WizardStep::Calibrate);                              // Error pin honored, not first-unmet
+    CHECK (s.steps[(int) WizardStep::Calibrate].state == StepState::Error);  // stays Error (navigable)
+    // Connect is the first-unmet but NOT the active step (Calibrate is pinned), so it stays Todo — only
+    // the ACTIVE Todo step is promoted to Active. This is the load-bearing distinction: the pin landed on
+    // Calibrate (an Error step that is not first-unmet), proving Error pins are honored.
+    CHECK (s.steps[(int) WizardStep::Connect].state == StepState::Todo);
+    // Active step IS the broken (Error) step -> no banner; and Connect (Todo, before it) is not Error.
+    CHECK (s.banner.isEmpty());
+}
+
 // ---- 7. calBuilding -----------------------------------------------------------------------------
 
 TEST_CASE("WizardState calBuilding: Calibrate Todo Rebuilding filters, NOT Done, even with haveCals") {

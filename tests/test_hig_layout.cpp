@@ -79,6 +79,100 @@ TEST_CASE("HIG gate: the real editor has no blocking layout finding in any theme
     tmp.deleteRecursively();
 }
 
+// ==================================================================================================
+// C1 fake-axis regression guard. The gate iterates the WizardStep axis, but that axis is only real if
+// forcing a different step actually swaps the VISIBLE (showing) element set. If forceWizardStepForTest
+// ever silently re-probes the SAME stage for every step (e.g. a pin that is illegal in the hermetic env
+// falls back to Connect), the per-step scenes collapse and Level/Measure are never scored. This test
+// asserts the showing-element label sets at Connect and at Measure are NOT identical.
+// ==================================================================================================
+namespace {
+// The set of non-empty labels of elements the probe reports as SHOWING (laid out + on screen).
+juce::StringArray showingLabels (const juce::var& descriptor) {
+    juce::StringArray out;
+    if (const auto* els = descriptor.getProperty ("elements", {}).getArray())
+        for (auto& e : *els)
+            if ((bool) e.getProperty ("showing", false)) {
+                const auto lbl = e.getProperty ("label", {}).toString();
+                if (lbl.isNotEmpty()) out.add (lbl);
+            }
+    out.sort (true);
+    return out;
+}
+}
+
+TEST_CASE("HIG gate honesty: the visible element set DIFFERS between Connect and Measure (real step axis)") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    const bool wasDark = eb::Theme::dark();
+    const auto jf = tmp.getChildFile ("d.json");
+    const auto pf = tmp.getChildFile ("d.png");
+
+    mc.setSize (900, 780);
+    mc.forceWizardStepForTest (eb::WizardStep::Connect);
+    hig::writeDesignProbe (mc, jf, pf);
+    const auto connectLabels = showingLabels (juce::JSON::parse (jf));
+
+    mc.forceWizardStepForTest (eb::WizardStep::Measure);
+    hig::writeDesignProbe (mc, jf, pf);
+    const auto measureLabels = showingLabels (juce::JSON::parse (jf));
+
+    mc.forceThemeForTest (wasDark);
+
+    INFO ("connect(" << connectLabels.size() << "): " << connectLabels.joinIntoString (" | "));
+    INFO ("measure(" << measureLabels.size() << "): " << measureLabels.joinIntoString (" | "));
+    // Both stages must actually render something...
+    CHECK (connectLabels.size() > 0);
+    CHECK (measureLabels.size() > 0);
+    // ...and the two stages must NOT present an identical visible-element set (the fake-axis guard).
+    CHECK (connectLabels != measureLabels);
+    tmp.deleteRecursively();
+}
+
+// ==================================================================================================
+// C2 relayout contract: "MainComponent::resized() relays every stage." A stage-hosted surface made
+// visible must be laid out (non-empty bounds) after a resized() at the SAME size — the old resized()
+// only reset spine/stageHost bounds, so a same-size call never re-ran the child stages' resized() and
+// the surface rendered 0x0 until an actual window resize.
+// ==================================================================================================
+TEST_CASE("MainComponent::resized() relays stages: a newly-visible stage surface gets non-empty bounds [C2]") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    const bool wasDark = eb::Theme::dark();
+    const auto jf = tmp.getChildFile ("d.json");
+    const auto pf = tmp.getChildFile ("d.png");
+
+    mc.setSize (900, 780);
+    // Pin Measure so the status lines + dots are the visible stage; a distinctive driven text lets us
+    // find the surface in the descriptor by label.
+    mc.forceWizardStepForTest (eb::WizardStep::Measure);
+    const juce::String driven = "Left earcup: verified clean";
+    mc.driveHeaderForTest (driven, "Right earcup: verified clean", /*showDots*/ true);
+
+    hig::writeDesignProbe (mc, jf, pf);
+    const auto tree = juce::JSON::parse (jf);
+    const auto* els = tree.getProperty ("elements", {}).getArray();
+    REQUIRE (els != nullptr);
+
+    bool foundShowingNonEmpty = false;
+    for (auto& e : *els)
+        if (e.getProperty ("label", {}).toString() == driven) {
+            const bool showing = (bool) e.getProperty ("showing", false);
+            const auto* b = e.getProperty ("bounds", {}).getDynamicObject();
+            REQUIRE (b != nullptr);
+            const int w = (int) b->getProperty ("w"), h = (int) b->getProperty ("h");
+            INFO ("driven statusLine showing=" << (int) showing << " bounds " << w << "x" << h);
+            if (showing && w > 0 && h > 0) foundShowingNonEmpty = true;
+        }
+    mc.forceThemeForTest (wasDark);
+    CHECK (foundShowingNonEmpty);   // 0x0 here => resized() failed to relay MeasureStage (the C2 bug)
+    tmp.deleteRecursively();
+}
+
 // The gate must be PROVEN to bite end-to-end - else a green badge is meaningless. Drive a live JUCE tree with a
 // DELIBERATE overlap + a DELIBERATE clip through the real path (probe -> scoreDescriptor) and assert both are
 // reported. If this ever passes with neither, the gate has silently become a no-op. (Cramming MainComponent does

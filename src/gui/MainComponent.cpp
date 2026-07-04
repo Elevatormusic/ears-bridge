@@ -1095,7 +1095,7 @@ void MainComponent::updateDiracMicGainHint() {
         diracMicGainHint.setText (text, juce::dontSendNotification);
 }
 
-void MainComponent::updateCalProblems() {
+void MainComponent::computeCalProblems (juce::String& leftProblem, juce::String& rightProblem) const {
     // Surface a wrong cal file LOUDLY on the offending card so a left/right swap is impossible to miss
     // (the status line buries it under device/level warnings). Two independent sources:
     //   1. PER-SLOT single-file side check -- fires with just ONE slot loaded, the moment a file's
@@ -1104,7 +1104,12 @@ void MainComponent::updateCalProblems() {
     //   2. PAIR diagnostic (serial mismatch / bad type / a swap the validator catches) -- only
     //      meaningful once BOTH files are loaded and the current build has caught up (a stale
     //      diagnostic from the PREVIOUS generation must not flash).
-    juce::String leftProblem, rightProblem;
+    // Pure computation (no side effects) so BOTH updateCalProblems() (sets the card text) and
+    // anyCalProblem() (feeds the wizard snapshot) resolve a rejected cal identically — #M3: the
+    // snapshot previously covered ONLY branch (2), so a single swapped file (branch 1) never lit the
+    // Calibrate step Error.
+    leftProblem.clear();
+    rightProblem.clear();
 
     // (1) Per-slot side check (independent of the other slot).
     if (leftCal.hasCal()
@@ -1135,7 +1140,17 @@ void MainComponent::updateCalProblems() {
             if (rightProblem.isEmpty()) rightProblem = diag;
         }
     }
+}
 
+bool MainComponent::anyCalProblem() const {
+    juce::String l, r;
+    computeCalProblems (l, r);
+    return l.isNotEmpty() || r.isNotEmpty();
+}
+
+void MainComponent::updateCalProblems() {
+    juce::String leftProblem, rightProblem;
+    computeCalProblems (leftProblem, rightProblem);
     leftCal.setProblem (leftProblem);
     rightCal.setProblem (rightProblem);
 }
@@ -1188,11 +1203,12 @@ eb::WizardInputs MainComponent::snapshotWizardInputs() const {
     in.deviceError    = statusErrorMsg_.isNotEmpty();
     // calBuilding: async FIR generation in flight — the SAME expression updateCalProblems() uses.
     in.calBuilding    = engine.requestedGeneration() != engine.builtGeneration();
-    // calProblem: a loaded pair the engine rejected (mirrors updateCalProblems()'s pairReject path — a
-    // stale diagnostic from the prior generation is masked by the calBuilding guard, exactly as there).
-    in.calProblem     = (leftCal.hasCal() && rightCal.hasCal())
-                     && ! engine.calibrationApplied() && ! in.calBuilding
-                     && engine.calibrationDiagnostic().isNotEmpty();
+    // calProblem: any rejected cal the card would surface. #M3: this must mirror BOTH branches of
+    // updateCalProblems() — the PER-SLOT side-mismatch (one swapped file) as well as the PAIR
+    // diagnostic — so a single swapped file lights the Calibrate step Error, not just a rejected pair.
+    // anyCalProblem() is the shared computation; its pair branch is already build-generation-guarded
+    // (a stale diagnostic from the prior generation reads empty), matching the old calBuilding mask.
+    in.calProblem     = anyCalProblem();
     in.unityAccepted  = false;   // P1: no explicit continue-without-cal path yet (Task 4 / Phase 2)
     in.engineRunning  = engine.status() == EngineStatus::Running;
     in.levelLatched   = false;   // P1 placeholder — Task 4 wires the L+R green-band latch
@@ -1214,8 +1230,10 @@ eb::WizardInputs MainComponent::snapshotWizardInputs() const {
 }
 
 void MainComponent::refreshWizardView() {
-    const auto ws = computeWizardState (snapshotWizardInputs(), pinnedStep_);
+    renderWizardView (computeWizardState (snapshotWizardInputs(), pinnedStep_));
+}
 
+void MainComponent::renderWizardView (const eb::WizardState& ws) {
     // View-owned per-step summaries (§ spine meta override). P1: Connect carries the device pair when
     // both devices are chosen; the rest keep the machine reason (empty override).
     juce::String viewMetas[kWizardStepCount];
@@ -1245,8 +1263,18 @@ void MainComponent::refreshWizardView() {
 }
 
 void MainComponent::forceWizardStepForTest (WizardStep step) {
+    // Test-only seam — DETERMINISTIC forcing per spec §8.2: the gate must score EVERY stage's
+    // hand-laid layout, so this seam FORCES the requested stage to be the visible one regardless of
+    // the machine's pin-legality rules (in the hermetic gate env Connect is Todo, so Level/Measure
+    // are Blocked and an ordinary pin would be illegal — the machine would fall back to Connect and
+    // those stages would never be scored). We render the spine with the state as the machine computes
+    // it but with `.active` overridden to `step`, then show `step` unconditionally. The LIVE path
+    // (refreshWizardView -> renderWizardView) never bypasses the machine; only this seam does.
     pinnedStep_ = step;
-    refreshWizardView();
+    auto ws = computeWizardState (snapshotWizardInputs(), pinnedStep_);
+    ws.active = step;                 // override for the spine render (which stage is "open")
+    renderWizardView (ws);            // paints the spine + shows ws.active == step
+    stageHost_.showStage (step);      // FORCE the shown stage even if renderWizardView showed another
     resized();
 }
 
@@ -2762,6 +2790,19 @@ void MainComponent::resized() {
 
     // --- Stage host (fills the rest; shows exactly one stage) ---
     stageHost_.setBounds (area);
+
+    // RESTORED CONTRACT: "resized() relays everything." Several call sites toggle a stage-hosted
+    // surface's visibility/text and then call resized() EXPECTING a full relayout — but stageHost_'s
+    // bounds are usually unchanged (same size), so JUCE never re-runs the child stages' resized() on
+    // its own, and those surfaces would render 0x0 until the next window resize. So drive every stage's
+    // layout unconditionally here. The three dependent call sites:
+    //   - inputClipHint (updateStatus ~L2637 — raw-input clip warning, LevelStage)
+    //   - diracCableHint / diracFixButton (updateDiracCableHint ~L740, ConnectStage)
+    //   - preflightInfo (Start handler ~L1017 — the info line claims a row only when non-empty, ConnectStage)
+    connectStage_.resized();
+    calibrateStage_.resized();
+    levelStage_.resized();
+    measureStage_.resized();
 }
 
 } // namespace eb

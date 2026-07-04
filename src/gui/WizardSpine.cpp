@@ -302,8 +302,16 @@ void WizardSpine::setState (const WizardState& ws, const juce::String viewMetas[
         row->repaint();
     }
 
-    // Reference footer.
-    setLabelIfChanged (refValue,  refLine1, Theme::ok());
+    // Reference footer. Tone the value by CONTENT: ok() (green) only for a POSITIVE reference status
+    // ("matched"/"learned"/"loaded"); textDim() for a neutral/negative one ("not learned", "n/a ...").
+    // (The old unconditional ok() painted "not learned" green, reading like a success — a lie.) "not
+    // learned" contains "learned", so the negative "not " prefix must veto the positive match.
+    const bool refNegative = refLine1.containsIgnoreCase ("not ") || refLine1.startsWithIgnoreCase ("n/a");
+    const bool refPositive = ! refNegative
+                          && (refLine1.containsIgnoreCase ("matched")
+                              || refLine1.containsIgnoreCase ("learned")
+                              || refLine1.containsIgnoreCase ("loaded"));
+    setLabelIfChanged (refValue,  refLine1, refPositive ? Theme::ok() : Theme::textDim());
     setLabelIfChanged (refValue2, refLine2, Theme::textFaint());
     setLabelIfChanged (refLabel2, refLine2.isNotEmpty() ? juce::String ("Learned from") : juce::String(),
                        Theme::textFaint());
