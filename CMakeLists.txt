@@ -142,6 +142,10 @@ add_library(eb_gui STATIC
     src/gui/DevicePicker.cpp
     src/gui/HigScore.cpp
     src/gui/WizardSpine.cpp
+    src/gui/stages/ConnectStage.cpp
+    src/gui/stages/CalibrateStage.cpp
+    src/gui/stages/LevelStage.cpp
+    src/gui/stages/MeasureStage.cpp
     src/gui/MainComponent.cpp
     src/net/UpdateChecker.cpp
     src/platform/DiracCompat.cpp     # Windows: Dirac shared-mode env-var helper (no-op elsewhere)

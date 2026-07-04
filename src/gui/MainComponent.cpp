@@ -152,16 +152,16 @@ MainComponent::MainComponent (const TestConfig& cfg)
     updateLink.setFont (juce::Font (juce::FontOptions (12.0f)), false, juce::Justification::centredRight);
     addChildComponent (updateLink);
 
-    // --- Left rail viewport (scrolls the whole config stack so a tall Advanced section is reachable) ---
-    // Every rail child below is parented to railContent (not `this`); the Viewport scrolls it vertically.
-    railViewport.setViewedComponent (&railContent, false);   // false: we own railContent (a member)
-    railViewport.setScrollBarsShown (true, false);            // vertical only; the rail width is fixed
-    railViewport.setScrollBarThickness (10);
-    addAndMakeVisible (railViewport);
+    // --- Wizard view layer: the spine + stage host replace the scrolling rail (P1 Task 3 cutover) ---
+    // The stages adopt() the existing leaf controls below (construct-once/reparent-once). The spine is a
+    // pure view of the WizardState; clicking a step pins it and re-resolves the view. addAndMakeVisible
+    // BOTH; the controls are parented into their stages by the adopt() calls further down.
+    spine_.onStepClicked = [this] (WizardStep s) { pinnedStep_ = s; refreshWizardView(); };
+    addAndMakeVisible (spine_);
+    addAndMakeVisible (stageHost_);
 
     // --- Input picker ---
     inputPicker.onDeviceChosen = [this] (const DeviceId& d) { onInputChosen (d); };
-    railContent.addAndMakeVisible (inputPicker);
     inputPicker.setTitle ("Input device");   // HIG: accessible name (the eyebrow label is not auto-associated to the control)
     inputPicker.setExplicitFocusOrder (1);   // HIG M4: keyboard focus order matches the visual top-down rail order
     inputGainHint.setText ("Leave the EARS gain switch alone (changing it drops the jig from Windows). "
@@ -171,11 +171,9 @@ MainComponent::MainComponent (const TestConfig& cfg)
     inputGainHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     inputGainHint.setJustificationType (juce::Justification::topLeft);
     inputGainHint.setMinimumHorizontalScale (1.0f);
-    railContent.addAndMakeVisible (inputGainHint);
 
     // --- Combine selector ---
     styleEyebrow (combineLabel, "COMBINE MODE");
-    railContent.addAndMakeVisible (combineLabel);
     combineModel = combineModeOrder();
     for (size_t i = 0; i < combineModel.size(); ++i) {
         auto& m = combineModel[i];
@@ -192,18 +190,15 @@ MainComponent::MainComponent (const TestConfig& cfg)
         combineBox.addItem (label, (int) i + 1);
     }
     combineBox.onChange = [this] { onCombineChosen(); };
-    railContent.addAndMakeVisible (combineBox);
     combineBox.setTitle ("Combine mode");
     combineBox.setExplicitFocusOrder (2);
     combineHint.setColour (juce::Label::textColourId, Theme::textDim());
     combineHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     combineHint.setJustificationType (juce::Justification::topLeft);
     combineHint.setMinimumHorizontalScale (1.0f);
-    railContent.addAndMakeVisible (combineHint);
 
     // --- Output picker + Dirac hint + preflight ---
     outputPicker.onDeviceChosen = [this] (const DeviceId& d) { onOutputChosen (d); };
-    railContent.addAndMakeVisible (outputPicker);
     outputPicker.setTitle ("Output virtual cable");
     outputPicker.setExplicitFocusOrder (3);
     outputHint.setText ("In Dirac Live, choose this device's capture side as the recording input.",
@@ -211,23 +206,19 @@ MainComponent::MainComponent (const TestConfig& cfg)
     outputHint.setColour (juce::Label::textColourId, Theme::textDim());
     outputHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     outputHint.setJustificationType (juce::Justification::topLeft);
-    railContent.addAndMakeVisible (outputHint);
     preflightLabel.setColour (juce::Label::textColourId, Theme::warn());
     preflightLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
-    railContent.addAndMakeVisible (preflightLabel);
     // Calm, neutral fact line (NOT a warning): e.g. "Output: 32-bit float (shared mode) - normal."
     // The full honest explanation lives in its tooltip so the short line always fits one rail line.
     preflightInfo.setColour (juce::Label::textColourId, Theme::textDim());
     preflightInfo.setFont (juce::Font (juce::FontOptions (12.0f)));
     preflightInfo.setTooltip ("WASAPI shared mode always delivers 32-bit float; your bit-depth is a "
                               "stored preference and doesn't affect quality - this is expected.");
-    railContent.addAndMakeVisible (preflightInfo);
 
     // Standard-VB-CABLE-vs-Dirac compatibility hint + one-click fix (hidden unless that cable is chosen).
     diracCableHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     diracCableHint.setJustificationType (juce::Justification::topLeft);
     diracCableHint.setColour (juce::Label::textColourId, Theme::warn());
-    railContent.addChildComponent (diracCableHint);
     diracFixButton.onClick = [this] {
         juce::String msg;
         if (eb::enableDiracSharedMode (msg)) {
@@ -240,33 +231,20 @@ MainComponent::MainComponent (const TestConfig& cfg)
         }
         resized();
     };
-    railContent.addChildComponent (diracFixButton);
 
     // --- Rate + depth ---
     styleEyebrow (rateLabel, "RATE");
-    railContent.addAndMakeVisible (rateLabel);
     rateBox.onChange = [this] { onRateChosen(); };
-    railContent.addAndMakeVisible (rateBox);
     rateBox.setTitle ("Sample rate");
     rateBox.setExplicitFocusOrder (4);
     rateWarn.setColour (juce::Label::textColourId, Theme::warn());
     rateWarn.setFont (juce::Font (juce::FontOptions (12.0f)));
-    railContent.addAndMakeVisible (rateWarn);
     styleEyebrow (bitLabel, "BIT DEPTH");
-    railContent.addAndMakeVisible (bitLabel);
     bitBox.onChange = [this] { onBitDepthChosen(); };
-    railContent.addAndMakeVisible (bitBox);
     bitBox.setTitle ("Preferred bit depth");
     bitBox.setExplicitFocusOrder (5);
 
-    // --- Advanced disclosure ---
-    advancedToggle.setButtonText ("Advanced");
-    advancedToggle.onClick = [this] {
-        logLine (eb::DiagnosticLog::Level::Debug,
-                 juce::String ("Toggle: Advanced=") + (advancedToggle.getToggleState() ? "on" : "off"));
-        resized();
-    };
-    railContent.addAndMakeVisible (advancedToggle);
+    // --- FIR / options controls (the Advanced disclosure died; children re-homed into stages) ---
     complexPhaseToggle.setButtonText ("Complex (with-phase) FIR");
     complexPhaseToggle.onClick = [this] {
         logLine (eb::DiagnosticLog::Level::Debug,
@@ -274,7 +252,6 @@ MainComponent::MainComponent (const TestConfig& cfg)
         settings.setComplexPhase (complexPhaseToggle.getToggleState());
         rebuildFirsAsync();
     };
-    railContent.addChildComponent (complexPhaseToggle);
     autoUpdateToggle.setToggleState (settings.autoCheckUpdates(), juce::dontSendNotification);
     autoUpdateToggle.onClick = [this] {
         logLine (eb::DiagnosticLog::Level::Debug,
@@ -286,7 +263,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
             resized();
         }
     };
-    railContent.addChildComponent (autoUpdateToggle);
+    addAndMakeVisible (autoUpdateToggle);   // spine footer (§5.5): a persistent option, no longer disclosure-gated
     // #3: advanced override toggle. Restore its persisted state; on click, persist + re-run the gate.
     overrideToggle.setToggleState (settings.advancedOverride(), juce::dontSendNotification);
     overrideToggle.onClick = [this] {
@@ -296,7 +273,6 @@ MainComponent::MainComponent (const TestConfig& cfg)
         flushSettings();
         updateStartGate();   // recompute Start enabled-ness + the status line for the new policy
     };
-    railContent.addChildComponent (overrideToggle);
     // Hardware-Dirac toggle: ON -> grading runs OFF the loopback (a hardware box generates its own sweep, so the
     // loopback captures no reference). Persist + tell the engine (publishes GradingOffHardware + suppresses the
     // grade) + suppress Learn-reference (nothing to learn). The auto-detect only SUGGESTS this toggle.
@@ -309,10 +285,8 @@ MainComponent::MainComponent (const TestConfig& cfg)
         engine.setDiracHardwareProcessor (on);   // publish GradingOffHardware / clear
         learnRefButton.setEnabled (! on);        // a hardware box has no PC-render reference to learn
     };
-    railContent.addChildComponent (hwDiracToggle);
     if (settings.diracHardwareProcessor()) { engine.setDiracHardwareProcessor (true); learnRefButton.setEnabled (false); }
     styleEyebrow (firLenLabel, "FIR LENGTH");
-    railContent.addChildComponent (firLenLabel);
     firLenBox.addItem ("Auto (scales with rate)", kFirLenAutoId);
     for (int n : { 4096, 8192, 16384, 32768 }) firLenBox.addItem (juce::String (n), n);
     firLenBox.onChange = [this] {
@@ -320,11 +294,9 @@ MainComponent::MainComponent (const TestConfig& cfg)
         settings.setFirLength (id == kFirLenAutoId ? 0 : id);
         rebuildFirsAsync();
     };
-    railContent.addChildComponent (firLenBox);
     firLenBox.setTitle ("FIR length");   // HIG: accessible name (the eyebrow label is not auto-associated to the control)
     firLenBox.setExplicitFocusOrder (6);
     styleEyebrow (trimLabel, "OUTPUT TRIM (dB)");
-    railContent.addChildComponent (trimLabel);
     trimSlider.setRange (-24.0, 0.0, 0.1);
     trimSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     trimSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 22);
@@ -332,7 +304,6 @@ MainComponent::MainComponent (const TestConfig& cfg)
         settings.setOutputTrimDb (trimSlider.getValue());
         engine.setOutputTrimDb (trimSlider.getValue());   // apply live (the graph reads it lock-free)
     };
-    railContent.addChildComponent (trimSlider);
     trimSlider.setTitle ("Output trim");   // HIG: accessible name
     trimSlider.setExplicitFocusOrder (7);
 
@@ -359,20 +330,16 @@ MainComponent::MainComponent (const TestConfig& cfg)
             verifyResultLabel.setText (err, juce::dontSendNotification);
         }
     };
-    railContent.addChildComponent (verifyButton);
     verifyResultLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     verifyResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    railContent.addChildComponent (verifyResultLabel);
 
     // Reference-Based Measurement Monitor (Plan 5): learn the loopback reference. The capture itself is a
     // Windows WASAPI loopback (on-device) and must run with Dirac's Processor in Windows Audio (shared)
     // mode; we detect that read-only and inform. Only meaningful while Stopped (the loopback can't run
     // alongside the live ASIO measurement).
     learnRefButton.onClick = [this] { onLearnReference(); };
-    railContent.addAndMakeVisible (learnRefButton);   // REQUIRED measurement step -> main flow, not under Advanced
     learnRefResultLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
-    railContent.addAndMakeVisible (learnRefResultLabel);
 
     // Diagnostic-log export (Task 3). "Open log folder" reveals %TEMP%/EarsBridge/logs; "Export log..."
     // zips the whole logs dir to a user-chosen path. Both are message-thread-only affordances.
@@ -383,7 +350,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
             log_->directory().revealToUser();
         }
     };
-    railContent.addChildComponent (openLogButton);
+    addAndMakeVisible (openLogButton);   // spine footer (§5.5): support channel <= 2 clicks from anywhere
     exportLogButton.onClick = [this] {
         if (log_ == nullptr) return;
         logLine (eb::DiagnosticLog::Level::Debug, "Button: Export log clicked");
@@ -415,7 +382,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
                 }
             });
     };
-    railContent.addChildComponent (exportLogButton);
+    addAndMakeVisible (exportLogButton);   // spine footer (§5.5)
 
     // --- Right pane: cal cards + Levels ---
     styleEyebrow (calEyebrow, "CALIBRATION");
@@ -526,9 +493,29 @@ MainComponent::MainComponent (const TestConfig& cfg)
                  "Reference: reloaded a stored loopback reference ("
                + juce::String (loadedReferenceL_.size() / loadedReferenceRateL_, 1) + " s)");
 
+    // --- Wizard stages: reparent every leaf control into its stage ONCE (construct-once/reparent-once) ---
+    // adopt() calls addAndMakeVisible on each control, moving it from `this`/its prior parent into the stage.
+    // Order matches the §5 re-homing map exactly; nothing is dropped or double-homed.
+    connectStage_.adopt (inputPicker, inputGainHint, combineLabel, combineBox, combineHint,
+                         outputPicker, outputHint, preflightLabel, preflightInfo,
+                         diracCableHint, diracFixButton, rateLabel, rateBox, rateWarn,
+                         bitLabel, bitBox, verifyButton, verifyResultLabel, overrideToggle);
+    calibrateStage_.adopt (calEyebrow, leftCal, rightCal, complexPhaseToggle,
+                           firLenLabel, firLenBox, trimLabel, trimSlider);
+    levelStage_.adopt (levelsEyebrow, levelsHint, diracMicGainHint, meterL, meterR, meterOut, inputClipHint);
+    measureStage_.adopt (statusLine, statusLineR, gradeDotsL_, gradeDotsR_,
+                         learnRefButton, learnRefResultLabel, hwDiracToggle);
+    stageHost_.setStages ({ &connectStage_, &calibrateStage_, &levelStage_, &measureStage_ });
+    // The stage Continue callbacks are created disabled + unwired in P1 (Task 4 wires enablement + the pin
+    // navigation); give them the same pin-and-refresh path the spine uses so the seam is already in place.
+    connectStage_.onContinue   = [this] { pinnedStep_ = WizardStep::Calibrate; refreshWizardView(); };
+    calibrateStage_.onContinue = [this] { pinnedStep_ = WizardStep::Level;     refreshWizardView(); };
+    levelStage_.onContinue     = [this] { pinnedStep_ = WizardStep::Measure;   refreshWizardView(); };
+
     updateStartGate();
+    refreshWizardView();   // seed the spine + resolve the launch stage (first unmet; all met => Measure)
     syncPlotScales();
-    setSize (900, 780);   // tall enough for the right pane (two cal cards + Levels + the mic-gain caption) without cramping
+    setSize (960, 780);   // >= the 900-wide minimum (§4); tall enough for the stage content without cramping
     startTimerHz (30);
 
     // Background update check: runs on every launch, gated only by the user's opt-out toggle.
@@ -1091,6 +1078,7 @@ void MainComponent::updateStartGate() {
     updateControlsEnabled();
     updateDiracMicGainHint();   // a cal load/clear changed the auto-headroom -> refresh the Mic-gain number
     updateStatusLine();
+    refreshWizardView();        // P1: recompute the spine + resolve the active stage from live truth
 }
 
 void MainComponent::updateDiracMicGainHint() {
@@ -1186,6 +1174,82 @@ void MainComponent::syncPlotScales() {
     rightCal.setPlotRange (top);
 }
 
+// ---- Wizard view layer (P1 Task 3 cutover) -----------------------------------------------------
+
+eb::WizardInputs MainComponent::snapshotWizardInputs() const {
+    eb::WizardInputs in;
+    const auto gate = computeStartGate();
+    in.haveDevs       = gate.haveDevs;
+    in.haveCals       = gate.haveCals;
+    in.wrongMode      = gate.wrongMode;
+    in.physicalOutput = gate.physicalOutput;
+    in.noCalsLoaded   = gate.noCalsLoaded;
+    in.gateReady      = gate.ready;
+    in.deviceError    = statusErrorMsg_.isNotEmpty();
+    // calBuilding: async FIR generation in flight — the SAME expression updateCalProblems() uses.
+    in.calBuilding    = engine.requestedGeneration() != engine.builtGeneration();
+    // calProblem: a loaded pair the engine rejected (mirrors updateCalProblems()'s pairReject path — a
+    // stale diagnostic from the prior generation is masked by the calBuilding guard, exactly as there).
+    in.calProblem     = (leftCal.hasCal() && rightCal.hasCal())
+                     && ! engine.calibrationApplied() && ! in.calBuilding
+                     && engine.calibrationDiagnostic().isNotEmpty();
+    in.unityAccepted  = false;   // P1: no explicit continue-without-cal path yet (Task 4 / Phase 2)
+    in.engineRunning  = engine.status() == EngineStatus::Running;
+    in.levelLatched   = false;   // P1 placeholder — Task 4 wires the L+R green-band latch
+    in.referenceLoaded = ! loadedReferenceL_.empty() && ! loadedReferenceR_.empty();
+    in.hwDirac        = settings.diracHardwareProcessor();
+    in.overrideOn     = settings.advancedOverride();
+    in.configGen      = calGenCounter_.load (std::memory_order_relaxed);
+    in.verdictGenL    = -1;      // P1 placeholder — Phase 3 stamps the verdict generation per ear
+    in.verdictGenR    = -1;
+    // earGraded from the per-ear published grade state (the same states the quality dots are read from).
+    const auto gradedState = [] (int s) {
+        const auto rs = (eb::RefMonState) s;
+        return rs == eb::RefMonState::GradedClean || rs == eb::RefMonState::GradedMarginal
+            || rs == eb::RefMonState::GradedSuspect;
+    };
+    in.earGradedL = gradedState (engine.refMonState (0));
+    in.earGradedR = gradedState (engine.refMonState (1));
+    return in;
+}
+
+void MainComponent::refreshWizardView() {
+    const auto ws = computeWizardState (snapshotWizardInputs(), pinnedStep_);
+
+    // View-owned per-step summaries (§ spine meta override). P1: Connect carries the device pair when
+    // both devices are chosen; the rest keep the machine reason (empty override).
+    juce::String viewMetas[kWizardStepCount];
+    if (auto in = inputPicker.selectedDevice())
+        if (auto out = outputPicker.selectedDevice())
+            viewMetas[(int) WizardStep::Connect] = in->name + " -> " + out->name;
+    // Level and Measure share the SAME machine reason while both Blocked ("Finish Connect and Calibrate
+    // first"), which renders two identical spine metas (a duplicate finding + it reads as a copy-paste bug).
+    // Give the terminal Measure step a distinct, honest blocked summary so the two rows never collide.
+    if (ws.steps[(int) WizardStep::Measure].state == StepState::Blocked
+        && ws.steps[(int) WizardStep::Level].state == StepState::Blocked)
+        viewMetas[(int) WizardStep::Measure] = "Available after Level";
+
+    // Reference footer (§5.5): line1 = the reference status, line2 = what it was learned from.
+    juce::String refLine1, refLine2;
+    if (settings.diracHardwareProcessor()) {
+        refLine1 = "n/a (hardware Dirac)";
+    } else if (! loadedReferenceL_.empty() && ! loadedReferenceR_.empty()) {
+        refLine1 = "learned";
+        refLine2 = loadedReferenceEndpoint_.isNotEmpty() ? loadedReferenceEndpoint_ : juce::String ("Windows Audio");
+    } else {
+        refLine1 = "not learned";
+    }
+
+    spine_.setState (ws, viewMetas, refLine1, refLine2);
+    stageHost_.showStage (ws.active);
+}
+
+void MainComponent::forceWizardStepForTest (WizardStep step) {
+    pinnedStep_ = step;
+    refreshWizardView();
+    resized();
+}
+
 void MainComponent::forceThemeForTest (bool dark) {
     theme.setDarkForTest (dark);
     applyTextColours();
@@ -1239,7 +1303,14 @@ void MainComponent::applyTextColours() {
     outputPicker.applyTheme();
     leftCal.applyTheme();
     rightCal.applyTheme();
+    // Wizard view layer: re-colour each stage's OWN labels + re-render the spine (setState re-reads Theme)
+    // so a live light/dark flip repaints every re-homed surface, not just MainComponent's own labels.
+    connectStage_.applyTheme();
+    calibrateStage_.applyTheme();
+    levelStage_.applyTheme();
+    measureStage_.applyTheme();
     updateStatusLine();
+    refreshWizardView();
 }
 
 void MainComponent::applyTitleBarTheme() {
@@ -2405,6 +2476,11 @@ void MainComponent::timerCallback() {
                 { "dark-contrast", true,  true  }, { "light-contrast", false, true  },
             };
             const bool wasDark = eb::Theme::dark();
+            // The driven status lines + quality dots now live in MeasureStage (the wizard cutover moved them
+            // off the title bar), so pin the Measure step before the sweep — else the driven labels sit in a
+            // hidden stage and the scenes capture an empty body.
+            const auto pinnedWas = pinnedStep_;
+            forceWizardStepForTest (WizardStep::Measure);
             for (auto& ap : appears) {
                 eb::SystemA11y::setForTest (false, ap.hc, ap.hc);   // reduceMotion off; contrast+transparency = hc
                 forceThemeForTest (ap.dark);                        // reapply palette + settle the non-owned labels
@@ -2424,31 +2500,24 @@ void MainComponent::timerCallback() {
                         dir.getChildFile (stem + ".png"));
                 }
             }
-            // COMPONENT-STATE SCENES: the status sweep above leaves the body in its launch config
-            // (cals loaded from Settings, Start DISABLED, Advanced collapsed), so the enabled accent
-            // CTA (its fill only paints when enabled) and the Advanced rail cluster never render.
-            // Capture both in dark+light, then restore. (Empty-cal / drop-zone states are left to the
-            // structural review - clearing a slot would mutate persisted calibration.)
-            const bool advWas = advancedToggle.getToggleState();
+            // COMPONENT-STATE SCENE: the status sweep above leaves Start DISABLED (its accent fill paints
+            // only when enabled), so force it enabled and capture the ready-CTA scene in dark+light. (The
+            // former "Advanced expanded" scene died with the disclosure — its children live in the stages,
+            // captured by the per-step gate axis instead.)
             for (const bool dk : { true, false }) {
                 forceThemeForTest (dk);
                 const juce::String mtag = dk ? "dark" : "light";
                 startStop.setEnabled (true);                                    // enabled primary CTA (M3)
-                advancedToggle.setToggleState (false, juce::sendNotificationSync);
                 resized();
                 hig::writeDesignProbe (*getTopLevelComponent(),
                     dir.getChildFile ("hig-" + mtag + "-normal-startready.json"),
                     dir.getChildFile ("hig-" + mtag + "-normal-startready.png"));
-                advancedToggle.setToggleState (true, juce::sendNotificationSync); // Advanced rail expanded
-                resized();
-                hig::writeDesignProbe (*getTopLevelComponent(),
-                    dir.getChildFile ("hig-" + mtag + "-normal-advanced.json"),
-                    dir.getChildFile ("hig-" + mtag + "-normal-advanced.png"));
             }
-            advancedToggle.setToggleState (advWas, juce::sendNotificationSync);
 
             eb::SystemA11y::setForTest (false, false, false);       // restore; the next theme tick re-reads the OS
             forceThemeForTest (wasDark);
+            pinnedStep_ = pinnedWas;                                // restore the pre-sweep navigation pin
+            refreshWizardView();
             }   // if (outDir.isNotEmpty())
         }
     }
@@ -2603,31 +2672,29 @@ void MainComponent::timerCallback() {
     }
 }
 
-// The rail content is transparent: the graphite rail backdrop + the right divider are painted by
-// MainComponent (full window height, behind the Viewport) so they stay put while the content scrolls.
-void MainComponent::RailContent::paint (juce::Graphics&) {}
-
-// Title-bar height - ONE constant shared by paint() and resized() (audit #25: paint stayed at 56 when the
-// layout grew to 76, so the R status line + dots rendered below the painted bar with the separator crossing them).
-static constexpr int kBarH = 76;
+// Title-bar height - ONE constant shared by paint() and resized() (#25). The wizard cutover moved the
+// per-ear status stack + dots OUT of the title bar (into MeasureStage), so the bar now carries only brand
+// + Start + update link and shrinks to 56 (spec § resized: kBarH shrinks to 56).
+static constexpr int kBarH = 56;
 
 void MainComponent::paint (juce::Graphics& g) {
-    g.fillAll (Theme::bg());
-    const int barH = kBarH, railW = 262;
+    g.fillAll (Theme::bg());   // the stage background (StageHost/stages paint their own bg on top too)
+    const int barH = kBarH;
+    const int spineW = spine_.preferredWidth();
     auto bar = getLocalBounds().removeFromTop (barH);
 
-    // Title bar + left rail backdrops. The rail fill spans the full window height below the bar; the
-    // (transparent) Viewport scrolls its content over this static backdrop, so the graphite rail +
-    // divider look identical to the old fixed rail at any scroll position.
+    // Title bar fill.
     g.setColour (Theme::barBg());
     g.fillRect (bar);
+    // Spine column background behind the spine (the spine paints its own bg + right hairline; this keeps
+    // the graphite column solid behind it, matching the old fixed-rail look).
     g.setColour (Theme::rail());
-    g.fillRect (juce::Rectangle<int> (0, barH, railW, getHeight() - barH));
+    g.fillRect (juce::Rectangle<int> (0, barH, spineW, getHeight() - barH));
 
-    // Separators.
+    // Separators: under the title bar + down the spine's right edge.
     g.setColour (Theme::sep());
     g.fillRect (0, barH - 1, getWidth(), 1);
-    g.fillRect (railW - 1, barH, 1, getHeight() - barH);
+    g.fillRect (spineW - 1, barH, 1, getHeight() - barH);
 
     // Brand headphones glyph (monochrome — accent is reserved for the action/selection).
     // Same construction as installer/assets/icon.svg (headband arc + short side stems + filled
@@ -2651,210 +2718,50 @@ void MainComponent::paint (juce::Graphics& g) {
                                             juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     g.fillRoundedRectangle (gx - R - padW * 0.5f, padTop, padW, padH, padRx);
     g.fillRoundedRectangle (gx + R - padW * 0.5f, padTop, padW, padH, padRx);
-
-    // Levels card backdrop.
-    if (! levelsBounds.isEmpty()) {
-        g.setColour (Theme::surface());
-        g.fillRoundedRectangle (levelsBounds.toFloat(), 10.0f);
-    }
-}
-
-int MainComponent::layoutRail (int width) {
-    // Lay every rail child out top-down inside railContent's local space (origin 0,0), in a column of
-    // the given width reduced by the 16px gutter. Returns the TOTAL content height (last bottom + the
-    // bottom gutter) so resized() can size railContent for the Viewport. Pure layout — no resized()
-    // call here, so it can't recurse through the Viewport. Spacings mirror the former fixed-rail block.
-    constexpr int gutter = 16;
-    auto rr = juce::Rectangle<int> (0, 0, width, 100000).reduced (gutter, 0);
-    rr.removeFromTop (gutter);   // top gutter (the old rail.reduced(16) inset, applied at y=0)
-
-    inputPicker.setBounds (rr.removeFromTop (62));
-    rr.removeFromTop (4);
-    inputGainHint.setBounds (rr.removeFromTop (60));   // was 30 - too short for the wrapped 3-4 line hint (truncated with "...")
-    rr.removeFromTop (12);
-
-    combineLabel.setBounds (rr.removeFromTop (16));
-    rr.removeFromTop (6);
-    combineBox.setBounds (rr.removeFromTop (40));
-    rr.removeFromTop (6);
-    combineHint.setBounds (rr.removeFromTop (80));   // was 44 - too short for the wrapped hint ("...crossta...")
-    rr.removeFromTop (16);
-
-    outputPicker.setBounds (rr.removeFromTop (62));
-    rr.removeFromTop (4);
-    outputHint.setBounds (rr.removeFromTop (30));
-    preflightLabel.setBounds (rr.removeFromTop (14));
-    // The neutral fact line sits just below the warnings; it only claims a row when it has text,
-    // so an empty info line never pushes the rest of the rail down.
-    if (preflightInfo.getText().isNotEmpty())
-        preflightInfo.setBounds (rr.removeFromTop (14));
-    else
-        preflightInfo.setBounds ({});
-    if (diracCableHint.isVisible()) {
-        rr.removeFromTop (6);
-        diracCableHint.setBounds (rr.removeFromTop (48));
-        if (diracFixButton.isVisible()) {
-            rr.removeFromTop (4);
-            diracFixButton.setBounds (rr.removeFromTop (30).removeFromLeft (200));
-        }
-    }
-    rr.removeFromTop (12);
-
-    auto rb = rr.removeFromTop (62);
-    auto rcol = rb.removeFromLeft (rb.getWidth() / 2 - 8);
-    rb.removeFromLeft (16);
-    rateLabel.setBounds (rcol.removeFromTop (16)); rcol.removeFromTop (6);
-    rateBox.setBounds (rcol.removeFromTop (40));
-    bitLabel.setBounds (rb.removeFromTop (16)); rb.removeFromTop (6);
-    bitBox.setBounds (rb.removeFromTop (40));
-    rateWarn.setBounds (rr.removeFromTop (14));
-    rr.removeFromTop (8);
-
-    // Reference learn: a REQUIRED measurement step (it enables the per-ear quality grade), so it sits in the main
-    // config flow above Advanced, not hidden inside it.
-    learnRefButton.setBounds (rr.removeFromTop (30));
-    rr.removeFromTop (4);
-    learnRefResultLabel.setBounds (rr.removeFromTop (16));
-    rr.removeFromTop (10);
-
-    advancedToggle.setBounds (rr.removeFromTop (26));
-    const bool adv = advancedToggle.getToggleState();
-    complexPhaseToggle.setVisible (adv);
-    firLenLabel.setVisible (adv); firLenBox.setVisible (adv);
-    trimLabel.setVisible (adv);   trimSlider.setVisible (adv);
-    verifyButton.setVisible (adv); verifyResultLabel.setVisible (adv);
-    openLogButton.setVisible (adv); exportLogButton.setVisible (adv);
-    autoUpdateToggle.setVisible (adv);
-    overrideToggle.setVisible (adv);   // #3: only reachable with Advanced expanded
-    hwDiracToggle.setVisible (adv);    // hardware-Dirac: only under Advanced (a deliberate, uncommon setup)
-    if (adv) {
-        rr.removeFromTop (4);
-        complexPhaseToggle.setBounds (rr.removeFromTop (26));
-        rr.removeFromTop (6);
-        firLenLabel.setBounds (rr.removeFromTop (16)); rr.removeFromTop (6);
-        firLenBox.setBounds (rr.removeFromTop (40));
-        rr.removeFromTop (8);
-        trimLabel.setBounds (rr.removeFromTop (16)); rr.removeFromTop (4);
-        trimSlider.setBounds (rr.removeFromTop (28));
-        rr.removeFromTop (10);
-        verifyButton.setBounds (rr.removeFromTop (30));
-        rr.removeFromTop (4);
-        verifyResultLabel.setBounds (rr.removeFromTop (16));
-        rr.removeFromTop (10);
-        // Diagnostic-log export: the two buttons sit side by side on one rail row.
-        {
-            auto logRow = rr.removeFromTop (30);
-            openLogButton.setBounds   (logRow.removeFromLeft (logRow.getWidth() / 2 - 4));
-            logRow.removeFromLeft (8);
-            exportLogButton.setBounds (logRow);
-        }
-        rr.removeFromTop (10);
-        autoUpdateToggle.setBounds (rr.removeFromTop (26));
-        rr.removeFromTop (6);
-        overrideToggle.setBounds (rr.removeFromTop (26));
-        hwDiracToggle.setBounds (rr.removeFromTop (26));
-    }
-
-    // Total content height = the y just past the last placed control, plus the matching bottom gutter.
-    return rr.getY() + gutter;
+    // (The Levels card backdrop moved into LevelStage::paint; the per-ear status stack + dots moved into
+    //  MeasureStage — the title bar no longer carries either.)
 }
 
 void MainComponent::resized() {
     auto area = getLocalBounds();
 
-    // --- Title bar ---
-    auto bar = area.removeFromTop (kBarH);   // fits the 68px per-ear status STACK (4 rows) + margin; shared with paint() (audit #25)
+    // --- Title bar (brand + Start + update link only; the status stack moved to MeasureStage) ---
+    auto bar = area.removeFromTop (kBarH);   // shared with paint() (#25); 56 now the stack left the bar
     {
         auto x = bar.reduced (16, 0);
         brandLabel.setBounds (x.removeFromLeft (200).withTrimmedLeft (24));
-        // Transport button at the right, vertically centred; the status reads INLINE to its left
-        // (running health / a gate reason), not stacked underneath.
         startStop.setBounds (x.removeFromRight (120).withSizeKeepingCentre (120, 34));
         x.removeFromRight (14);
         if (updateLink.isVisible()) {
             const int w = juce::jmin (230, x.getWidth());
             updateLink.setBounds (x.removeFromRight (w).withSizeKeepingCentre (w, 22));
-            x.removeFromRight (12);
         }
-        // Two stacked per-ear status lines (Task 5). Centre a 36px block (two 18px rows) in the title bar so
-        // the pair sits where the single line used to. statusLine = upper (L), statusLineR = lower (R). When
-        // only one message shows (the hard/global ladder), statusLineR is blanked so the upper line reads as
-        // the single status line did. Same right-justification + width as before, so neither line truncates.
-        // Order: [L status][L dots][R dots][R status]. The two dot rows sit ADJACENT so the pair reads as one
-        // centred block aligned with the brand. The old [status][dots][status][dots] order put the (idle-EMPTY)
-        // R status line BETWEEN the dot rows, shoving the R dots to the bottom of the bar - the "misplaced" look.
-        auto stack = x.withSizeKeepingCentre (x.getWidth(), 68);
-        statusLine.setBounds  (stack.removeFromTop (18));
-        gradeDotsL_.setBounds (stack.removeFromTop (16));
-        gradeDotsR_.setBounds (stack.removeFromTop (16));
-        statusLineR.setBounds (stack.removeFromTop (18));
     }
 
-    // --- Version footnote (pinned bottom-right, below both panes) ---
+    // --- Version footnote (pinned bottom-right, below both columns) ---
     versionLabel.setBounds (area.removeFromBottom (22).reduced (16, 2));
 
-    // --- Left configuration rail (scrollable Viewport) ---
-    // The Viewport fills the fixed 262px rail column. railContent is laid out + sized by layoutRail()
-    // to its FULL content height, so the (tall, expandable) Advanced stack is always reachable by
-    // scrolling — never clipped off the bottom as it was when the rail was a fixed rect.
-    auto rail = area.removeFromLeft (262);
-    auto pane = area;
-    railViewport.setBounds (rail);
+    // --- Spine column (persistent step rail) + its footer diagnostics strip ---
+    // The spine fills the graphite column on the left; a small footer strip at the bottom of the column
+    // hosts the diagnostics affordances (§5.5: two log buttons + the auto-update toggle beneath — plain,
+    // no panel yet). These are parented to `this` (WizardSpine stays untouched) and drawn over the rail.
+    auto spineCol = area.removeFromLeft (spine_.preferredWidth());
     {
-        // Content width = the rail width minus the vertical scrollbar when it's shown, so a child laid
-        // out to the full width isn't hidden behind the bar. getMaximumVisibleWidth() already accounts
-        // for a visible vertical scrollbar.
-        const int contentW = railViewport.getMaximumVisibleWidth();
-        const int contentH = layoutRail (contentW);
-        // Never shorter than the viewport, so the backdrop area is fully covered and there's no
-        // dead band below the last control.
-        railContent.setSize (contentW, juce::jmax (contentH, railViewport.getHeight()));
-        // A first pass laid the children out at contentW assuming NO scrollbar; if adding the content
-        // made the scrollbar appear (or vanish), getMaximumVisibleWidth() changed — relayout once at
-        // the now-correct width so the children fit. One extra pass converges (the height is stable).
-        const int finalW = railViewport.getMaximumVisibleWidth();
-        if (finalW != contentW) {
-            const int h2 = layoutRail (finalW);
-            railContent.setSize (finalW, juce::jmax (h2, railViewport.getHeight()));
-        }
+        constexpr int footPad = 12, btnH = 24, rowGap = 8, toggleH = 24;
+        const int footH = footPad + btnH + rowGap + toggleH + footPad;
+        auto foot = spineCol.removeFromBottom (footH).reduced (footPad, 0);
+        foot.removeFromTop (footPad);
+        auto btnRow = foot.removeFromTop (btnH);
+        openLogButton.setBounds   (btnRow.removeFromLeft (btnRow.getWidth() / 2 - 4));
+        btnRow.removeFromLeft (8);
+        exportLogButton.setBounds (btnRow);
+        foot.removeFromTop (rowGap);
+        autoUpdateToggle.setBounds (foot.removeFromTop (toggleH));
     }
+    spine_.setBounds (spineCol);
 
-    // --- Right content pane ---
-    {
-        auto pp = pane.reduced (16);
-        calEyebrow.setBounds (pp.removeFromTop (16));
-        pp.removeFromTop (10);
-
-        // Reserve the bottom captions from the BOTTOM first so the cards/Levels above can never clip them (the old
-        // top-down order let the Levels caption fall off the bottom of the pane). The Levels card then flexes to take
-        // whatever space is left between the two fixed cal cards and the reserved captions.
-        if (inputClipHint.isVisible()) {
-            inputClipHint.setBounds (pp.removeFromBottom (50));
-            pp.removeFromBottom (8);
-        }
-        diracMicGainHint.setBounds (pp.removeFromBottom (34));
-        pp.removeFromBottom (8);
-
-        leftCal.setBounds (pp.removeFromTop (206));
-        pp.removeFromTop (16);
-        rightCal.setBounds (pp.removeFromTop (206));
-        pp.removeFromTop (20);
-
-        levelsBounds = pp.removeFromTop (juce::jmin (pp.getHeight(), 110));   // flex down on a short window, cap on a tall one
-        auto lv = levelsBounds.reduced (16, 12);
-        {
-            // Section eyebrow with the gain-staging caption inline to its right (zero extra vertical).
-            auto top = lv.removeFromTop (14);
-            levelsEyebrow.setBounds (top.removeFromLeft (60));
-            top.removeFromLeft (10);
-            levelsHint.setBounds (top);
-        }
-        lv.removeFromTop (8);
-        const int mh = juce::jmax (8, lv.getHeight() / 3);   // meters flex with the card but never collapse to nothing
-        meterL.setBounds   (lv.removeFromTop (mh));
-        meterR.setBounds   (lv.removeFromTop (mh));
-        meterOut.setBounds (lv.removeFromTop (mh));
-    }
+    // --- Stage host (fills the rest; shows exactly one stage) ---
+    stageHost_.setBounds (area);
 }
 
 } // namespace eb

@@ -44,22 +44,30 @@ TEST_CASE("HIG gate: the real editor has no blocking layout finding in any theme
     const A11y a11ys[] = { { "none", false, false, false }, { "reduce-motion", true, false, false },
                            { "increase-contrast", false, true, false }, { "reduce-transparency", false, false, true } };
     struct Sz { const char* name; int w, h; };
-    const Sz sizes[] = { { "min", 780, 720 }, { "large", 1200, 1000 } };
+    const Sz sizes[] = { { "min", 900, 720 }, { "large", 1200, 1000 } };
     const auto jf = tmp.getChildFile ("d.json");
     const auto pf = tmp.getChildFile ("d.png");
 
     juce::StringArray bad;
-    for (bool dark : { true, false }) {
-        mc.forceThemeForTest (dark);
-        for (auto& a : a11ys) {
-            eb::SystemA11y::setForTest (a.rm, a.ic, a.rt);
-            for (auto& s : sizes) {
-                mc.setSize (s.w, s.h);
-                hig::writeDesignProbe (mc, jf, pf);
-                for (auto& f : eb::hig::scoreDescriptor (juce::JSON::parse (jf)))
-                    if (blocking (f))
-                        bad.add (juce::String (dark ? "dark" : "light") + "/" + a.name + "/" + s.name
-                                 + ": " + f.category + " on " + f.element + " - " + f.message);
+    // The wizard shows one stage at a time, so the gate must score EVERY step's hand-laid stage — not just
+    // the launch step. Iterate the WizardStep enum as the OUTER axis (steps x theme x a11y x size).
+    for (int si = 0; si < eb::kWizardStepCount; ++si) {
+        static_assert (eb::kWizardStepCount == 4, "new step: extend the gate scenes");
+        mc.forceWizardStepForTest ((eb::WizardStep) si);
+        const char* stepName = (si == 0 ? "connect" : si == 1 ? "calibrate" : si == 2 ? "level" : "measure");
+        for (bool dark : { true, false }) {
+            mc.forceThemeForTest (dark);
+            for (auto& a : a11ys) {
+                eb::SystemA11y::setForTest (a.rm, a.ic, a.rt);
+                for (auto& s : sizes) {
+                    mc.setSize (s.w, s.h);
+                    hig::writeDesignProbe (mc, jf, pf);
+                    for (auto& f : eb::hig::scoreDescriptor (juce::JSON::parse (jf)))
+                        if (blocking (f))
+                            bad.add (juce::String (stepName) + "/" + (dark ? "dark" : "light") + "/"
+                                     + a.name + "/" + s.name
+                                     + ": " + f.category + " on " + f.element + " - " + f.message);
+                }
             }
         }
     }
@@ -146,7 +154,9 @@ TEST_CASE("HIG gate: the captured two-line header renders clean at the minimum w
     for (bool dark : { true, false }) {
         mc.forceThemeForTest (dark);
         for (auto& c : cases) {
-            mc.setSize (780, 720);                       // the app's hard minimum (Main.cpp setResizeLimits)
+            mc.setSize (900, 720);                       // the app's hard minimum (Main.cpp setResizeLimits)
+            // The driven status lines + dots now live in MeasureStage — pin it so they're in the visible tree.
+            mc.forceWizardStepForTest (eb::WizardStep::Measure);
             mc.driveHeaderForTest (c.o->line1.text, c.o->line2.text, /*showDots*/ true);
             hig::writeDesignProbe (mc, jf, pf);
             for (auto& f : eb::hig::scoreDescriptor (juce::JSON::parse (jf)))

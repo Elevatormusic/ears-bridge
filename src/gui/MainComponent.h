@@ -12,10 +12,18 @@
 #include "gui/GradeMetricDotsView.h"   // eb::GradeMetricDotsView (3-color per-metric quality dots)
 #include "gui/GradeBandSmoother.h"     // eb::GradeBandSmoother (per-ear anti-flicker band smoothing)
 #include "net/UpdateChecker.h"
+#include "gui/WizardState.h"        // eb::WizardStep / WizardInputs / computeWizardState (Task 1)
+#include "gui/WizardSpine.h"        // eb::WizardSpine (Task 2, the persistent step rail)
+#include "gui/stages/StageHost.h"  // eb::StageHost (Task 3, the single-child stage switcher)
+#include "gui/stages/ConnectStage.h"
+#include "gui/stages/CalibrateStage.h"
+#include "gui/stages/LevelStage.h"
+#include "gui/stages/MeasureStage.h"
 #include "diag/DiagnosticLog.h"     // eb::DiagnosticLog (Task 1 of the match-detection + diagnostic-logging build)
 #include "audio/DeviceConfigCheck.h"  // eb::checkChainConfig (48k-everywhere chain-config check)
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace eb {
@@ -50,6 +58,10 @@ public:
     // window - those strings only appear mid-run, which a construct-and-probe test never reaches. Sets
     // label text + representative dot metrics and relays out; display only, no engine/grading state.
     void driveHeaderForTest (const juce::String& line1, const juce::String& line2, bool showDots);
+
+    // Wizard step-forcing seam (beside forceThemeForTest): pin a step deterministically + relayout, so
+    // the headless gate can iterate the WizardStep axis (the driven Measure labels now live in MeasureStage).
+    void forceWizardStepForTest (WizardStep step);
 
 private:
     // The reference/schedule store dir: the TestConfig override (#24, hermetic tests), else %APPDATA%/EarsBridge.
@@ -102,27 +114,17 @@ private:
     void applyTitleBarTheme();       // match the OS title bar to the active mode (Windows)
     double activeRate() const;
 
-    // Lays out every left-rail child inside railContent's local coordinates (a single
-    // top-down removeFromTop pass over `width` reduced by the 16px gutter), and returns the
-    // TOTAL content height consumed. resized() calls this to size railContent so the Viewport
-    // can scroll the whole stack — including the tall expanded Advanced section. Pure layout:
-    // it never calls resized(), so it can't trigger a resized() recursion through the Viewport.
-    int layoutRail (int width);
+    // Recompute the wizard view from live truth: snapshot the inputs, run the pure state machine, feed
+    // the spine (always) + show the resolved stage. P1 calls this from the same places updateStartGate is
+    // called (Task 4 folds it into the tick proper). pinnedStep_ carries the user's navigation pin.
+    void refreshWizardView();
+    // Fill a WizardInputs from the existing members (GateSnapshot fields + engine state). Pure reads.
+    WizardInputs snapshotWizardInputs() const;
+    std::optional<WizardStep> pinnedStep_;   // user navigation pin (empty = launch/first-unmet resolution)
 
     Theme theme;
     AudioEngine engine;
     Settings settings;
-
-    // Left configuration rail, wrapped in a Viewport so the (growing) Advanced section is always
-    // reachable by scrolling at any window size — including the default 900x700. railContent holds
-    // every rail child and is sized to the FULL content height by layoutRail(); the Viewport scrolls
-    // it. railContent paints the graphite rail backdrop + the right divider so the rail looks the
-    // same as the old fixed rect (the Viewport itself is transparent and scrolls with the content).
-    struct RailContent : juce::Component {
-        void paint (juce::Graphics&) override;
-    };
-    juce::Viewport railViewport;
-    RailContent    railContent;
 
     // Title bar brand.
     juce::Label brandLabel;
@@ -133,7 +135,6 @@ private:
     juce::Label levelsEyebrow;
     juce::Label levelsHint;              // inline caption: aim Dirac's Master output at the meter target band
     juce::Label diracMicGainHint;        // "add ~+N dB on Dirac's Mic gain" - N = engine.headroomAttenuationDb()
-    juce::Rectangle<int> levelsBounds;   // Levels card backdrop (drawn in paint)
 
     // Input row.
     DevicePicker inputPicker { "INPUT" };
@@ -306,8 +307,8 @@ private:
     // Non-modal "Update available" link shown in the title bar when a newer release exists.
     juce::HyperlinkButton updateLink;
     UpdateChecker         updateChecker;
-    // Advanced disclosure.
-    juce::ToggleButton advancedToggle { "Advanced" };
+    // FIR / options controls (the Advanced disclosure died in the wizard cutover; its CHILDREN live on,
+    // re-homed into stages — complexPhase/firLen/trim to Calibrate, override to Connect, hwDirac to Measure).
     juce::ToggleButton complexPhaseToggle { "Complex (with-phase) FIR" };
     juce::ToggleButton autoUpdateToggle { "Automatically check for updates" };
     // #3: opt-in escape hatch from the Dirac-path Start gates (combine-mode + virtual output).
@@ -404,6 +405,18 @@ private:
     juce::String lastHeartbeatContent_;           // last heartbeat line logged; identical beats are suppressed
     int    heartbeatsSuppressed_ = 0;             // consecutive suppressed identical beats (idle de-dup)
     static constexpr int kHeartbeatKeepalive = 20; // force a beat after this many suppressed (~10 min alive pulse)
+
+    // --- Wizard view layer (P1 Task 3 cutover) ---
+    // The persistent step spine + the single-child stage host, plus the four stages that re-home every
+    // former rail/right-pane control. Declared BEFORE tooltips (§4: destroyed after it) and AFTER the
+    // leaf controls above, so on teardown the stages detach their adopted children safely. Construct-once,
+    // reparent-once: the stages adopt() the existing members in the ctor; navigation is setVisible only.
+    WizardSpine    spine_;
+    StageHost      stageHost_;
+    ConnectStage   connectStage_;
+    CalibrateStage calibrateStage_;
+    LevelStage     levelStage_;
+    MeasureStage   measureStage_;
 
     // Hosts hover tooltips (e.g. the full 32-bit-float explanation on the neutral info line). A single
     // window owned by the component is enough for the whole app; declared last so it is destroyed

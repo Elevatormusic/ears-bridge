@@ -286,8 +286,10 @@ void WizardSpine::setState (const WizardState& ws, const juce::String viewMetas[
         setLabelIfChanged (row->meta, metaText, metaCol);
 
         row->tag.setVisible (isActiveStep);
+        // accent() as small TEXT is only ~3.5:1 in light mode (the whole-app HIG gate flags it); use the
+        // repo's established accent-as-text token infoText() (~4.6:1) — same convention as the update link.
         setLabelIfChanged (row->tag, isActiveStep ? juce::String ("You are here") : juce::String(),
-                           Theme::accent());
+                           Theme::infoText());
 
         // A11y title: "Step N of 4, <name>, <state word>[, <click clause>]".
         juce::String t;
