@@ -2627,21 +2627,31 @@ void MainComponent::timerCallback() {
             const auto outDir = juce::SystemStats::getEnvironmentVariable ("EB_HIG_STATES", {});
             if (outDir.isNotEmpty()) {
             const juce::File dir (outDir);
-            struct St { const char* name; const char* l; const char* r; bool update; bool dots; };
+            // Each scene now carries the wizard STEP it renders (Task 5): the 9 status scenes drive the
+            // MeasureStage's status line + quality dots, so they pin Measure; the 3 stage scenes at the
+            // bottom pin Connect/Calibrate/Level and drive NO labels — the stage at its natural current
+            // state IS the scene. forceWizardStepForTest (below, per-scene) settles the shown stage.
+            struct St { const char* name; const char* l; const char* r; bool update; bool dots; WizardStep step; };
             static const St states[] = {
-                { "idle",        "",                                                                                 "",                                         false, false },
-                { "running",     "Running - waiting for the Dirac sweep...",                                         "",                                         false, false },
-                { "capturing",   "Auto per-ear - capturing the LEFT earcup",                                         "",                                         false, true  },
-                { "clean",       "Sweep captured - safe to run the next sweep",                                      "R clean - SNR 30 dB, IR 56 dB",            false, true  },
-                { "imprecise",   "Noisy capture - Dirac will likely mark it imprecise; raise level or lower noise.", "R marginal SNR 18 dB - re-measure",        false, true  },
-                { "lowlevel",    "Running - level low: turn your amp up to the green band",                          "",                                         false, false },
-                { "error",       "EARS or audio cable disconnected - measurement stopped.",                          "",                                         false, false },
-                { "update+full", "Running - no input signal (check the EARS)",                                       "R weak impulse response - time-variance?", true,  true  },
+                { "idle",        "",                                                                                 "",                                         false, false, WizardStep::Measure },
+                { "running",     "Running - waiting for the Dirac sweep...",                                         "",                                         false, false, WizardStep::Measure },
+                { "capturing",   "Auto per-ear - capturing the LEFT earcup",                                         "",                                         false, true,  WizardStep::Measure },
+                { "clean",       "Sweep captured - safe to run the next sweep",                                      "R clean - SNR 30 dB, IR 56 dB",            false, true,  WizardStep::Measure },
+                { "imprecise",   "Noisy capture - Dirac will likely mark it imprecise; raise level or lower noise.", "R marginal SNR 18 dB - re-measure",        false, true,  WizardStep::Measure },
+                { "lowlevel",    "Running - level low: turn your amp up to the green band",                          "",                                         false, false, WizardStep::Measure },
+                { "error",       "EARS or audio cable disconnected - measurement stopped.",                          "",                                         false, false, WizardStep::Measure },
+                { "update+full", "Running - no input signal (check the EARS)",                                       "R weak impulse response - time-variance?", true,  true,  WizardStep::Measure },
                 // SP3 shape INFO note RENDERED on the per-ear line, worst case: a verified line + peak tail
                 // + the LONGEST note (the drift copy), already run through earStatusLine's #68 length budget
                 // (the note elides with ".." past 78 chars; the full text rides the tooltip). Proves the
                 // populated status line does not clip at the app's minimum width.
-                { "shapenote",   "L: verified - IR-SNR 56 dB, THD 0% (calibration pending) (peak -8 dBFS)  -  res..", "R: verified 54 dB", false, true  },
+                { "shapenote",   "L: verified - IR-SNR 56 dB, THD 0% (calibration pending) (peak -8 dBFS)  -  res..", "R: verified 54 dB", false, true,  WizardStep::Measure },
+                // STAGE SCENES (Task 5): one per non-Measure step at its current state. No driven labels —
+                // the gate MEASURES each hand-laid stage body, so the descriptor element counts differ per
+                // step (this is the "step axis actually probes 4 stages" honesty check). Naming: hig-<ap>-<step>.
+                { "connect",     "", "", false, false, WizardStep::Connect   },
+                { "calibrate",   "", "", false, false, WizardStep::Calibrate },
+                { "level",       "", "", false, false, WizardStep::Level     },
             };
             // APPEARANCE MATRIX (EARS-vendored extension, 2026-07-04): the base sweep only rendered the
             // OS launch mode at normal contrast, but the composited-pixel HIG checks are mode/contrast
@@ -2656,11 +2666,11 @@ void MainComponent::timerCallback() {
                 { "dark-contrast", true,  true  }, { "light-contrast", false, true  },
             };
             const bool wasDark = eb::Theme::dark();
-            // The driven status lines + quality dots now live in MeasureStage (the wizard cutover moved them
-            // off the title bar), so pin the Measure step before the sweep — else the driven labels sit in a
-            // hidden stage and the scenes capture an empty body.
+            // The driven status lines + quality dots live in MeasureStage (the wizard cutover moved them off
+            // the title bar), so each scene now pins ITS OWN step (s.step) inside the loop via
+            // forceWizardStepForTest — the Measure scenes surface the driven labels; the stage scenes render
+            // Connect/Calibrate/Level at their natural state. The pin also settles the shown stage + resizes.
             const auto pinnedWas = pinnedStep_;
-            forceWizardStepForTest (WizardStep::Measure);
             for (auto& ap : appears) {
                 eb::SystemA11y::setForTest (false, ap.hc, ap.hc);   // reduceMotion off; contrast+transparency = hc
                 forceThemeForTest (ap.dark);                        // reapply palette + settle the non-owned labels
@@ -2673,7 +2683,7 @@ void MainComponent::timerCallback() {
                         gradeDotsL_.setMetrics (eb::QualityBand::Green,  "28 dB", eb::QualityBand::Green, "56 dB", eb::QualityBand::Orange, "0.8%");
                         gradeDotsR_.setMetrics (eb::QualityBand::Orange, "18 dB", eb::QualityBand::Green, "52 dB", eb::QualityBand::Green,  "0.3%");
                     } else { gradeDotsL_.clear(); gradeDotsR_.clear(); }
-                    resized();
+                    forceWizardStepForTest (s.step);                // pin + render + show this scene's stage, then resize
                     const juce::String stem = juce::String ("hig-") + ap.tag + "-" + s.name;
                     hig::writeDesignProbe (*getTopLevelComponent(),
                         dir.getChildFile (stem + ".json"),
@@ -2683,7 +2693,9 @@ void MainComponent::timerCallback() {
             // COMPONENT-STATE SCENE: the status sweep above leaves Start DISABLED (its accent fill paints
             // only when enabled), so force it enabled and capture the ready-CTA scene in dark+light. (The
             // former "Advanced expanded" scene died with the disclosure — its children live in the stages,
-            // captured by the per-step gate axis instead.)
+            // captured by the per-step gate axis instead.) The matrix loop left the pin on Level; re-pin
+            // Measure so the ready CTA renders in the measurement-step context, as before Task 5.
+            forceWizardStepForTest (WizardStep::Measure);
             for (const bool dk : { true, false }) {
                 forceThemeForTest (dk);
                 const juce::String mtag = dk ? "dark" : "light";
