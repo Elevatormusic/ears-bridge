@@ -158,8 +158,9 @@ TEST_CASE("ReferenceGradePoller: a clean matching window grades on two consecuti
     // SP2 re-pin: was {Clean, Suspect} - under the FLAT regularization this window's Suspect came
     // from the noise-inflated THD reading Red (the F1 defect escalating via aggregateVerdict's
     // worst-wins). With the banded eps the THD is honest, so the state falls through to what the
-    // (unchanged, pre-deconvolution) sweepSNR says - Marginal at this -25 dBFS + noise floor. The
-    // subject under test is the two-poll DEBOUNCE, so the pin is "a graded verdict", any band.
+    // (unchanged, pre-deconvolution) sweepSNR says - expected Marginal at this -25 dBFS + noise
+    // floor, deliberately NOT pinned: band absolutes belong to the on-device threshold campaign.
+    // The subject under test is the two-poll DEBOUNCE, so the pin is "a graded verdict", any band.
     CHECK ((r2.state == RefMonState::GradedClean || r2.state == RefMonState::GradedMarginal
             || r2.state == RefMonState::GradedSuspect));
     CHECK (r2.state != RefMonState::ReferenceStale);
