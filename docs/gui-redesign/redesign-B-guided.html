@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>EARS Bridge — Redesign B · Guided instrument</title>
+<style>
+  :root{
+    --bg:#1E1E1E; --surface:#2A2A2A; --rail:#232323; --ctrl:#38383A; --ctrl-h:#414146; --bar:#262626; --plot:#202020;
+    --track:#161616; --grid:rgba(255,255,255,.08); --chip-bg:rgba(255,255,255,.10); --info-tx:#5AB7FF; --info-bg:rgba(0,145,255,.16);
+    --sep:rgba(255,255,255,.12); --sep2:rgba(255,255,255,.16);
+    --tx:#FFFFFF; --tx2:rgba(255,255,255,.62); --tx3:rgba(255,255,255,.35); --axis:#98989D;
+    --accent:#0091FF; --accent-fill:#0A6FE0; --accent-h:#1F9DFF; --ok:#30D158; --warn:#FF9E3D; --err:#FF4245;
+    --sans:-apple-system,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#111;font-family:var(--sans);-webkit-font-smoothing:antialiased;color:var(--tx);padding:24px;display:flex;justify-content:center}
+  .win{width:900px;background:var(--bg);border-radius:12px;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.6);border:1px solid rgba(255,255,255,.06)}
+  .bar{height:46px;background:var(--bar);border-bottom:1px solid var(--sep);display:flex;align-items:center;gap:9px;padding:0 18px;font-weight:600;font-size:14px}
+  .bar .g{width:18px;height:18px;border:2.4px solid var(--tx);border-bottom:none;border-radius:11px 11px 0 0;transform:translateY(2px)}
+  .bar .rt{margin-left:auto;font-size:11.5px;font-weight:500;color:var(--tx3)}
+  .body{display:flex;min-height:660px}
+  /* --- the progress SPINE: names the sequence the app actually is --- */
+  .spine{width:220px;background:var(--rail);border-right:1px solid var(--sep);padding:20px 14px}
+  .step{display:flex;gap:12px;padding:11px 10px;border-radius:10px;margin-bottom:4px;cursor:pointer}
+  .step.active{background:var(--surface)}
+  .step .n{width:22px;height:22px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:700;border:1.5px solid var(--sep2);color:var(--tx3)}
+  .step.done .n{background:var(--ok);border-color:transparent;color:#0b2b14}
+  .step.active .n{background:var(--accent-fill);border-color:transparent;color:#fff}
+  .step .tt{font-size:13.5px;font-weight:600;color:var(--tx)}
+  .step .ss{font-size:11.5px;color:var(--tx3);margin-top:2px;line-height:1.35}
+  .step.done .ss{color:var(--tx2)}
+  .spine .foot{margin-top:auto;padding:14px 10px 0;font-size:11px;color:var(--tx3);line-height:1.5}
+  /* --- the STAGE: the active step owns the screen --- */
+  .stage{flex:1;padding:24px 26px 26px;display:flex;flex-direction:column;gap:18px}
+  .h1{font-size:22px;font-weight:600;letter-spacing:-.01em}
+  .lead{font-size:13.5px;color:var(--tx2);margin-top:5px;line-height:1.5}
+  .runrow{display:flex;align-items:center;gap:14px;background:var(--surface);border:1px solid var(--sep);border-radius:12px;padding:14px 16px}
+  .runrow .chip{font-size:11px;font-weight:600;color:var(--ok);background:rgba(48,209,88,.14);padding:4px 10px;border-radius:11px}
+  .runrow .txt{flex:1;font-size:12.5px;color:var(--tx2)}
+  .btn{height:40px;border-radius:20px;border:1px solid var(--sep2);background:var(--ctrl);color:var(--tx);font:inherit;font-size:14px;font-weight:600;padding:0 26px;cursor:pointer}
+  .btn.pri{background:var(--accent-fill);border-color:transparent;color:#fff;padding:0 30px}
+  .eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.09em;color:var(--tx3);text-transform:uppercase;margin-bottom:10px}
+  /* verdict — the hero */
+  .verdicts{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .vcard{background:var(--surface);border:1px solid var(--sep);border-radius:14px;padding:18px 18px 16px;position:relative}
+  .vcard.warnv{border-color:rgba(255,158,61,.4)}
+  .vcard .ear{font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--tx3);text-transform:uppercase}
+  .vcard .word{font-size:30px;font-weight:600;margin:8px 0 4px;letter-spacing:-.015em}
+  .vcard.clean .word{color:var(--ok)} .vcard.warnv .word{color:var(--warn)}
+  .vcard .fix{font-size:13px;color:var(--tx2);line-height:1.5;min-height:40px}
+  .vcard .metrics{display:flex;gap:20px;margin-top:14px;padding-top:13px;border-top:1px solid var(--sep)}
+  .metric{font-size:11px;color:var(--tx3)} .metric b{display:block;font-size:15px;color:var(--tx);font-weight:600;margin-top:2px} .metric.bad b{color:var(--warn)}
+  /* meters */
+  .levels{background:var(--surface);border:1px solid var(--sep);border-radius:12px;padding:14px 16px}
+  .lv{display:flex;align-items:center;gap:10px;margin:8px 0;font-size:11.5px}
+  .lv .lbl{width:26px;color:var(--tx3)}
+  .track{flex:1;height:8px;border-radius:4px;background:var(--track);position:relative;overflow:hidden}
+  .track .band{position:absolute;top:0;bottom:0;background:rgba(48,209,88,.26)}
+  .track .fill{position:absolute;top:0;bottom:0;left:0;border-radius:4px}
+  .lv .db{width:52px;text-align:right;color:var(--tx);font-variant-numeric:tabular-nums}
+</style></head>
+<body><div class="win">
+  <div class="bar"><span class="g"></span>EARS Bridge<span class="rt">v0.4.0</span></div>
+  <div class="body">
+    <!-- SPINE: Setup -> Calibrate -> Measure. Where you are, what's next. -->
+    <div class="spine" style="display:flex;flex-direction:column">
+      <div class="step done"><span class="n">✓</span><div><div class="tt">Setup</div><div class="ss">EARS → VB-Cable · 48 kHz · Auto per-ear</div></div></div>
+      <div class="step done"><span class="n">✓</span><div><div class="tt">Calibrate</div><div class="ss">Both ears loaded · HEQ · matched</div></div></div>
+      <div class="step active"><span class="n">3</span><div><div class="tt">Measure</div><div class="ss">Run Dirac — we grade each ear</div></div></div>
+      <div class="foot">Reference learned from Windows Audio and matched to your last sweep.</div>
+    </div>
+
+    <!-- STAGE: the Measure step, staged generously -->
+    <div class="stage">
+      <div>
+        <div class="h1">Measure</div>
+        <div class="lead">Run Dirac's sweep for each earcup. When a capture completes we grade it and tell you, per ear, whether you can trust it.</div>
+      </div>
+
+      <div class="runrow">
+        <span class="chip">✓ Reference matched</span>
+        <span class="txt">Set Dirac's Master output so the meters below reach the green band, then start.</span>
+        <button class="btn pri">Stop</button>
+      </div>
+
+      <div>
+        <div class="eyebrow">Last sweep · per-ear result</div>
+        <div class="verdicts">
+          <div class="vcard clean">
+            <div class="ear">Left ear</div>
+            <div class="word">Clean</div>
+            <div class="fix">Strong capture — SNR and impulse both healthy. Safe to keep.</div>
+            <div class="metrics"><div class="metric">SNR<b>28 dB</b></div><div class="metric">IR-SNR<b>56 dB</b></div><div class="metric">THD<b>0.8%</b></div></div>
+          </div>
+          <div class="vcard warnv">
+            <div class="ear">Right ear</div>
+            <div class="word">Marginal SNR</div>
+            <div class="fix">Dirac may mark this ear imprecise. Raise your level or lower the room noise, then re-run this earcup.</div>
+            <div class="metrics"><div class="metric bad">SNR<b>18 dB</b></div><div class="metric">IR-SNR<b>52 dB</b></div><div class="metric">THD<b>0.3%</b></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="levels">
+        <div class="eyebrow" style="margin-bottom:4px">Levels — aim for the green band</div>
+        <div class="lv"><span class="lbl">L</span><span class="track"><span class="band" style="left:66%;width:14%"></span><span class="fill" style="width:70%;background:var(--ok)"></span></span><span class="db">−14 dBFS</span></div>
+        <div class="lv"><span class="lbl">R</span><span class="track"><span class="band" style="left:66%;width:14%"></span><span class="fill" style="width:52%;background:var(--warn)"></span></span><span class="db">−24 dBFS</span></div>
+        <div class="lv"><span class="lbl">Out</span><span class="track"><span class="fill" style="width:60%;background:var(--ok)"></span></span><span class="db">−16 dBFS</span></div>
+      </div>
+    </div>
+  </div>
+</div></body></html>

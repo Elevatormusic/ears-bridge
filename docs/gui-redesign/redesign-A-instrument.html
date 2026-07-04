@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>EARS Bridge — Redesign A · Instrument</title>
+<style>
+  :root{
+    --bg:#1E1E1E; --surface:#2A2A2A; --rail:#232323; --ctrl:#38383A; --ctrl-h:#414146; --bar:#262626; --plot:#202020;
+    --track:#161616; --grid:rgba(255,255,255,.08); --chip-bg:rgba(255,255,255,.10); --info-tx:#5AB7FF; --info-bg:rgba(0,145,255,.16);
+    --sep:rgba(255,255,255,.12); --sep2:rgba(255,255,255,.16);
+    --tx:#FFFFFF; --tx2:rgba(255,255,255,.62); --tx3:rgba(255,255,255,.35); --axis:#98989D;
+    --accent:#0091FF; --accent-fill:#0A6FE0; --accent-h:#1F9DFF; --ok:#30D158; --warn:#FF9E3D; --err:#FF4245;
+    --sans:-apple-system,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#111;font-family:var(--sans);-webkit-font-smoothing:antialiased;color:var(--tx);padding:24px;display:flex;justify-content:center}
+  .win{width:900px;background:var(--bg);border-radius:12px;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.6);border:1px solid rgba(255,255,255,.06)}
+  /* --- header: brand + session state + primary action. NOTHING else. --- */
+  .bar{height:60px;background:var(--bar);border-bottom:1px solid var(--sep);display:flex;align-items:center;gap:14px;padding:0 18px}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:600;font-size:15px}
+  .brand .g{width:20px;height:20px;border:2.5px solid var(--tx);border-bottom:none;border-radius:12px 12px 0 0;transform:translateY(2px)}
+  .state{flex:1;text-align:center;color:var(--tx2);font-size:13.5px}
+  .state b{color:var(--tx);font-weight:600}
+  .btn{height:34px;border-radius:17px;border:1px solid var(--sep2);background:var(--ctrl);color:var(--tx);font:inherit;font-size:13.5px;font-weight:600;padding:0 20px;cursor:pointer}
+  .btn.pri{background:var(--accent-fill);border-color:transparent;color:#fff;padding:0 26px}
+  /* --- body --- */
+  .body{display:flex;min-height:640px}
+  .rail{width:262px;background:var(--rail);border-right:1px solid var(--sep);padding:18px 18px 22px}
+  .content{flex:1;padding:16px 18px 20px;display:flex;flex-direction:column;gap:14px}
+  .eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.09em;color:var(--tx3);text-transform:uppercase;margin-bottom:9px}
+  /* rail: setup RECEDES */
+  .setup-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--sep);font-size:12.5px;color:var(--tx2)}
+  .setup-row:last-of-type{border-bottom:none}
+  .setup-row .v{color:var(--tx);font-weight:500}
+  .setup-row .ok{color:var(--ok);font-size:11px}
+  .rail h4{font-size:10.5px;font-weight:700;letter-spacing:.09em;color:var(--tx3);text-transform:uppercase;margin:20px 0 8px}
+  .refbtn{width:100%;height:36px;border-radius:9px;border:1px solid var(--sep2);background:var(--ctrl);color:var(--tx);font:inherit;font-size:13px;font-weight:500;cursor:pointer;margin-top:2px}
+  .refnote{font-size:11.5px;color:var(--ok);margin-top:8px;display:flex;gap:6px;align-items:center}
+  .dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .muted{font-size:11.5px;color:var(--tx3);line-height:1.5;margin-top:14px}
+  /* --- THE MEASUREMENT STAGE (the new hero) --- */
+  .verdicts{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .vcard{background:var(--surface);border:1px solid var(--sep);border-radius:12px;padding:16px 16px 14px;position:relative}
+  .vcard .ear{font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--tx3);text-transform:uppercase}
+  .vcard .word{font-size:26px;font-weight:600;margin:6px 0 2px;letter-spacing:-.01em}
+  .vcard.clean .word{color:var(--ok)}
+  .vcard.warnv .word{color:var(--warn)}
+  .vcard .fix{font-size:12.5px;color:var(--tx2);line-height:1.45;min-height:34px}
+  .vcard .metrics{display:flex;gap:16px;margin-top:12px;padding-top:11px;border-top:1px solid var(--sep)}
+  .metric{font-size:11px;color:var(--tx3)}
+  .metric b{display:block;font-size:14px;color:var(--tx);font-weight:600;margin-top:1px}
+  .metric.bad b{color:var(--warn)}
+  .badge{position:absolute;top:15px;right:15px;font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:11px}
+  .badge.clean{color:var(--ok);background:rgba(48,209,88,.14)}
+  .badge.warnv{color:var(--warn);background:rgba(255,158,61,.16)}
+  /* meters folded into the stage */
+  .levels{background:var(--surface);border:1px solid var(--sep);border-radius:12px;padding:14px 16px}
+  .lv{display:flex;align-items:center;gap:10px;margin:8px 0;font-size:11.5px;color:var(--tx2)}
+  .lv .lbl{width:26px;color:var(--tx3)}
+  .track{flex:1;height:8px;border-radius:4px;background:var(--track);position:relative;overflow:hidden}
+  .track .band{position:absolute;top:0;bottom:0;background:rgba(48,209,88,.26)}
+  .track .fill{position:absolute;top:0;bottom:0;left:0;border-radius:4px}
+  .lv .db{width:52px;text-align:right;color:var(--tx);font-variant-numeric:tabular-nums}
+  /* calibration DEMOTED to a compact strip */
+  .calstrip{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .cal{background:var(--surface);border:1px solid var(--sep);border-radius:12px;padding:12px 14px;display:flex;align-items:center;gap:12px}
+  .cal .plot{width:96px;height:44px;border-radius:6px;background:var(--plot);flex:none;position:relative;overflow:hidden}
+  .cal .plot svg{position:absolute;inset:0}
+  .cal .meta{flex:1;min-width:0}
+  .cal .t{font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--tx3);text-transform:uppercase}
+  .cal .fn{font-size:12px;color:var(--tx);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cal .sub{font-size:11px;color:var(--tx3);margin-top:2px}
+  .chip{font-size:10px;font-weight:600;color:var(--info-tx);background:var(--info-bg);padding:2px 7px;border-radius:9px;flex:none}
+  .caption{grid-column:1/-1;font-size:11.5px;color:var(--tx3);line-height:1.5;margin-top:-2px}
+</style></head>
+<body><div class="win">
+  <!-- HEADER: brand, one plain-language state, one action. The dots are gone. -->
+  <div class="bar">
+    <div class="brand"><span class="g"></span>EARS Bridge</div>
+    <div class="state">Sweep captured — <b>review the result below</b>, then run the next Dirac sweep</div>
+    <button class="btn">Stop</button>
+  </div>
+  <div class="body">
+    <!-- RAIL: setup recedes to a done-state summary; the reference verb is promoted -->
+    <div class="rail">
+      <div class="eyebrow">Setup</div>
+      <div class="setup-row"><span>Input</span><span class="v">miniDSP EARS</span></div>
+      <div class="setup-row"><span>Output</span><span class="v">VB-Audio Cable</span></div>
+      <div class="setup-row"><span>Combine</span><span class="v">Auto per-ear</span></div>
+      <div class="setup-row"><span>Format</span><span class="v">48 kHz · 24-bit</span></div>
+      <div class="setup-row"><span></span><span class="ok">✓ ready for Dirac</span></div>
+
+      <h4>Reference</h4>
+      <button class="refbtn">Re-learn reference</button>
+      <div class="refnote"><span class="dot" style="background:var(--ok)"></span>Learned from Windows Audio · matched</div>
+
+      <div class="muted">Set Dirac's Master output so the meters reach the green band, then run a sweep.</div>
+    </div>
+
+    <!-- CONTENT: the MEASUREMENT stage leads -->
+    <div class="content">
+      <div>
+        <div class="eyebrow">Measurement · this sweep</div>
+        <div class="verdicts">
+          <div class="vcard clean">
+            <span class="badge clean">Clean</span>
+            <div class="ear">Left ear</div>
+            <div class="word">Clean</div>
+            <div class="fix">Strong capture. Safe to keep this result.</div>
+            <div class="metrics">
+              <div class="metric">SNR<b>28 dB</b></div>
+              <div class="metric">IR-SNR<b>56 dB</b></div>
+              <div class="metric">THD<b>0.8%</b></div>
+            </div>
+          </div>
+          <div class="vcard warnv">
+            <span class="badge warnv">Marginal</span>
+            <div class="ear">Right ear</div>
+            <div class="word">Marginal SNR</div>
+            <div class="fix">Dirac may mark this ear imprecise. Raise your level or lower the room noise, then re-run.</div>
+            <div class="metrics">
+              <div class="metric bad">SNR<b>18 dB</b></div>
+              <div class="metric">IR-SNR<b>52 dB</b></div>
+              <div class="metric">THD<b>0.3%</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="levels">
+        <div class="eyebrow" style="margin-bottom:4px">Levels — aim for the green band</div>
+        <div class="lv"><span class="lbl">L</span><span class="track"><span class="band" style="left:66%;width:14%"></span><span class="fill" style="width:70%;background:var(--ok)"></span></span><span class="db">−14 dBFS</span></div>
+        <div class="lv"><span class="lbl">R</span><span class="track"><span class="band" style="left:66%;width:14%"></span><span class="fill" style="width:52%;background:var(--warn)"></span></span><span class="db">−24 dBFS</span></div>
+        <div class="lv"><span class="lbl">Out</span><span class="track"><span class="fill" style="width:60%;background:var(--ok)"></span></span><span class="db">−16 dBFS</span></div>
+      </div>
+
+      <div>
+        <div class="eyebrow">Calibration</div>
+        <div class="calstrip">
+          <div class="cal">
+            <div class="plot"><svg viewBox="0 0 96 44" preserveAspectRatio="none"><path d="M0,30 C24,28 40,26 56,18 C66,13 74,20 96,24" fill="none" stroke="var(--accent)" stroke-width="1.6"/></svg></div>
+            <div class="meta"><div class="t">Left · HEQ</div><div class="fn">L_HEQ_0000000.txt</div><div class="sub">serial 000-0000</div></div>
+            <span class="chip">HEQ</span>
+          </div>
+          <div class="cal">
+            <div class="plot"><svg viewBox="0 0 96 44" preserveAspectRatio="none"><path d="M0,28 C24,27 40,28 56,22 C66,15 74,22 96,26" fill="none" stroke="var(--accent)" stroke-width="1.6"/></svg></div>
+            <div class="meta"><div class="t">Right · HEQ</div><div class="fn">R_HEQ_0000000.txt</div><div class="sub">serial 000-0000</div></div>
+            <span class="chip">HEQ</span>
+          </div>
+          <div class="caption">HEQ curves include a mild bass boost — in Dirac, start from a flat bass target and adjust to taste.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div></body></html>
