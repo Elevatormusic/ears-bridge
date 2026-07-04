@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>EARS Bridge — First run (Calibrate step, empty)</title>
+<style>
+  :root{
+    --bg:#1E1E1E; --surface:#2A2A2A; --rail:#232323; --ctrl:#38383A; --ctrl-h:#414146; --bar:#262626; --plot:#202020;
+    --track:#161616; --grid:rgba(255,255,255,.08); --chip-bg:rgba(255,255,255,.10); --info-tx:#5AB7FF; --info-bg:rgba(0,145,255,.16);
+    --sep:rgba(255,255,255,.12); --sep2:rgba(255,255,255,.16);
+    --tx:#FFFFFF; --tx2:rgba(255,255,255,.62); --tx3:rgba(255,255,255,.35); --axis:#98989D;
+    --accent:#0091FF; --accent-fill:#0A6FE0; --accent-h:#1F9DFF; --ok:#30D158; --warn:#FF9E3D; --err:#FF4245;
+    --sans:-apple-system,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,Roboto,sans-serif;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{ background:#111; color:var(--tx); font-family:var(--sans); -webkit-font-smoothing:antialiased; min-height:100vh; display:flex; align-items:flex-start; justify-content:center; padding:40px 20px; }
+  .num{ font-variant-numeric:tabular-nums; }
+  .window{ width:900px; background:var(--bg); border-radius:12px; overflow:hidden; border:1px solid rgba(255,255,255,.08); box-shadow:0 24px 70px rgba(0,0,0,.6); }
+  .titlebar{ height:44px; background:var(--bar); border-bottom:1px solid var(--sep); display:flex; align-items:center; padding:0 16px; gap:12px; }
+  .traffic{ display:flex; gap:8px; } .traffic i{ width:12px; height:12px; border-radius:50%; display:block; }
+  .traffic .r{ background:#FF5F57; } .traffic .y{ background:#FEBC2E; } .traffic .g{ background:#28C840; }
+  .brand{ display:flex; align-items:center; gap:8px; margin-left:4px; }
+  .glyph{ width:20px; height:20px; display:block; }
+  .app{ font-size:13px; font-weight:600; letter-spacing:.2px; }
+  .spacer{ flex:1; }
+  .fmt{ display:flex; align-items:center; gap:8px; color:var(--tx2); font-size:12px; }
+  .fmt .dot{ width:3px; height:3px; border-radius:50%; background:var(--tx3); }
+
+  .body{ display:grid; grid-template-columns:248px 1fr; min-height:560px; }
+  .spine{ background:var(--rail); border-right:1px solid var(--sep); padding:22px 16px 20px; }
+  .spine .eyebrow{ font-size:11px; font-weight:600; letter-spacing:.6px; text-transform:uppercase; color:var(--tx3); padding:0 8px; margin-bottom:14px; }
+  .steps{ list-style:none; margin:0; padding:0; }
+  .step{ display:flex; gap:12px; padding:10px 8px; border-radius:10px; align-items:flex-start; }
+  .step + .step{ margin-top:2px; }
+  .step.active{ background:var(--ctrl); }
+  .step.clickable{ cursor:pointer; } .step.clickable:hover{ background:rgba(255,255,255,.04); }
+  .rail-node{ display:flex; flex-direction:column; align-items:center; }
+  .node{ width:24px; height:24px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; color:var(--tx2); background:var(--ctrl); border:1px solid var(--sep2); }
+  .step.done .node{ background:var(--ok); border-color:var(--ok); color:#0B2E15; }
+  .step.active .node{ background:var(--accent-fill); border-color:var(--accent-fill); color:#fff; }
+  .step.upcoming .node{ color:var(--tx3); }
+  .connector{ width:2px; flex:1; min-height:16px; background:var(--sep); margin:2px 0; }
+  .step.done .connector{ background:rgba(48,209,88,.45); }
+  .step-body{ min-width:0; padding-top:1px; }
+  .step-title{ font-size:13.5px; font-weight:500; color:var(--tx); line-height:1.3; }
+  .step.upcoming .step-title{ color:var(--tx3); }
+  .step-meta{ font-size:11.5px; color:var(--tx3); margin-top:2px; line-height:1.35; }
+  .step.done .step-meta{ color:var(--tx2); }
+  .step-tag{ font-size:11px; color:var(--accent); }
+  .spine-foot{ margin-top:22px; padding:12px 8px 0; border-top:1px solid var(--sep); }
+  .spine-foot .ref{ display:flex; align-items:center; justify-content:space-between; font-size:11.5px; color:var(--tx3); }
+
+  .stage{ padding:26px 30px 30px; }
+  .stage-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+  .stage-eyebrow{ font-size:11px; font-weight:600; letter-spacing:.6px; text-transform:uppercase; color:var(--accent); }
+  .stage-title{ font-size:21px; font-weight:600; letter-spacing:-.2px; margin:4px 0 0; }
+  .stage-sub{ font-size:13px; color:var(--tx2); margin:5px 0 0; max-width:450px; line-height:1.45; }
+  .btn{ font-family:var(--sans); font-size:13px; font-weight:500; border-radius:999px; padding:9px 18px; cursor:pointer; border:1px solid transparent; white-space:nowrap; display:inline-flex; align-items:center; gap:7px; line-height:1; }
+  .btn.primary{ background:var(--accent-fill); color:#fff; }
+  .btn.primary.disabled{ background:var(--ctrl); color:var(--tx3); border-color:var(--sep2); cursor:default; }
+  .btn.secondary{ background:var(--ctrl); color:var(--tx); border-color:var(--sep2); }
+  .btn.secondary:hover{ background:var(--ctrl-h); }
+  .run-cluster{ display:flex; flex-direction:column; align-items:flex-end; gap:8px; }
+  .run-note{ font-size:11px; color:var(--tx3); }
+
+  /* drop zones */
+  .drop-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:24px; }
+  .drop{ background:rgba(255,255,255,.02); border:1.5px dashed var(--sep2); border-radius:12px; padding:24px 18px 22px; text-align:center; display:flex; flex-direction:column; align-items:center; }
+  .drop .dz-ear{ font-size:11.5px; font-weight:600; letter-spacing:.5px; text-transform:uppercase; color:var(--tx2); margin-bottom:14px; }
+  .dz-ico{ width:36px; height:36px; color:var(--tx3); margin-bottom:12px; }
+  .dz-main{ font-size:14px; color:var(--tx); }
+  .dz-sub{ font-size:11.5px; color:var(--tx3); margin-top:4px; }
+  .drop .btn{ margin-top:15px; }
+  .dz-req{ margin-top:14px; font-size:11px; color:var(--tx3); display:inline-flex; align-items:center; gap:6px; }
+  .dz-req .o{ width:6px; height:6px; border-radius:50%; border:1.4px solid var(--tx3); }
+
+  .help{ display:flex; gap:9px; align-items:flex-start; margin-top:16px; background:var(--info-bg); border-radius:8px; padding:9px 12px; }
+  .help svg{ width:15px; height:15px; flex-shrink:0; margin-top:1px; }
+  .help span{ font-size:12px; line-height:1.45; color:var(--info-tx); }
+</style>
+</head>
+<body>
+  <main class="window" role="application" aria-label="EARS Bridge measurement wizard">
+    <div class="titlebar">
+      <div class="traffic" aria-hidden="true"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="brand"><svg class="glyph" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 12 A7 7 0 0 1 17 12" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><rect x="2.2" y="11.4" width="3.6" height="6" rx="1.6" fill="#fff"/><rect x="14.2" y="11.4" width="3.6" height="6" rx="1.6" fill="#fff"/></svg><span class="app">EARS Bridge</span></div>
+      <div class="spacer"></div>
+      <div class="fmt num"><span>48 kHz</span><span class="dot"></span><span>24-bit</span><span class="dot"></span><span>Auto per-ear</span></div>
+    </div>
+
+    <div class="body">
+      <nav class="spine" aria-label="Setup steps">
+        <div class="eyebrow">Calibration flow</div>
+        <ol class="steps">
+          <li class="step done clickable" tabindex="0" role="button" aria-label="Step 1, Connect, completed. Click to change devices">
+            <div class="rail-node"><span class="node" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 13 13"><path d="M2.5 6.8 L5 9.3 L10.5 3.5" fill="none" stroke="#0B2E15" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="connector"></span></div>
+            <div class="step-body"><div class="step-title">Connect</div><div class="step-meta">miniDSP EARS → VB-Audio Cable</div></div>
+          </li>
+          <li class="step active" tabindex="0" aria-current="step" role="button" aria-label="Step 2, Calibrate, current step">
+            <div class="rail-node"><span class="node" aria-hidden="true">2</span><span class="connector"></span></div>
+            <div class="step-body"><div class="step-title">Calibrate</div><div class="step-meta">Load both ear files</div><div class="step-tag">You are here</div></div>
+          </li>
+          <li class="step upcoming" aria-disabled="true">
+            <div class="rail-node"><span class="node" aria-hidden="true">3</span><span class="connector"></span></div>
+            <div class="step-body"><div class="step-title">Level</div><div class="step-meta">Set the capture level</div></div>
+          </li>
+          <li class="step upcoming" aria-disabled="true">
+            <div class="rail-node"><span class="node" aria-hidden="true">4</span></div>
+            <div class="step-body"><div class="step-title">Measure</div><div class="step-meta">Grade each ear</div></div>
+          </li>
+        </ol>
+        <div class="spine-foot"><div class="ref"><span>Reference</span><span>learned at Measure</span></div></div>
+      </nav>
+
+      <section class="stage" aria-labelledby="stageTitle">
+        <div class="stage-head">
+          <div>
+            <div class="stage-eyebrow">Step 2 of 4</div>
+            <h1 class="stage-title" id="stageTitle">Load your ear calibrations</h1>
+            <p class="stage-sub">Drop each earcup’s calibration file — the per-ear FIR that corrects the measurement. Both are needed before you can measure.</p>
+          </div>
+          <div class="run-cluster">
+            <button class="btn primary disabled" type="button" aria-disabled="true">Continue to level</button>
+            <span class="run-note">Load both ears to continue</span>
+          </div>
+        </div>
+
+        <div class="drop-grid">
+          <div class="drop">
+            <div class="dz-ear">Left ear</div>
+            <svg class="dz-ico" viewBox="0 0 36 36" aria-hidden="true"><path d="M18 4 V22 M11 15 L18 22 L25 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 26 V29 A2 2 0 0 0 9 31 H27 A2 2 0 0 0 29 29 V26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <div class="dz-main">Drop the left <b>.txt</b> here</div>
+            <div class="dz-sub">miniDSP HEQ or IDF file</div>
+            <button class="btn secondary" type="button">Browse…</button>
+            <div class="dz-req"><span class="o"></span>Required to start</div>
+          </div>
+          <div class="drop">
+            <div class="dz-ear">Right ear</div>
+            <svg class="dz-ico" viewBox="0 0 36 36" aria-hidden="true"><path d="M18 4 V22 M11 15 L18 22 L25 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 26 V29 A2 2 0 0 0 9 31 H27 A2 2 0 0 0 29 29 V26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <div class="dz-main">Drop the right <b>.txt</b> here</div>
+            <div class="dz-sub">miniDSP HEQ or IDF file</div>
+            <button class="btn secondary" type="button">Browse…</button>
+            <div class="dz-req"><span class="o"></span>Required to start</div>
+          </div>
+        </div>
+
+        <div class="help">
+          <svg viewBox="0 0 15 15" aria-hidden="true"><circle cx="7.5" cy="7.5" r="6.6" fill="none" stroke="var(--info-tx)" stroke-width="1.3"/><circle cx="7.5" cy="4.6" r="1" fill="var(--info-tx)"/><rect x="6.7" y="6.6" width="1.6" height="4.6" rx="0.8" fill="var(--info-tx)"/></svg>
+          <span>Use HEQ files for headphones (IDF for IEMs). Each file names its earcup and serial — we match them to left and right automatically.</span>
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
