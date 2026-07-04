@@ -115,4 +115,32 @@ struct SpikeReport { bool found = false; float hz = 0.0f, prominenceDb = 0.0f; }
 // out of scope (deferred to high-order Farina harmonics - see spec 4.D5b scope note).
 [[nodiscard]] SpikeReport detectResonance (const WindowedSpectrum& ws);
 
+struct HumReport  { bool found=false; float baseHz=0.0f, prominenceDb=0.0f; int lines=0; };
+// D5a (spec 4.D5a). Mains hum in the PRE-SWEEP noise region (NOT the windowed IR - the spec's
+// placement argument: the correction sweep is a level tone, hum rides the leading silence). Welch
+// PSD (8192-sample Hann segments, 50% overlap, averaged power); for each mains base in {50, 60} Hz
+// count harmonics n=1..8 whose peak power within +/-0.5% of n*base stands >= 10 dB over the local
+// median (a +/-10 Hz window EXCLUDING the +/-1% core). found when a base carries >= 2 such lines;
+// the base with more lines wins, prominence = its strongest line. Refuses len < 16384 (too short
+// for the Welch average). PROVISIONAL 10 dB threshold pending the on-device campaign (#54C).
+[[nodiscard]] HumReport detectMainsHum (const float* noise, int len, double fs);
+
+// D6 (spec 4.D6). Clock-skew lobe width: the REW signature of sample-rate drift between the
+// capture and reference clocks is a smeared main lobe (a sharp arrival spreads). -6 dB envelope
+// width in samples: env(i) = max|ir| over [i-4..i+4] (the envelope bridges the oscillatory lobe's
+// zero crossings - a raw |ir| walk would under-read smeared REAL IRs), walk out from the peak
+// both ways while env >= 0.5*peak, then SUBTRACT the moving-max's fixed 2*4-sample dilation so
+// the width stays calibrated to true -6 dB widths. Returns -1 on null/empty input. A clean IR
+// reads a few samples; a drifted one reads several times wider. PROVISIONAL width line pending #54C.
+[[nodiscard]] float mainLobeWidthSamples (const float* ir, int n);
+
+struct StepReport { bool found=false; float stepDb=0.0f; double atSeconds=0.0; };
+// D7 (spec 4.D7). Level step - the Muller-Massarani time-variance class (a mid-sweep gain jump,
+// e.g. an ASRC re-lock or AGC kick). 1024-sample block RMS of capture and reference; ratio in dB
+// over blocks where the reference is active (RMS > 1e-3, ~-60 dBFS); at each block boundary with
+// >= 6 active blocks each side, diff = median(ratio ahead) - median(ratio behind); flag the max
+// |diff| >= 2.0 dB (a slow ramp spreads the diff under threshold). atSeconds = boundary*1024/fs.
+// PROVISIONAL 2 dB step threshold pending the on-device campaign (#54C).
+[[nodiscard]] StepReport detectLevelStep (const float* capture, const float* reference, int n, double fs);
+
 } // namespace eb

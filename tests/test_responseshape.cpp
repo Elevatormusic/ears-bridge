@@ -283,3 +283,60 @@ TEST_CASE("detectResonance: narrow high-Q spike fires; wide bump does not") {
     CHECK_FALSE (eb::detectResonance (bump).found);
     CHECK_FALSE (eb::detectResonance (base).found);
 }
+
+// SP3 Task 4: D5a mains hum + D6 clock-skew lobe width + D7 level step.
+TEST_CASE("detectMainsHum: 60 Hz grid with 2+ lines fires; single line / off-grid / noise stay silent") {
+    const int len = 1 << 16; const double fs = 48000.0;      // ~1.37 s of leading noise
+    auto noise = [&] (unsigned seed) {
+        std::vector<float> x ((size_t) len, 0.0f);
+        for (auto& v : x) { seed = seed * 1664525u + 1013904223u; v = 2e-4f * (((float)(seed >> 9) / (float)(1u << 23)) - 0.5f); }
+        return x;
+    };
+    auto addTone = [&] (std::vector<float>& x, double hz, float amp) {
+        for (int i = 0; i < len; ++i) x[(size_t) i] += amp * (float) std::sin (2.0 * kPiR * hz * i / fs);
+    };
+    auto hum = noise (3u); addTone (hum, 60.0, 3e-3f); addTone (hum, 180.0, 1.5e-3f);
+    auto r = eb::detectMainsHum (hum.data(), len, fs);
+    CHECK (r.found); CHECK (r.baseHz == 60.0f); CHECK (r.lines >= 2);
+    auto one = noise (4u); addTone (one, 60.0, 3e-3f);       // one line only: label needs >= 2
+    CHECK_FALSE (eb::detectMainsHum (one.data(), len, fs).found);
+    auto off = noise (5u); addTone (off, 173.0, 3e-3f); addTone (off, 346.0, 1.5e-3f);
+    CHECK_FALSE (eb::detectMainsHum (off.data(), len, fs).found);  // off-grid tones are not mains
+    auto pure = noise (6u);
+    CHECK_FALSE (eb::detectMainsHum (pure.data(), len, fs).found);
+    CHECK_FALSE (eb::detectMainsHum (hum.data(), 8000, fs).found); // too short for Welch -> refuse
+}
+
+TEST_CASE("mainLobeWidthSamples: sharp lobe reads narrow; a stretched lobe reads ~5x wider") {
+    const int n = 1 << 14;
+    auto gauss = [&] (double sigma) {
+        std::vector<float> x ((size_t) n, 0.0f);
+        for (int i = 0; i < n; ++i) {
+            const double d = (double) i - 500.0;
+            x[(size_t) i] = (float) std::exp (-0.5 * d * d / (sigma * sigma));
+        }
+        return x;
+    };
+    const float wSharp = eb::mainLobeWidthSamples (gauss (2.0).data(), n);
+    const float wWide  = eb::mainLobeWidthSamples (gauss (10.0).data(), n);
+    CHECK (wSharp > 0.0f);
+    CHECK (wSharp < 10.0f);                                  // the D6 provisional line: sharp = clean
+    CHECK (wWide  > 10.0f);
+    CHECK (wWide / wSharp > 3.0f); CHECK (wWide / wSharp < 8.0f);   // ~5x, generous
+}
+
+TEST_CASE("detectLevelStep: a +6 dB mid-sweep step is found; clean and slow drift are not") {
+    const int n = 1 << 17; const double fs = 48000.0;
+    std::vector<float> ref ((size_t) n, 0.0f);
+    for (int i = 0; i < n; ++i) ref[(size_t) i] = 0.3f * (float) std::sin (0.02 * i + 3e-7 * (double) i * i);
+    auto stepped = ref;
+    for (int i = n / 2; i < n; ++i) stepped[(size_t) i] *= 2.0f;   // +6.02 dB from midpoint
+    auto r = eb::detectLevelStep (stepped.data(), ref.data(), n, fs);
+    CHECK (r.found);
+    CHECK (r.stepDb > 4.5f); CHECK (r.stepDb < 7.5f);
+    CHECK (std::abs (r.atSeconds - (n / 2) / fs) < 0.25);
+    CHECK_FALSE (eb::detectLevelStep (ref.data(), ref.data(), n, fs).found);
+    auto ramp = ref;                                          // +/-1 dB slow ramp: not a step
+    for (int i = 0; i < n; ++i) ramp[(size_t) i] *= std::pow (10.0f, (1.0f * i / n - 0.5f) / 20.0f);
+    CHECK_FALSE (eb::detectLevelStep (ramp.data(), ref.data(), n, fs).found);
+}

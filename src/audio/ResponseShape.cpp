@@ -470,4 +470,202 @@ SpikeReport detectResonance (const WindowedSpectrum& ws) {
     return out;
 }
 
+// D5a - Mains hum (spec 4.D5a). Named provisional constants (all PROVISIONAL pending #54C).
+namespace {
+constexpr int    kHumSegLen        = 8192;     // Welch Hann segment (spec 4.D5a)
+constexpr int    kHumMinLen        = 16384;    // refuse below: too short to average two segments
+constexpr int    kHumMaxHarmonic   = 8;        // count harmonics n = 1..8 of the base
+constexpr double kHumPeakTolFrac   = 0.005;    // peak search within +/-0.5% of n*base
+constexpr double kHumCoreExclFrac  = 0.01;     // local-median window EXCLUDES the +/-1% line core
+constexpr double kHumMedianHalfHz  = 10.0;     // ... over a +/-10 Hz neighbourhood
+constexpr double kHumProminenceDb  = 10.0;     // a line counts at >= 10 dB over the local median
+constexpr int    kHumMinLines      = 2;        // >= 2 lines to label a base as mains
+const double     kHumBasesHz[]     = { 50.0, 60.0 };   // the two mains grids
+}
+
+HumReport detectMainsHum (const float* noise, int len, double fs) {
+    HumReport out;
+    if (noise == nullptr || len < kHumMinLen || fs <= 0.0) return out;
+
+    // --- Welch PSD: 8192-sample Hann segments, 50% overlap, averaged power (spec 4.D5a).
+    const int seg  = kHumSegLen;
+    const int hop  = seg / 2;                                 // 50% overlap
+    const int half = seg / 2;
+    std::vector<double> hann ((size_t) seg, 0.0);
+    double winPow = 0.0;                                       // sum w^2, for the PSD normalization
+    for (int i = 0; i < seg; ++i) {
+        hann[(size_t) i] = 0.5 * (1.0 - std::cos (2.0 * kPiD * (double) i / (double) (seg - 1)));
+        winPow += hann[(size_t) i] * hann[(size_t) i];
+    }
+    juce::dsp::FFT fft (orderForR (seg));                      // seg is a power of two
+    std::vector<float> in ((size_t) seg * 2, 0.0f), sp ((size_t) seg * 2, 0.0f);
+    std::vector<double> psd ((size_t) half + 1, 0.0);
+    int nSeg = 0;
+    for (int start = 0; start + seg <= len; start += hop) {
+        std::fill (in.begin(), in.end(), 0.0f);
+        for (int i = 0; i < seg; ++i)
+            in[(size_t) i * 2] = (float) ((double) noise[(size_t) (start + i)] * hann[(size_t) i]);
+        fft.perform (reinterpret_cast<juce::dsp::Complex<float>*> (in.data()),
+                     reinterpret_cast<juce::dsp::Complex<float>*> (sp.data()), false);
+        for (int k = 0; k <= half; ++k) {
+            const double re = sp[(size_t) k * 2], im = sp[(size_t) k * 2 + 1];
+            psd[(size_t) k] += re * re + im * im;              // accumulate power; scale is common
+        }
+        ++nSeg;
+    }
+    if (nSeg < 2) return out;                                  // Welch needs an average
+    const double normDen = (double) nSeg * winPow * fs;        // common PSD scale (cancels in dB)
+    for (auto& p : psd) p = std::max (p / normDen, 1e-30);
+
+    const double binHz = fs / (double) seg;
+
+    // Peak power in the FFT bins within +/-tolFrac of a target frequency.
+    auto peakNear = [&] (double targetHz, double tolFrac) {
+        const int kLo = std::max (1,    (int) std::floor (targetHz * (1.0 - tolFrac) / binHz));
+        const int kHi = std::min (half, (int) std::ceil  (targetHz * (1.0 + tolFrac) / binHz));
+        double pk = 0.0;
+        for (int k = kLo; k <= kHi; ++k) pk = std::max (pk, psd[(size_t) k]);
+        return pk;
+    };
+    // Local median over +/-10 Hz EXCLUDING the +/-1% line core (so the line does not bias its own
+    // floor estimate). Returns < 0 when the neighbourhood is empty (skip that harmonic).
+    auto localMedian = [&] (double targetHz) {
+        const int kA = std::max (1,    (int) std::floor ((targetHz - kHumMedianHalfHz) / binHz));
+        const int kB = std::min (half, (int) std::ceil  ((targetHz + kHumMedianHalfHz) / binHz));
+        const int kCoreLo = (int) std::floor (targetHz * (1.0 - kHumCoreExclFrac) / binHz);
+        const int kCoreHi = (int) std::ceil  (targetHz * (1.0 + kHumCoreExclFrac) / binHz);
+        std::vector<double> nb;
+        for (int k = kA; k <= kB; ++k)
+            if (k < kCoreLo || k > kCoreHi) nb.push_back (psd[(size_t) k]);
+        if (nb.empty()) return -1.0;
+        std::nth_element (nb.begin(), nb.begin() + (std::ptrdiff_t) (nb.size() / 2), nb.end());
+        return nb[nb.size() / 2];
+    };
+
+    // For each mains base, count harmonics whose line stands >= 10 dB over the local median.
+    for (const double base : kHumBasesHz) {
+        int lines = 0; double strongestDb = 0.0;
+        for (int nH = 1; nH <= kHumMaxHarmonic; ++nH) {
+            const double fH = base * nH;
+            if (fH >= fs * 0.5) break;
+            const double med = localMedian (fH);
+            if (med <= 0.0) continue;
+            const double pk = peakNear (fH, kHumPeakTolFrac);
+            const double promDb = 10.0 * std::log10 (pk / med);
+            if (promDb >= kHumProminenceDb) { ++lines; strongestDb = std::max (strongestDb, promDb); }
+        }
+        // The base with MORE lines wins; report its strongest line's prominence (spec 4.D5a).
+        if (lines >= kHumMinLines && lines > out.lines) {
+            out.found        = true;
+            out.baseHz       = (float) base;
+            out.lines        = lines;
+            out.prominenceDb = (float) strongestDb;
+        }
+    }
+    return out;
+}
+
+// D6 - Clock-skew lobe width (spec 4.D6). Named provisional constants (PROVISIONAL pending #54C).
+namespace {
+constexpr int    kEnvHalfWin    = 4;      // envelope = moving max over +/-4 samples
+constexpr double kLobeDropFrac  = 0.5;    // the -6 dB points (0.5 * peak) bound the main lobe
+}
+
+float mainLobeWidthSamples (const float* ir, int n) {
+    if (ir == nullptr || n <= 0) return -1.0f;
+
+    // Envelope: moving max of |ir| over +/-kEnvHalfWin samples (spec 4.D6). The envelope is
+    // LOAD-BEARING for production: a real headphone IR is OSCILLATORY, so a raw |ir| walk stops
+    // at the first zero-crossing dip near the peak - clock-skew smear would never read wider and
+    // the detector would be blind on real IRs (even though a raw walk passes Gaussian synthetics).
+    auto env = [&] (int i) {
+        float e = 0.0f;
+        for (int j = std::max (0, i - kEnvHalfWin); j <= std::min (n - 1, i + kEnvHalfWin); ++j)
+            e = std::max (e, std::abs (ir[j]));
+        return e;
+    };
+
+    int peak = 0; float peakMag = 0.0f;
+    for (int i = 0; i < n; ++i) { const float m = std::abs (ir[i]); if (m > peakMag) { peakMag = m; peak = i; } }
+    if (! (peakMag > 0.0f)) return -1.0f;
+
+    const float envPk = env (peak);
+    const float thr   = (float) kLobeDropFrac * envPk;
+
+    // Walk out from the peak both ways while the envelope holds >= the -6 dB threshold.
+    int left = peak, right = peak;
+    while (left  > 0     && env (left  - 1) >= thr) --left;
+    while (right < n - 1 && env (right + 1) >= thr) ++right;
+
+    // The moving-max DILATES every width by exactly 2*kEnvHalfWin (env(i) still sees a >= -6 dB
+    // sample up to kEnvHalfWin past each true edge) - a fixed, KNOWN bias, so subtract it. This
+    // keeps the absolute 10-sample provisional threshold calibrated to true -6 dB widths.
+    return (float) std::max (1, (right - left + 1) - 2 * kEnvHalfWin);
+}
+
+// D7 - Level step (spec 4.D7). Named provisional constants (all PROVISIONAL pending #54C).
+namespace {
+constexpr int    kStepBlock       = 1024;    // block-RMS window (spec 4.D7)
+constexpr double kStepActiveRms   = 1e-3;    // reference block active above ~-60 dBFS
+constexpr int    kStepHalfBlocks  = 6;       // >= 6 active blocks EACH side of a boundary
+constexpr double kStepThreshDb    = 2.0;     // flag a median split >= 2 dB (a slow ramp stays under)
+}
+
+StepReport detectLevelStep (const float* capture, const float* reference, int n, double fs) {
+    StepReport out;
+    if (capture == nullptr || reference == nullptr || n <= 0 || fs <= 0.0) return out;
+
+    const int nBlk = n / kStepBlock;
+    if (nBlk < 2 * kStepHalfBlocks) return out;
+
+    // Per-block RMS of both signals; the dB ratio is defined only where the reference is active.
+    std::vector<double> ratioDb ((size_t) nBlk, 0.0);
+    std::vector<char>   active ((size_t) nBlk, 0);
+    for (int b = 0; b < nBlk; ++b) {
+        double eC = 0.0, eR = 0.0;
+        const int base = b * kStepBlock;
+        for (int i = 0; i < kStepBlock; ++i) {
+            const double c = capture[(size_t) (base + i)], r = reference[(size_t) (base + i)];
+            eC += c * c; eR += r * r;
+        }
+        const double rmsC = std::sqrt (eC / kStepBlock), rmsR = std::sqrt (eR / kStepBlock);
+        if (rmsR > kStepActiveRms) {
+            active[(size_t) b]  = 1;
+            ratioDb[(size_t) b] = 20.0 * std::log10 (std::max (rmsC, 1e-30) / rmsR);
+        }
+    }
+
+    // Median of the active ratios over a block range [lo, hi]; < -1e29 sentinel = no active blocks.
+    auto medianRange = [&] (int lo, int hi) {
+        std::vector<double> v;
+        for (int b = lo; b <= hi; ++b) if (active[(size_t) b]) v.push_back (ratioDb[(size_t) b]);
+        if (v.empty()) return -1e30;
+        std::nth_element (v.begin(), v.begin() + (std::ptrdiff_t) (v.size() / 2), v.end());
+        return v[v.size() / 2];
+    };
+    auto countActive = [&] (int lo, int hi) {
+        int c = 0; for (int b = lo; b <= hi; ++b) c += active[(size_t) b]; return c;
+    };
+
+    // Walk every internal boundary b: split the ratio into the six blocks behind vs ahead and take
+    // the median difference. A true step keeps the split near its full height; a slow ramp bleeds
+    // across the window so its median split stays below the 2 dB line (the negative test pins it).
+    double bestAbs = 0.0; int bestB = -1; double bestDiff = 0.0;
+    for (int b = kStepHalfBlocks; b <= nBlk - kStepHalfBlocks; ++b) {
+        if (countActive (b - kStepHalfBlocks, b - 1) < kStepHalfBlocks) continue;
+        if (countActive (b, b + kStepHalfBlocks - 1) < kStepHalfBlocks) continue;
+        const double mAhead  = medianRange (b, b + kStepHalfBlocks - 1);
+        const double mBehind = medianRange (b - kStepHalfBlocks, b - 1);
+        const double diff = mAhead - mBehind;
+        if (std::abs (diff) > bestAbs) { bestAbs = std::abs (diff); bestB = b; bestDiff = diff; }
+    }
+
+    if (bestB >= 0 && bestAbs >= kStepThreshDb) {
+        out.found     = true;
+        out.stepDb    = (float) bestDiff;
+        out.atSeconds = (double) bestB * kStepBlock / fs;
+    }
+    return out;
+}
+
 } // namespace eb
