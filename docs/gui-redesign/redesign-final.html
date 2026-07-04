@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>EARS Bridge — Redesign (W2 spine + SP3 hybrid verdict)</title>
+<style>
+  :root{
+    --bg:#1E1E1E; --surface:#2A2A2A; --rail:#232323; --ctrl:#38383A; --ctrl-h:#414146; --bar:#262626; --plot:#202020;
+    --track:#161616; --grid:rgba(255,255,255,.08); --chip-bg:rgba(255,255,255,.10); --info-tx:#5AB7FF; --info-bg:rgba(0,145,255,.16);
+    --sep:rgba(255,255,255,.12); --sep2:rgba(255,255,255,.16);
+    --tx:#FFFFFF; --tx2:rgba(255,255,255,.62); --tx3:rgba(255,255,255,.35); --axis:#98989D;
+    --accent:#0091FF; --accent-fill:#0A6FE0; --accent-h:#1F9DFF; --ok:#30D158; --warn:#FF9E3D; --err:#FF4245;
+    --sans:-apple-system,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,Roboto,sans-serif;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background:#111; color:var(--tx); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    min-height:100vh; display:flex; align-items:flex-start; justify-content:center;
+    padding:40px 20px;
+  }
+  .num{ font-variant-numeric:tabular-nums; }
+
+  .window{
+    width:900px; background:var(--bg); border-radius:12px; overflow:hidden;
+    border:1px solid rgba(255,255,255,.08);
+    box-shadow:0 24px 70px rgba(0,0,0,.6), 0 2px 6px rgba(0,0,0,.5);
+  }
+  .titlebar{ height:44px; background:var(--bar); border-bottom:1px solid var(--sep); display:flex; align-items:center; padding:0 16px; gap:12px; }
+  .traffic{ display:flex; gap:8px; }
+  .traffic i{ width:12px; height:12px; border-radius:50%; display:block; }
+  .traffic .r{ background:#FF5F57; } .traffic .y{ background:#FEBC2E; } .traffic .g{ background:#28C840; }
+  .titlebar .brand{ display:flex; align-items:center; gap:8px; margin-left:4px; }
+  .glyph{ width:20px; height:20px; display:block; }
+  .titlebar .app{ font-size:13px; font-weight:600; letter-spacing:.2px; }
+  .titlebar .spacer{ flex:1; }
+  .fmt{ display:flex; align-items:center; gap:8px; color:var(--tx2); font-size:12px; }
+  .fmt .dot{ width:3px; height:3px; border-radius:50%; background:var(--tx3); }
+
+  .body{ display:grid; grid-template-columns:248px 1fr; min-height:560px; }
+
+  /* spine */
+  .spine{ background:var(--rail); border-right:1px solid var(--sep); padding:22px 16px 20px; }
+  .spine .eyebrow{ font-size:11px; font-weight:600; letter-spacing:.6px; text-transform:uppercase; color:var(--tx3); padding:0 8px; margin-bottom:14px; }
+  .steps{ list-style:none; margin:0; padding:0; position:relative; }
+  .step{ display:flex; gap:12px; padding:10px 8px; border-radius:10px; cursor:pointer; position:relative; align-items:flex-start; }
+  .step + .step{ margin-top:2px; }
+  .step:hover{ background:rgba(255,255,255,.04); }
+  .step:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+  .step.active{ background:var(--ctrl); }
+  .rail-node{ position:relative; display:flex; flex-direction:column; align-items:center; }
+  .node{ width:24px; height:24px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; color:var(--tx2); background:var(--ctrl); border:1px solid var(--sep2); }
+  .step.done .node{ background:var(--ok); border-color:var(--ok); color:#0B2E15; }
+  .step.active .node{ background:var(--accent-fill); border-color:var(--accent-fill); color:#fff; }
+  .connector{ width:2px; flex:1; min-height:16px; background:var(--sep); margin:2px 0; }
+  .step.done .connector{ background:rgba(48,209,88,.45); }
+  .step-body{ min-width:0; padding-top:1px; }
+  .step-title{ font-size:13.5px; font-weight:500; color:var(--tx); line-height:1.3; }
+  .step.upcoming .step-title{ color:var(--tx2); }
+  .step-meta{ font-size:11.5px; color:var(--tx3); margin-top:2px; line-height:1.35; }
+  .step.done .step-meta{ color:var(--tx2); }
+  .step-tag{ font-size:11px; color:var(--tx3); }
+  .step.active .step-tag{ color:var(--accent); }
+  .spine-foot{ margin-top:22px; padding:12px 8px 0; border-top:1px solid var(--sep); }
+  .spine-foot .ref{ display:flex; align-items:center; justify-content:space-between; font-size:11.5px; color:var(--tx2); }
+  .matched{ display:inline-flex; align-items:center; gap:5px; color:var(--ok); font-weight:500; }
+  .matched .tick{ width:12px; height:12px; }
+
+  /* stage */
+  .stage{ padding:26px 30px 30px; background:var(--bg); }
+  .stage-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:6px; }
+  .stage-eyebrow{ font-size:11px; font-weight:600; letter-spacing:.6px; text-transform:uppercase; color:var(--accent); }
+  .stage-title{ font-size:21px; font-weight:600; letter-spacing:-.2px; margin:4px 0 0; }
+  .stage-sub{ font-size:13px; color:var(--tx2); margin:5px 0 0; max-width:440px; line-height:1.45; }
+
+  .btn{ font-family:var(--sans); font-size:13px; font-weight:500; border-radius:999px; padding:9px 18px; cursor:pointer; border:1px solid transparent; white-space:nowrap; display:inline-flex; align-items:center; gap:7px; line-height:1; }
+  .btn.primary{ background:var(--accent-fill); color:#fff; }
+  .btn.primary:hover{ background:var(--accent-h); }
+  .btn.secondary{ background:var(--ctrl); color:var(--tx); border-color:var(--sep2); }
+  .btn.secondary:hover{ background:var(--ctrl-h); }
+  .btn .ico{ width:14px; height:14px; display:block; }
+  .run-cluster{ display:flex; flex-direction:column; align-items:flex-end; gap:8px; }
+  .run-note{ font-size:11px; color:var(--tx3); }
+
+  /* verdict payoff */
+  .verdict-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:22px; align-items:start; }
+  .ear{ background:var(--surface); border:1px solid var(--sep); border-radius:12px; padding:18px 18px 16px; position:relative; }
+  .ear.marginal{ border-color:rgba(255,158,61,.38); }
+  .ear-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+  .ear-name{ font-size:12px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--tx2); }
+  .badge{ display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; padding:4px 11px 4px 9px; border-radius:999px; }
+  .badge .b-dot{ width:8px; height:8px; border-radius:50%; }
+  .badge.clean{ background:rgba(48,209,88,.16); color:var(--ok); }
+  .badge.clean .b-dot{ background:var(--ok); }
+  .badge.marg{ background:rgba(255,158,61,.16); color:var(--warn); }
+  .badge.marg .b-dot{ background:var(--warn); }
+  .grade{ font-size:30px; font-weight:600; letter-spacing:-.5px; line-height:1; color:var(--tx); }
+  .grade small{ font-size:14px; font-weight:500; color:var(--tx2); margin-left:8px; letter-spacing:0; }
+  .metrics{ display:flex; gap:0; margin:14px 0 12px; }
+  .metric{ flex:1; }
+  .metric:not(:first-child){ border-left:1px solid var(--sep); padding-left:12px; margin-left:12px; }
+  .m-label{ font-size:10.5px; letter-spacing:.4px; text-transform:uppercase; color:var(--tx3); }
+  .m-val{ font-size:15px; font-weight:500; margin-top:3px; color:var(--tx); }
+  .m-val.flag{ color:var(--warn); }
+  .ear-note{ font-size:12.5px; line-height:1.5; color:var(--tx2); padding-top:12px; border-top:1px solid var(--sep); }
+  .ear-note .lead{ color:var(--tx); font-weight:500; }
+  .rerun{ margin-top:12px; }
+  .rerun .btn{ padding:7px 14px; font-size:12.5px; }
+
+  /* SP3 hybrid: promoted fix (above) + Details disclosure -> shape-check chips (B) */
+  .shape{ margin-top:14px; border-top:1px solid var(--sep); }
+  .shape > summary{ list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; padding:11px 0 2px; font-size:12px; color:var(--tx2); user-select:none; }
+  .shape > summary::-webkit-details-marker{ display:none; }
+  .shape .chev{ width:11px; height:11px; transition:transform .15s; color:var(--tx3); flex-shrink:0; }
+  .shape[open] .chev{ transform:rotate(90deg); }
+  .shape .d-label{ font-weight:500; color:var(--tx); }
+  .shape .tally{ margin-left:auto; font-size:11.5px; color:var(--tx3); }
+  .shape .tally.flag{ color:var(--warn); }
+  .chips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:11px; }
+  .chip{ display:inline-flex; align-items:center; gap:6px; font-size:11.5px; color:var(--tx2); background:var(--chip-bg); border:1px solid transparent; border-radius:8px; padding:5px 9px; }
+  .chip .ck{ width:11px; height:11px; color:var(--ok); }
+  .chip.flagged{ background:rgba(255,158,61,.14); border-color:rgba(255,158,61,.32); color:var(--warn); }
+  .chip.flagged b{ color:var(--warn); font-weight:600; }
+  .chip .wd{ width:7px; height:7px; border-radius:50%; background:var(--warn); }
+  .obs{ display:flex; gap:9px; align-items:flex-start; margin-top:13px; font-size:12px; line-height:1.5; color:var(--tx2); }
+  .obs .spark{ width:16px; height:12px; flex-shrink:0; margin-top:3px; color:var(--info-tx); }
+  .obs .prov{ display:inline-block; font-size:9.5px; font-weight:700; letter-spacing:.5px; color:var(--info-tx); background:var(--info-bg); padding:2px 6px; border-radius:5px; margin-left:6px; vertical-align:1px; }
+  .obs .sub{ color:var(--tx3); margin-top:3px; }
+
+  /* meters */
+  .meters{ margin-top:22px; background:var(--surface); border:1px solid var(--sep); border-radius:12px; padding:16px 18px; }
+  .meters-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+  .meters-title{ font-size:12px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--tx2); }
+  .meters-legend{ font-size:11px; color:var(--tx3); display:flex; align-items:center; gap:6px; }
+  .swatch{ width:22px; height:6px; border-radius:2px; background:rgba(48,209,88,.35); border:1px solid rgba(48,209,88,.5); display:inline-block; }
+  .meter-row{ display:flex; align-items:center; gap:14px; }
+  .meter-row + .meter-row{ margin-top:11px; }
+  .meter-name{ width:34px; font-size:12px; font-weight:600; color:var(--tx2); }
+  .track{ flex:1; height:12px; background:var(--track); border-radius:6px; position:relative; overflow:hidden; }
+  .band{ position:absolute; top:0; bottom:0; background:rgba(48,209,88,.14); border-left:1px solid rgba(48,209,88,.4); border-right:1px solid rgba(48,209,88,.4); }
+  .fill{ position:absolute; top:0; bottom:0; left:0; border-radius:6px 0 0 6px; }
+  .fill.ok{ background:var(--ok); } .fill.warn{ background:var(--warn); } .fill.neutral{ background:var(--axis); }
+  .meter-val{ width:78px; text-align:right; font-size:12.5px; color:var(--tx); }
+  .meter-val.amber{ color:var(--warn); }
+  .meter-tag{ width:64px; font-size:11px; color:var(--tx3); text-align:left; }
+  .meter-tag.amber{ color:var(--warn); } .meter-tag.good{ color:var(--ok); }
+
+  /* FR curve */
+  .fr{ margin-top:14px; background:var(--surface); border:1px solid var(--sep); border-radius:12px; padding:14px 18px 12px; display:flex; gap:16px; align-items:center; }
+  .fr-plot{ width:210px; height:76px; background:var(--plot); border:1px solid var(--sep); border-radius:8px; flex-shrink:0; }
+  .fr-side{ min-width:0; }
+  .fr-title{ font-size:12px; font-weight:600; color:var(--tx); }
+  .fr-sub{ font-size:11.5px; color:var(--tx3); margin-top:2px; }
+  .info-caption{ display:flex; gap:9px; align-items:flex-start; margin-top:10px; background:var(--info-bg); border-radius:8px; padding:8px 11px; }
+  .info-caption .i-ico{ width:15px; height:15px; flex-shrink:0; margin-top:1px; }
+  .info-caption .i-tx{ font-size:12px; line-height:1.45; color:var(--info-tx); }
+</style>
+</head>
+<body>
+  <main class="window" role="application" aria-label="EARS Bridge measurement wizard">
+    <div class="titlebar">
+      <div class="traffic" aria-hidden="true"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="brand">
+        <svg class="glyph" viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M3 12 A7 7 0 0 1 17 12" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+          <rect x="2.2" y="11.4" width="3.6" height="6" rx="1.6" fill="#fff"/>
+          <rect x="14.2" y="11.4" width="3.6" height="6" rx="1.6" fill="#fff"/>
+        </svg>
+        <span class="app">EARS Bridge</span>
+      </div>
+      <div class="spacer"></div>
+      <div class="fmt num"><span>48 kHz</span><span class="dot"></span><span>24-bit</span><span class="dot"></span><span>Auto per-ear</span></div>
+    </div>
+
+    <div class="body">
+      <!-- SPINE (W2, navigable) -->
+      <nav class="spine" aria-label="Setup steps">
+        <div class="eyebrow">Calibration flow</div>
+        <ol class="steps">
+          <li class="step done" tabindex="0" role="button" aria-label="Step 1, Connect, completed. Click to change devices">
+            <div class="rail-node"><span class="node" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 13 13"><path d="M2.5 6.8 L5 9.3 L10.5 3.5" fill="none" stroke="#0B2E15" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="connector"></span></div>
+            <div class="step-body"><div class="step-title">Connect</div><div class="step-meta">miniDSP EARS → VB-Audio Cable</div></div>
+          </li>
+          <li class="step done" tabindex="0" role="button" aria-label="Step 2, Calibrate, completed. Click to swap calibration files">
+            <div class="rail-node"><span class="node" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 13 13"><path d="M2.5 6.8 L5 9.3 L10.5 3.5" fill="none" stroke="#0B2E15" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="connector"></span></div>
+            <div class="step-body"><div class="step-title">Calibrate</div><div class="step-meta">HEQ pair · 000-0000</div></div>
+          </li>
+          <li class="step done" tabindex="0" role="button" aria-label="Step 3, Level, completed. Click to re-adjust level">
+            <div class="rail-node"><span class="node" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 13 13"><path d="M2.5 6.8 L5 9.3 L10.5 3.5" fill="none" stroke="#0B2E15" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="connector"></span></div>
+            <div class="step-body"><div class="step-title">Level</div><div class="step-meta">In green band</div></div>
+          </li>
+          <li class="step active" tabindex="0" aria-current="step" role="button" aria-label="Step 4, Measure, current step">
+            <div class="rail-node"><span class="node" aria-hidden="true">4</span></div>
+            <div class="step-body"><div class="step-title">Measure</div><div class="step-meta">Sweep graded per ear</div><div class="step-tag">You are here</div></div>
+          </li>
+        </ol>
+        <div class="spine-foot">
+          <div class="ref"><span>Reference</span><span class="matched"><svg class="tick" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5 L4.6 9 L10 3" fill="none" stroke="var(--ok)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>matched</span></div>
+          <div class="ref" style="margin-top:6px;"><span style="color:var(--tx3)">Learned from</span><span style="color:var(--tx3)">Windows Audio</span></div>
+        </div>
+      </nav>
+
+      <!-- STAGE -->
+      <section class="stage" aria-labelledby="stageTitle">
+        <div class="stage-head">
+          <div>
+            <div class="stage-eyebrow">Step 4 of 4</div>
+            <h1 class="stage-title" id="stageTitle">Your per-ear result</h1>
+            <p class="stage-sub">A sweep just ran through Dirac. Each earcup is graded against the matched reference — expand Details on any ear to see the shape checks behind the grade.</p>
+          </div>
+          <div class="run-cluster">
+            <button class="btn primary" type="button"><svg class="ico" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 2.5 L11.5 7 L3 11.5 Z" fill="#fff"/></svg>Re-run sweep</button>
+            <span class="run-note">Runs Dirac’s measurement</span>
+          </div>
+        </div>
+
+        <div class="verdict-grid">
+          <!-- LEFT: clean, Details collapsed -->
+          <article class="ear clean">
+            <div class="ear-head"><span class="ear-name">Left ear</span><span class="badge clean"><span class="b-dot"></span>Clean</span></div>
+            <div class="grade">Clean<small>strong capture</small></div>
+            <div class="metrics num">
+              <div class="metric"><div class="m-label">SNR</div><div class="m-val">28 dB</div></div>
+              <div class="metric"><div class="m-label">IR-SNR</div><div class="m-val">56 dB</div></div>
+              <div class="metric"><div class="m-label">THD</div><div class="m-val">0.8%</div></div>
+            </div>
+            <p class="ear-note"><span class="lead">Safe to keep.</span> A strong, low-noise capture — Dirac will treat this ear as precise.</p>
+            <details class="shape">
+              <summary><svg class="chev" viewBox="0 0 11 11" aria-hidden="true"><path d="M3.5 2 L7.5 5.5 L3.5 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="d-label">Details</span><span class="tally">6 checks pass</span></summary>
+              <div class="chips">
+                <span class="chip"><svg class="ck" viewBox="0 0 11 11"><path d="M2 5.8 L4.3 8 L9 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Drift</span>
+                <span class="chip"><svg class="ck" viewBox="0 0 11 11"><path d="M2 5.8 L4.3 8 L9 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Comb</span>
+                <span class="chip"><svg class="ck" viewBox="0 0 11 11"><path d="M2 5.8 L4.3 8 L9 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Polarity</span>
+                <span class="chip"><svg class="ck" viewBox="0 0 11 11"><path d="M2 5.8 L4.3 8 L9 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Hum</span>
+                <span class="chip"><svg class="ck" viewBox="0 0 11 11"><path d="M2 5.8 L4.3 8 L9 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Band</span>
+                <span class="chip"><svg class="ck" viewBox="0 0 11 11"><path d="M2 5.8 L4.3 8 L9 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Level</span>
+              </div>
+            </details>
+          </article>
+
+          <!-- RIGHT: marginal, Details OPEN -> shape-check chips (B) + provisional observation -->
+          <article class="ear marginal">
+            <div class="ear-head"><span class="ear-name">Right ear</span><span class="badge marg"><span class="b-dot"></span>Marginal SNR</span></div>
+            <div class="grade">Marginal<small>low signal-to-noise</small></div>
+            <div class="metrics num">
+              <div class="metric"><div class="m-label">SNR</div><div class="m-val flag">18 dB</div></div>
+              <div class="metric"><div class="m-label">IR-SNR</div><div class="m-val">52 dB</div></div>
+              <div class="metric"><div class="m-label">THD</div><div class="m-val">0.3%</div></div>
+            </div>
+            <p class="ear-note"><span class="lead">Dirac may mark this ear imprecise.</span> Raise your level or lower room noise, then re-run this earcup.</p>
+            <details class="shape" open>
+              <summary><svg class="chev" viewBox="0 0 11 11" aria-hidden="true"><path d="M3.5 2 L7.5 5.5 L3.5 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="d-label">Details</span><span class="tally flag">5 pass · 1 flagged</span></summary>
+              <div class="chips">
+                <span class="chip flagged"><span class="wd"></span>Drift&nbsp;<b>−9 dB &gt; 6 kHz</b></span>
+                <span class="chip"><svg class="ck" viewBox="0 0 11 11"><path d="M2 5.8 L4.3 8 L9 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Comb</span>
+                <span class="chip"><svg class="ck" viewBox="0 0 11 11"><path d="M2 5.8 L4.3 8 L9 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Polarity</span>
+                <span class="chip"><svg class="ck" viewBox="0 0 11 11"><path d="M2 5.8 L4.3 8 L9 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Hum</span>
+                <span class="chip"><svg class="ck" viewBox="0 0 11 11"><path d="M2 5.8 L4.3 8 L9 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Band</span>
+                <span class="chip"><svg class="ck" viewBox="0 0 11 11"><path d="M2 5.8 L4.3 8 L9 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Level</span>
+              </div>
+              <div class="obs">
+                <svg class="spark" viewBox="0 0 16 12" aria-hidden="true"><path d="M1 8 C4 8 5 4 8 5 C11 6 12 3 15 3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                <div><span>Response changed −9 dB above 6 kHz since your first sweep.<span class="prov">Provisional</span></span><div class="sub">Likely a fit or seating change on this earcup — re-seat the pad and re-run to confirm. This threshold isn’t ratified on hardware yet.</div></div>
+              </div>
+            </details>
+            <div class="rerun"><button class="btn secondary" type="button"><svg class="ico" viewBox="0 0 14 14" aria-hidden="true"><path d="M11.5 6.2 A4.6 4.6 0 1 0 11 8.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M11.8 3 L11.6 6.4 L8.3 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Re-run right earcup</button></div>
+          </article>
+        </div>
+
+        <div class="meters" role="group" aria-label="Output levels">
+          <div class="meters-head"><span class="meters-title">Levels</span><span class="meters-legend"><span class="swatch" aria-hidden="true"></span>green target −18 to −12 dBFS</span></div>
+          <div class="meter-row"><span class="meter-name">L</span><div class="track" aria-hidden="true"><span class="band" style="left:40%; right:40%;"></span><span class="fill ok" style="width:53.3%;"></span></div><span class="meter-val num">−14 dBFS</span><span class="meter-tag good">in band</span></div>
+          <div class="meter-row"><span class="meter-name">R</span><div class="track" aria-hidden="true"><span class="band" style="left:40%; right:40%;"></span><span class="fill warn" style="width:20%;"></span></div><span class="meter-val amber num">−24 dBFS</span><span class="meter-tag amber">low</span></div>
+          <div class="meter-row"><span class="meter-name">Out</span><div class="track" aria-hidden="true"><span class="band" style="left:40%; right:40%;"></span><span class="fill neutral" style="width:46.7%;"></span></div><span class="meter-val num">−16 dBFS</span><span class="meter-tag">to Dirac</span></div>
+        </div>
+
+        <div class="fr">
+          <svg class="fr-plot" viewBox="0 0 210 76" preserveAspectRatio="none" role="img" aria-label="Calibration frequency response, gentle with a mild bump near 3 kHz">
+            <line x1="0" y1="25.3" x2="210" y2="25.3" stroke="var(--grid)" stroke-width="1"/><line x1="0" y1="50.6" x2="210" y2="50.6" stroke="var(--grid)" stroke-width="1"/>
+            <line x1="70" y1="0" x2="70" y2="76" stroke="var(--grid)" stroke-width="1"/><line x1="140" y1="0" x2="140" y2="76" stroke="var(--grid)" stroke-width="1"/>
+            <path d="M4 30 C 40 26, 60 44, 92 41 C 120 39, 132 22, 150 26 C 172 31, 190 40, 206 44" fill="none" stroke="var(--accent-h)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div class="fr-side">
+            <div class="fr-title">Calibration curve · HEQ</div>
+            <div class="fr-sub">L_HEQ_0000000.txt · R_HEQ_0000000.txt</div>
+            <div class="info-caption">
+              <svg class="i-ico" viewBox="0 0 15 15" aria-hidden="true"><circle cx="7.5" cy="7.5" r="6.6" fill="none" stroke="var(--info-tx)" stroke-width="1.3"/><circle cx="7.5" cy="4.6" r="1" fill="var(--info-tx)"/><rect x="6.7" y="6.6" width="1.6" height="4.6" rx="0.8" fill="var(--info-tx)"/></svg>
+              <span class="i-tx">HEQ curves include a mild bass boost — in Dirac, start from a flat bass target.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
