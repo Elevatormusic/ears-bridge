@@ -221,4 +221,108 @@ inline void applyHfDroop (StereoTimeline& tl, float cutoffHz) {
     lp (tl.L); lp (tl.R);
 }
 
+// ==================================================================================================
+// Task-6 impairments — the shape-detector failure modes (spec 2026-07-03-response-drift-monitor,
+// exercised by the SP3 scenarios). Same pure/composable idiom: applied to the MIC-side copy.
+// ==================================================================================================
+
+// D2 echo/comb: a delayed copy summed back onto ITSELF (a single reflection). gainDb -> linear;
+// the delay is delayMs of the timeline's own rate. Reads the ORIGINAL per channel (a snapshot) so
+// the added copy is not itself re-echoed. Comb spacing = 1/delay; depth set by the copy gain.
+inline void addEcho (StereoTimeline& tl, double delayMs, float gainDb) {
+    const int   d = (int) std::llround (delayMs * 1e-3 * tl.fs);
+    const float g = std::pow (10.0f, gainDb / 20.0f);
+    if (d <= 0) return;
+    auto ech = [d, g] (std::vector<float>& x) {
+        const std::vector<float> src = x;                  // original (no re-echo of the copy)
+        for (size_t i = (size_t) d; i < x.size(); ++i) x[i] += g * src[i - (size_t) d];
+    };
+    ech (tl.L); ech (tl.R);
+}
+
+// D3 HF truncation: a BRICKWALL low-pass — an offline FFT that ZEROES every bin above cutoffHz,
+// then inverse-transforms. The digital cliff (a >= 30 dB drop with a flat plateau above) the D3
+// detector's HF arm keys on — an acoustic rolloff keeps falling and never plateaus. Out-of-place
+// radix-2 FFT per channel (self-contained: SimSignals.h stays JUCE-free — the pure signal layer
+// must be reasoned about in isolation from the pipeline it feeds).
+inline void applyBrickwallLowpass (StereoTimeline& tl, double cutoffHz) {
+    const double pi = 3.14159265358979323846;
+    // Iterative in-place radix-2 (dir +1 forward, -1 inverse; inverse scales by 1/n).
+    auto fft = [pi] (std::vector<double>& re, std::vector<double>& im, int dir) {
+        const int n = (int) re.size();
+        for (int i = 1, j = 0; i < n; ++i) {                // bit-reversal permutation
+            int bit = n >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) { std::swap (re[(size_t) i], re[(size_t) j]); std::swap (im[(size_t) i], im[(size_t) j]); }
+        }
+        for (int len = 2; len <= n; len <<= 1) {
+            const double ang = dir * 2.0 * pi / len;
+            const double wr = std::cos (ang), wi = std::sin (ang);
+            for (int i = 0; i < n; i += len) {
+                double cwr = 1.0, cwi = 0.0;
+                for (int k = 0; k < len / 2; ++k) {
+                    const int a = i + k, b = i + k + len / 2;
+                    const double ur = re[(size_t) a], ui = im[(size_t) a];
+                    const double vr = re[(size_t) b] * cwr - im[(size_t) b] * cwi;
+                    const double vi = re[(size_t) b] * cwi + im[(size_t) b] * cwr;
+                    re[(size_t) a] = ur + vr; im[(size_t) a] = ui + vi;
+                    re[(size_t) b] = ur - vr; im[(size_t) b] = ui - vi;
+                    const double nwr = cwr * wr - cwi * wi;
+                    cwi = cwr * wi + cwi * wr; cwr = nwr;
+                }
+            }
+        }
+        if (dir < 0) for (int i = 0; i < n; ++i) { re[(size_t) i] /= n; im[(size_t) i] /= n; }
+    };
+    auto brick = [&] (std::vector<float>& x) {
+        const int n = (int) x.size();
+        int p2 = 1; while (p2 < n) p2 <<= 1;
+        std::vector<double> re ((size_t) p2, 0.0), im ((size_t) p2, 0.0);
+        for (int i = 0; i < n; ++i) re[(size_t) i] = (double) x[i];
+        fft (re, im, +1);
+        const int kCut = (int) std::llround (cutoffHz / tl.fs * p2);   // zero bins with |f| > cutoff
+        for (int k = 0; k < p2; ++k) {
+            const int f = (k <= p2 / 2) ? k : p2 - k;                  // fold negative freqs
+            if (f > kCut) { re[(size_t) k] = 0.0; im[(size_t) k] = 0.0; }
+        }
+        fft (re, im, -1);
+        for (int i = 0; i < n; ++i) x[i] = (float) re[(size_t) i];
+    };
+    brick (tl.L); brick (tl.R);
+}
+
+// D4 polarity: negate ONE channel (an inverted earcup lead). ear 0 = L, 1 = R.
+inline void invertPolarity (StereoTimeline& tl, int ear) {
+    auto& ch = (ear == 0) ? tl.L : tl.R;
+    for (auto& v : ch) v = -v;
+}
+
+// D5a mains hum: base + 2f + 3f sines summed onto BOTH channels with DETERMINISTIC phases. Added
+// BEFORE any other noise so the pre-sweep region carries the tonal lines the Welch PSD keys on.
+// amp is the fundamental's peak; harmonics decay 1/n (a realistic mains-buzz spectrum).
+inline void addMainsHum (StereoTimeline& tl, double baseHz, float amp) {
+    const double pi = 3.14159265358979323846;
+    auto hum = [&] (std::vector<float>& x) {
+        for (size_t i = 0; i < x.size(); ++i) {
+            const double t = (double) i / tl.fs;
+            x[i] += amp        * (float) std::sin (2.0 * pi * baseHz       * t + 0.0);
+            x[i] += amp * 0.5f * (float) std::sin (2.0 * pi * 2.0 * baseHz * t + 0.7);
+            x[i] += amp / 3.0f * (float) std::sin (2.0 * pi * 3.0 * baseHz * t + 1.9);
+        }
+    };
+    hum (tl.L); hum (tl.R);
+}
+
+// D7 level step: a mid-capture gain jump (an ASRC re-lock / AGC kick). Multiply every sample from
+// atSeconds onward by 10^(stepDb/20) — a hard step, the time-variance class D7 keys on.
+inline void applyGainStepAt (StereoTimeline& tl, double atSeconds, float stepDb) {
+    const size_t at = (size_t) std::llround (atSeconds * tl.fs);
+    const float  g  = std::pow (10.0f, stepDb / 20.0f);
+    auto step = [at, g] (std::vector<float>& x) {
+        for (size_t i = at; i < x.size(); ++i) x[i] *= g;
+    };
+    step (tl.L); step (tl.R);
+}
+
 } // namespace ebsim

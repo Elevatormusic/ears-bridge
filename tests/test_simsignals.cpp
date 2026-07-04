@@ -162,3 +162,64 @@ TEST_CASE("SimSignals: gain, clip, seeded noise and the coupler IR behave as spe
     const double r = rmsOf (ir.L, 480, (int) ir.L.size());
     CHECK (r > 0.08); CHECK (r < 1.0);
 }
+
+// ==================================================================================================
+// Task-6 impairments — pinned in ISOLATION (same rationale as above: a scenario failure attributes
+// to the pipeline, never to a mis-built impairment).
+// ==================================================================================================
+TEST_CASE("SimSignals: addEcho sums a delayed copy at the stated gain and delay") {
+    ebsim::StereoTimeline tl; tl.fs = 48000.0;
+    tl.L.assign (48000, 0.0f); tl.R.assign (48000, 0.0f);
+    tl.L[100] = 1.0f;                                // a lone impulse
+    ebsim::addEcho (tl, 5.0, -10.0f);               // +240 samples, 0.316 linear
+    const int d = (int) std::llround (5.0e-3 * 48000.0);
+    CHECK (d == 240);
+    CHECK (std::abs (tl.L[100] - 1.0f) < 1e-6);      // the original tap is untouched
+    CHECK (std::abs (tl.L[(size_t) (100 + d)] - std::pow (10.0f, -10.0f / 20.0f)) < 1e-4);  // the echo tap
+}
+
+TEST_CASE("SimSignals: applyBrickwallLowpass zeroes above the cutoff and preserves below") {
+    auto hi = probeTone (12000.0, 0.5f);
+    const double hiBefore = goertzelMag (hi.L, 12000.0, 48000.0);
+    ebsim::applyBrickwallLowpass (hi, 8000.0);      // 12 kHz is above the cut -> gutted
+    const double hiAfter = goertzelMag (hi.L, 12000.0, 48000.0);
+    CHECK (20.0 * std::log10 ((hiAfter + 1e-12) / hiBefore) < -40.0);   // a true brickwall cliff
+    auto lo = probeTone (2000.0, 0.5f);
+    const double loBefore = goertzelMag (lo.L, 2000.0, 48000.0);
+    ebsim::applyBrickwallLowpass (lo, 8000.0);      // 2 kHz is below the cut -> passes
+    const double loAfter = goertzelMag (lo.L, 2000.0, 48000.0);
+    CHECK (std::abs (20.0 * std::log10 ((loAfter + 1e-12) / loBefore)) < 0.5);
+}
+
+TEST_CASE("SimSignals: invertPolarity negates exactly one channel") {
+    auto tl = probeTone (997.0, 0.5f);
+    tl.R = tl.L;                                     // both channels identical
+    const auto before = tl.L;
+    ebsim::invertPolarity (tl, 1);                   // negate R only
+    for (size_t i = 0; i < before.size(); ++i) {
+        CHECK (tl.L[i] == before[i]);                // L untouched
+        CHECK (tl.R[i] == -before[i]);               // R inverted
+    }
+}
+
+TEST_CASE("SimSignals: addMainsHum plants base + 2f + 3f lines deterministically") {
+    ebsim::StereoTimeline a, b; a.fs = b.fs = 48000.0;
+    a.L.assign (48000, 0.0f); a.R.assign (48000, 0.0f);
+    b.L.assign (48000, 0.0f); b.R.assign (48000, 0.0f);
+    ebsim::addMainsHum (a, 60.0, 0.003f);
+    ebsim::addMainsHum (b, 60.0, 0.003f);
+    CHECK (a.L == b.L);                              // deterministic phases
+    CHECK (goertzelMag (a.L, 60.0,  48000.0) > 0.002);    // fundamental present near amp
+    CHECK (goertzelMag (a.L, 120.0, 48000.0) > 0.001);    // 2f
+    CHECK (goertzelMag (a.L, 180.0, 48000.0) > 0.0005);   // 3f
+    CHECK (goertzelMag (a.L, 300.0, 48000.0) < 1e-4);     // no 5th line (only 3 harmonics)
+}
+
+TEST_CASE("SimSignals: applyGainStepAt jumps the level from the step index onward") {
+    auto tl = probeTone (997.0, 0.5f);
+    ebsim::applyGainStepAt (tl, 0.5, +3.0f);         // step at 24000 samples
+    const int at = (int) std::llround (0.5 * 48000.0);
+    const double before = rmsOf (tl.L, 0, at);
+    const double after  = rmsOf (tl.L, at, (int) tl.L.size());
+    CHECK (std::abs (20.0 * std::log10 (after / before) - 3.0) < 0.2);   // +3 dB step
+}
