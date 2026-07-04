@@ -74,13 +74,18 @@ struct BandedRegularization {
 static constexpr float kAutoRegularization = -1.0f;
 
 // ---- Regularized frequency-domain deconvolution --------------------------
-// IR = IFFT( FFT(resp) * conj(FFT(ref)) / (|FFT(ref)|^2 + regularization) ).
+// IR = IFFT( FFT(resp) * conj(FFT(ref)) / (|FFT(ref)|^2 + eps(k)) ).
+// Default (kAutoRegularization): eps(k) is the reference-derived BANDED regularization above -
+// in-band the pure inverse (A*1e-6), out-of-band firm attenuation (A*10) instead of the flat
+// reg's ~1000x noise boost (the SIM F1 corruption), with the DC bin zeroed. A degenerate
+// reference falls back to the legacy flat 1e-3. Pass an explicit positive value for the legacy
+// flat-eps behavior (characterization tests / escape hatch).
 // Out-of-place FFT. `n` is the working length; the inputs are read up to n
 // samples and the result is returned at the zero-padded power-of-two length
 // (>= n), with the linear-impulse main lobe near index 0. Callers that want
 // exactly n samples can resize the result.
 std::vector<float> deconvolve (const float* ref, const float* resp, int n,
-                               float regularization = 1e-3f);
+                               float regularization = kAutoRegularization);
 
 // ---- The match-gate ------------------------------------------------------
 struct MatchVerdict {
