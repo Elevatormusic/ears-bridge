@@ -240,12 +240,16 @@ CombReport detectComb (const WindowedSpectrum& ws, const float* ir, int n) {
                 env = std::max (env, std::abs (ir[j]));
             if (env > sMag) { sMag = env; sPk = i; }
         }
-        const float echoDb = 20.0f * std::log10 (std::max (sMag, 1e-12f) / peakMag);
+        float echoDb = 20.0f * std::log10 (std::max (sMag, 1e-12f) / peakMag);
         if (echoDb >= -20.0f && sPk > from) {
             if (! out.found) {
                 out.found = true; out.fromEnvelope = true;
                 out.delayMs   = (float) ((sPk - peak) * 1000.0 / ws.fs);
                 out.spacingHz = (float) (ws.fs / (double) (sPk - peak));
+                // Clamp below unity: a unity-gain duplicate (sMag == peakMag -> echoDb == 0) sends the
+                // depth formula's (1 - a) denominator to 0 -> +inf/UB at the milli conversion. Cap the
+                // echo just under unity so depthDb stays finite (a real duplicate path is never louder).
+                echoDb = std::min (echoDb, -0.1f);
                 out.depthDb   = 20.0f * std::log10 ((1.0f + std::pow (10.0f, echoDb / 20.0f))
                                                   / (1.0f - std::pow (10.0f, echoDb / 20.0f)));
             }
@@ -305,8 +309,7 @@ TruncationReport detectTruncation (const WindowedSpectrum& ws, double refLoHz, d
         // Need >= 1/6 octave of bins beyond the edge still below Nyquist to judge the plateau; if the
         // edge already sits near Nyquist there is no room for a cliff+plateau and we do NOT flag.
         const int kPlateauLo = std::min (kDrop, numBins - 1);
-        if (kEnd <= numBins - 1 && kPlateauLo < numBins - 1
-            && (double) (numBins - 1 - kEnd) >= 0.0) {
+        if (kEnd <= numBins - 1 && kPlateauLo < numBins - 1) {
             const double drop = smoothedDb (kHiE) - smoothedDb (kPlateauLo);
             double pMin = 1e300, pMax = -1e300;
             for (int k = kPlateauLo; k <= kEnd; ++k) {

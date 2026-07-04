@@ -501,3 +501,21 @@ TEST_CASE("AudioEngine SP3: publishShapeAnomalies round-trips flags + values thr
     CHECK (e.shapeFlags (1) == 0u);
     CHECK (e.shapeHumBaseHz (1) == 0);
 }
+
+// MINOR-3 (verifier gate): raiseShapeFlag ORs a bit into an ALREADY-published ear (the cross-ear
+// polarity pass uses it so BOTH ears carry the pair-level inversion), preserving the ear's scalars.
+TEST_CASE("AudioEngine SP3: raiseShapeFlag ORs a bit into an already-published ear, keeping scalars") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 64);
+
+    // The OTHER ear published first (its own grade tick), carrying a drift finding + numbers.
+    e.publishShapeAnomalies (0, eb::AudioEngine::kShapeDrift,
+                             /*driftMaxDb*/ 4.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0.0f);
+    // The cross-ear polarity pass fires on THIS ear -> raise the pair bit on the OTHER ear too.
+    e.raiseShapeFlag (0, eb::AudioEngine::kShapePolarity);
+
+    CHECK ((e.shapeFlags (0) & eb::AudioEngine::kShapePolarity) != 0u);   // the raised bit is present
+    CHECK ((e.shapeFlags (0) & eb::AudioEngine::kShapeDrift)    != 0u);   // the prior finding survived
+    CHECK (e.shapeDriftMaxDb (0) == Catch::Approx (4.0f).margin (1e-3));  // its scalars are untouched
+    CHECK (e.shapeFlags (1) == 0u);                                       // the other ear is independent
+}

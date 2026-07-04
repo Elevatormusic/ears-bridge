@@ -557,11 +557,12 @@ float AudioEngine::refThdPercent (int ear) const noexcept { return refThdPctMill
 float AudioEngine::refSweepSnrDb (int ear) const noexcept { return refSweepSnrMilliPerEar_[(ear == 1) ? 1 : 0].load() / 1000.0f; }
 float AudioEngine::referenceSweepPeakDb (int ear) const noexcept { return refSweepPeakMilliPerEar_[(ear == 1) ? 1 : 0].load() / 1000.0f; }
 
-// ---- SP3 response-shape detectors (INFO-ONLY; grade worker only) --------------------------------
-// Baseline access is GRADE-WORKER-ONLY (single writer): the worker sets the curve on the first
-// GradedClean for that ear and reads it on every later grade to compute D1 drift. setShapeBaseline
-// also raises kShapeBaselineSet in the published flags so the GUI knows a baseline exists (D1 is
-// silent until then). Nothing off the worker mutates or reads the curve.
+// ---- SP3 response-shape detectors (INFO-ONLY; heavy FFTs on the grade worker) -------------------
+// Baseline access is MESSAGE-THREAD single writer: the message thread sets the curve on the first
+// GradedClean for that ear and reads it to hand the worker a COPY on every later grade (the worker
+// computes D1 drift against its copy, never this member). setShapeBaseline also raises
+// kShapeBaselineSet in the published flags so the GUI knows a baseline exists (D1 is silent until
+// then). Nothing off the message thread mutates or reads the curve.
 void AudioEngine::setShapeBaseline (int ear, BandCurve curve) {
     const int e = (ear == 1) ? 1 : 0;
     shapeBaselinePerEar_[e] = std::move (curve);
@@ -578,9 +579,11 @@ bool AudioEngine::shapeBaselineSet (int ear) const noexcept {
     return (shapeFlagsPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) & kShapeBaselineSet) != 0u;
 }
 
-// Publish ONE ear's shape outputs together (worker thread). Store the SCALARS first, then the flags
-// LAST (the flags gate the GUI note, so a reader that sees a bit is guaranteed to see fresh numbers).
-// The *Milli_ idiom mirrors publishReferenceGrade exactly. INFO-ONLY: no grade / cleanCapture touch.
+// Publish ONE ear's shape outputs together (message thread). Store the SCALARS first (relaxed), then
+// the flags LAST with a RELEASE store — paired with the ACQUIRE load in shapeFlags(), that publish
+// fence guarantees a reader who sees a fresh bit also sees the fresh numbers. (Relaxed-only left one
+// frame of stale values under a fresh flag possible on a weakly-ordered target, e.g. ARM.) The
+// *Milli_ idiom mirrors publishReferenceGrade exactly. INFO-ONLY: no grade / cleanCapture touch.
 void AudioEngine::publishShapeAnomalies (int ear, unsigned flags, float driftMaxDb, float hfShelfDb,
                                          float combDepthDb, float combDelayMs, float effLoHz, float effHiHz,
                                          float lobeWidth, float stepDb, int humBaseHz, float resonanceHz) noexcept {
@@ -597,10 +600,16 @@ void AudioEngine::publishShapeAnomalies (int ear, unsigned flags, float driftMax
     shapeResonanceMilliPerEar_[e].store ((int) std::lround (resonanceHz  * 1000.0f), std::memory_order_relaxed);
     // Preserve the baseline-set bit (setShapeBaseline may have raised it before the first anomaly pass).
     const unsigned keep = shapeFlagsPerEar_[e].load (std::memory_order_relaxed) & kShapeBaselineSet;
-    shapeFlagsPerEar_[e].store (flags | keep, std::memory_order_relaxed);   // flags LAST (publish barrier)
+    shapeFlagsPerEar_[e].store (flags | keep, std::memory_order_release);   // flags LAST (release: publishes the scalars above)
 }
 
-unsigned AudioEngine::shapeFlags       (int ear) const noexcept { return shapeFlagsPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed); }
+void AudioEngine::raiseShapeFlag (int ear, unsigned bit) noexcept {
+    // Release to pair the shapeFlags() acquire (the OTHER ear's scalars were already published with their
+    // own release; this only adds a bit, so no fresh scalars to fence — release keeps the read consistent).
+    shapeFlagsPerEar_[(ear == 1) ? 1 : 0].fetch_or (bit, std::memory_order_release);
+}
+
+unsigned AudioEngine::shapeFlags       (int ear) const noexcept { return shapeFlagsPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_acquire); }   // acquire: pairs the publish release
 float    AudioEngine::shapeDriftMaxDb  (int ear) const noexcept { return shapeDriftMaxMilliPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f; }
 float    AudioEngine::shapeHfShelfDb   (int ear) const noexcept { return shapeHfShelfMilliPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f; }
 float    AudioEngine::shapeCombDepthDb (int ear) const noexcept { return shapeCombDepthMilliPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f; }

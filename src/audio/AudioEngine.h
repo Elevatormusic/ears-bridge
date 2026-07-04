@@ -254,13 +254,14 @@ public:
     static constexpr unsigned kShapeSkew        = ShapeFlag::kSkew;
     static constexpr unsigned kShapeStep        = ShapeFlag::kStep;
     static constexpr unsigned kShapeBaselineSet = ShapeFlag::kBaselineSet;
+    static constexpr unsigned kShapeNoBand      = ShapeFlag::kNoBand;
 
-    // GRADE-WORKER-ONLY baseline access (SINGLE WRITER, same contract as the grade path — the worker
-    // sets the baseline on the FIRST GradedClean per ear and reads it on every later grade; NOTHING
-    // else touches it). Plain engine members (not atomics): the curve is a vector, only ever mutated on
-    // the worker, and only READ on the worker (the GUI reads the published SCALAR outputs, never the
-    // curve). shapeBaseline(ear) returns nullptr until the baseline is set. Reset in prepare()/start()
-    // and setReferenceLoaded(false) (mirrors the grade-atomic resets).
+    // MESSAGE-THREAD baseline access (SINGLE WRITER — the same thread that publishes the grade). The
+    // message thread sets the baseline on the FIRST GradedClean per ear and reads it to hand the worker
+    // a COPY on every later grade (the worker computes drift against its copy, never this member).
+    // Plain engine members (not atomics): the curve is a vector, only ever mutated AND read on the
+    // message thread. shapeBaseline(ear) returns nullptr until the baseline is set. Reset in
+    // prepare()/start() and setReferenceLoaded(false) (mirrors the grade-atomic resets).
     void             setShapeBaseline (int ear, BandCurve curve);
     const BandCurve* shapeBaseline    (int ear) const;   // nullptr until set (worker-thread read)
     bool             shapeBaselineSet (int ear) const noexcept;   // GUI-safe (reads the packed flag)
@@ -271,6 +272,11 @@ public:
     void publishShapeAnomalies (int ear, unsigned flags, float driftMaxDb, float hfShelfDb,
                                 float combDepthDb, float combDelayMs, float effLoHz, float effHiHz,
                                 float lobeWidth, float stepDb, int humBaseHz, float resonanceHz) noexcept;
+
+    // OR one shape-flag bit into an ALREADY-published ear (message-thread single writer). Used by the
+    // cross-ear polarity pass to raise kShapePolarity on the OTHER ear whose flags were published on its
+    // own grade tick (a cross-ear finding belongs to both ears). Idempotent; carries no scalars.
+    void raiseShapeFlag (int ear, unsigned bit) noexcept;
 
     // GUI-safe per-ear reads (lock-free; the milli idiom). shapeFlags(ear) is the packed bitmask.
     unsigned shapeFlags       (int ear) const noexcept;
@@ -472,11 +478,11 @@ private:
     std::atomic<int>  refSweepPeakMilliPerEar_[2]{ { -120000 }, { -120000 } };
 
     // ---- SP3 shape-detector state -----------------------------------------------------------------
-    // Per-ear D1 baseline (the first-GradedClean response curve). GRADE-WORKER-ONLY (single writer):
-    // the worker sets it, the worker reads it. NOT an atomic — it is a vector, and nothing off the
-    // worker ever touches it (the GUI reads the published SCALAR outputs below, never the curve).
-    // shapeBaselineValid_ mirrors the flag but lives here so shapeBaseline() has a worker-local guard;
-    // reset (invalidated) in prepare()/start()/setReferenceLoaded(false).
+    // Per-ear D1 baseline (the first-GradedClean response curve). MESSAGE-THREAD single writer: the
+    // message thread sets it and reads it (to hand the worker a COPY). NOT an atomic — it is a vector,
+    // and nothing off the message thread ever touches it (the GUI reads the published SCALAR outputs
+    // below, never the curve). shapeBaselineValid_ mirrors the flag but lives here so shapeBaseline()
+    // has a local guard; reset (invalidated) in prepare()/start()/setReferenceLoaded(false).
     BandCurve shapeBaselinePerEar_[2];
     bool      shapeBaselineValid_[2] { false, false };
     // Published shape outputs (GUI-safe): the packed flags bitmask + the worst-offender magnitudes,

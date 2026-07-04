@@ -180,6 +180,22 @@ TEST_CASE("detectComb envelope arm catches a 35 ms echo beyond the cepstral wind
     CHECK (std::abs (c.delayMs - 35.0) < 2.0);
 }
 
+// MINOR-2 (verifier gate): a UNITY-gain duplicate (echo amp == peak, echoDb == 0) must not send the
+// envelope-arm depth formula's (1 - a) denominator to zero -> +inf/UB at the milli conversion. The
+// clamp keeps depthDb finite.
+TEST_CASE("detectComb: a unity-gain duplicate at 10 ms yields a FINITE depth (no +inf)") {
+    const int n = 1 << 17; const double fs = 48000.0;
+    auto ir = bandIr (n, fs, 20000.0);
+    const int d = (int) std::lround (0.010 * fs);            // 10 ms
+    auto e = bandIr (n, fs, 20000.0, 400 + d, 1.0f);         // EXACT duplicate (amp 1.0)
+    for (int i = 0; i < n; ++i) ir[(size_t) i] += e[(size_t) i];
+    auto ws = eb::windowedBandSpectrum (ir.data(), n, fs, 20.0, 20000.0);
+    REQUIRE (ws.valid);
+    auto c = eb::detectComb (ws, ir.data(), n);
+    CHECK (c.found);
+    CHECK (std::isfinite (c.depthDb));
+}
+
 // SP3 Task 3: D3 truncation + D4 polarity + D5b resonance spike.
 static eb::WindowedSpectrum synthSpectrum (int fftSize, double fs, double loHz, double hiHz,
                                            double cliffHz = 0.0, double rolloffDbOct = 0.0,

@@ -32,6 +32,7 @@ namespace ShapeFlag {
     inline constexpr unsigned kSkew        = 128u;   // D6 clock-skew smeared lobe
     inline constexpr unsigned kStep        = 256u;   // D7 mid-sweep level step
     inline constexpr unsigned kBaselineSet = 512u;   // D1 baseline learned this session (NOT an anomaly)
+    inline constexpr unsigned kNoBand      = 1024u;  // D3 no measurable band (valid reference, empty measurement edges)
 }
 
 struct WindowedSpectrum {

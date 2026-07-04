@@ -42,6 +42,9 @@ struct EarGradeSnapshot {
     // is no anomaly. INFO-ONLY: it decorates the line as a neutral clause + rides the tooltip; it NEVER
     // changes the line's tone (never Warn/Danger) or the headline. Precomputed GUI-side from the engine.
     juce::String shapeNote;
+    // SP3 INFO tooltip (the FULL numbers behind the note, one line per active finding, from shapeInfoTip()).
+    // Empty when there is no anomaly. Rides the line's tooltip so the elided one-liner stays discoverable.
+    juce::String shapeTip;
 };
 
 struct StatusLineOut {
@@ -159,11 +162,28 @@ struct RunningSnapshot {
     }
     out.text += snrTail + peakTail;
     // SP3 INFO note: append the worst-offender shape anomaly as a neutral clause (never changes the tone —
-    // it is INFO-only) and carry the same text in the tooltip so the full finding is discoverable. Only for
-    // graded ears (the note is meaningless on a waiting/stale line, and the engine clears it otherwise).
+    // it is INFO-only). Only for graded ears (the note is meaningless on a waiting/stale line, and the
+    // engine clears it otherwise). The FULL numbers (shapeTip) always ride the tooltip.
+    //
+    // #68 LENGTH BUDGET: the per-ear status line shares the title bar and can already carry "verified …"
+    // + SNR/peak tails; a 68-char drift note can push the composed line past what fits at the app's
+    // minimum width and get clipped by the label (the #8 cut-off lesson). If the note would overflow, ELIDE
+    // it with ".." so the line stays within budget — the tooltip carries the full note + numbers, so nothing
+    // is lost, only relocated (mirrors the running line's advisory-tail budget).
     if (graded && e.shapeNote.isNotEmpty()) {
-        out.text += "  -  " + e.shapeNote;
-        out.tip   = out.tip.isNotEmpty() ? out.tip + "\n" + e.shapeNote : e.shapeNote;
+        static constexpr int kEarLineCharBudget = 78;   // same title-bar budget the #68 render gate ratifies
+        const juce::String sep = "  -  ";
+        if (out.text.length() + sep.length() + e.shapeNote.length() <= kEarLineCharBudget) {
+            out.text += sep + e.shapeNote;
+        } else {
+            const int room = kEarLineCharBudget - out.text.length() - sep.length() - 2;   // -2 for the ".."
+            const juce::String shown = room > 0 ? e.shapeNote.substring (0, room).trimEnd() + ".."
+                                                : juce::String ("..");
+            out.text += sep + shown;
+        }
+        // The tooltip carries the full numbers (shapeTip); fall back to the note itself if none were composed.
+        const juce::String full = e.shapeTip.isNotEmpty() ? e.shapeTip : e.shapeNote;
+        out.tip   = out.tip.isNotEmpty() ? out.tip + "\n" + full : full;
     }
     // #44: a green per-ear line is only ever the GradedClean verdict.
     jassert (out.tone != StatusTone::Ok || state == RefMonState::GradedClean);
@@ -173,15 +193,20 @@ struct RunningSnapshot {
 // ---- SP3 shape-anomaly INFO note (Task 5) --------------------------------------------------------
 // The single worst-offender INFO line for one ear's published shape anomalies. INFO-ONLY — this NEVER
 // changes a grade, a tone, or cleanCapture; the GUI renders it in the neutral info style (never Warn/
-// Danger). Worst-offender precedence (spec §5): truncation > comb > polarity > drift > hum > resonance
-// > skew > step. Copy strings are the spec §4 wording. Returns "" when there is no anomaly (flags == 0
-// or only kBaselineSet — the baseline being learned is not a finding). Each line stays <= ~70 chars (the
-// #8 title-bar cut-off lesson); the caller carries the FULL numbers in the tooltip.
+// Danger). Worst-offender precedence (spec §5/§6): no-band > truncation > comb > polarity > drift > hum
+// > resonance > skew > step. Copy strings follow the spec §4 intent (drift line shortened to fit the
+// length rule). Returns "" when there is no anomaly (flags == 0 or only kBaselineSet — the baseline being
+// learned is not a finding). Each line stays <= ~70 chars (the #8 title-bar cut-off lesson); the caller
+// carries the FULL numbers in the shapeInfoTip tooltip.
 [[nodiscard]] inline juce::String shapeInfoNote (unsigned flags, float driftMaxDb, float combDelayMs,
                                                 float effHiHz, float effLoHz, int humBaseHz) {
     using namespace eb;
     juce::ignoreUnused (effLoHz);   // the LF-truncation copy names no frequency (spec §4.D3: position-only)
-    // Truncation FIRST (a truncated band is the most consequential — the chain is dropping content).
+    // No measurable band FIRST (the loudest finding: the reference had a band but the measurement has none,
+    // so the chain is dropping ALL content — a bare truncation edge would understate it). spec §6.
+    if (flags & ShapeFlag::kNoBand)
+        return "no measurable response band - check the chain";
+    // Truncation NEXT (a truncated band is the most consequential — the chain is dropping content).
     if (flags & ShapeFlag::kTruncHi)
         return "content ends near " + juce::String (effHiHz / 1000.0f, 1)
              + " kHz - the chain may be resampling";
@@ -203,6 +228,49 @@ struct RunningSnapshot {
     if (flags & ShapeFlag::kStep)
         return "level changed mid-sweep - disable enhancements / AGC";
     return {};   // no anomaly (or only the baseline-set bit): no note
+}
+
+// ---- SP3 shape-anomaly numbers tooltip (Task 5) --------------------------------------------------
+// The FULL numbers behind the one-line note, one "label: value" line per active finding (NOT the single
+// worst-offender — the tooltip carries EVERYTHING the line elides). INFO-ONLY, same as shapeInfoNote.
+// Takes exactly the scalars the engine publishes (publishShapeAnomalies + shapeFlags); each present flag
+// contributes its measured number(s). Empty when there is no finding (flags == 0 or only kBaselineSet),
+// so the caller can skip it. Drift also reports hfShelf (the tinny-EQ shelf signature) when non-zero.
+[[nodiscard]] inline juce::String shapeInfoTip (unsigned flags, float driftMaxDb, float hfShelfDb,
+                                                float combDepthDb, float combDelayMs, float effLoHz,
+                                                float effHiHz, float lobeWidth, float stepDb,
+                                                int humBaseHz, float resonanceHz) {
+    using namespace eb;
+    if ((flags & ~ShapeFlag::kBaselineSet) == 0u) return {};   // no finding (bare baseline is not one)
+
+    juce::StringArray lines;
+    if (flags & ShapeFlag::kNoBand)
+        lines.add ("No measurable band: the reference had a band; the measurement has none");
+    if (flags & ShapeFlag::kTruncHi)
+        lines.add ("HF truncation: content ends near " + juce::String (effHiHz / 1000.0f, 2) + " kHz");
+    if (flags & ShapeFlag::kTruncLo)
+        lines.add ("LF truncation: content starts near " + juce::String (effLoHz, 0) + " Hz");
+    if (flags & ShapeFlag::kComb) {
+        juce::String l = "Comb / echo: depth " + juce::String (combDepthDb, 1) + " dB";
+        if (combDelayMs != 0.0f) l += ", delay " + juce::String (combDelayMs, 2) + " ms";
+        lines.add (l);
+    }
+    if (flags & ShapeFlag::kPolarity)
+        lines.add ("Cross-ear polarity: the two ears measure inverted relative to each other");
+    if ((flags & ShapeFlag::kDrift) || ((flags & ShapeFlag::kBaselineSet) && driftMaxDb != 0.0f)) {
+        juce::String l = "Drift: max delta " + juce::String (driftMaxDb, 1) + " dB vs sweep 1";
+        if (hfShelfDb != 0.0f) l += ", HF shelf " + juce::String (hfShelfDb, 1) + " dB";
+        lines.add (l);
+    }
+    if (flags & ShapeFlag::kHum)
+        lines.add ("Mains hum: " + juce::String (humBaseHz) + " Hz base in the pre-sweep noise");
+    if (flags & ShapeFlag::kResonance)
+        lines.add ("Resonance: narrow spike near " + juce::String (resonanceHz, 0) + " Hz");
+    if (flags & ShapeFlag::kSkew)
+        lines.add ("Clock skew: main lobe " + juce::String (lobeWidth, 1) + " samples wide");
+    if (flags & ShapeFlag::kStep)
+        lines.add ("Level step: " + juce::String (stepDb, 1) + " dB mid-sweep");
+    return lines.joinIntoString ("\n");
 }
 
 // ---- per-ear COMPACT summary (the captured branch's shared second line, #4) ----------------------

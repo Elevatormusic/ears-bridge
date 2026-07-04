@@ -1378,9 +1378,17 @@ void MainComponent::updateStatusLine() {
             e.peakDb     = engine.referenceSweepPeakDb (ear);
             // SP3 INFO note: the worst-offender shape anomaly for this ear (empty when none). Read the
             // published flags + magnitudes lock-free and compose the neutral one-liner. INFO-ONLY.
-            e.shapeNote  = eb::shapeInfoNote (engine.shapeFlags (ear), engine.shapeDriftMaxDb (ear),
+            const unsigned sf = engine.shapeFlags (ear);   // ONE acquire load; the scalars follow (relaxed)
+            e.shapeNote  = eb::shapeInfoNote (sf, engine.shapeDriftMaxDb (ear),
                                               engine.shapeCombDelayMs (ear), engine.shapeEffHiHz (ear),
                                               engine.shapeEffLoHz (ear), engine.shapeHumBaseHz (ear));
+            // SP3 INFO tooltip: the FULL numbers behind that note (all active findings, "label: value"
+            // lines) so an over-long status line can elide the note and still be discoverable.
+            e.shapeTip   = eb::shapeInfoTip (sf, engine.shapeDriftMaxDb (ear), engine.shapeHfShelfDb (ear),
+                                             engine.shapeCombDepthDb (ear), engine.shapeCombDelayMs (ear),
+                                             engine.shapeEffLoHz (ear), engine.shapeEffHiHz (ear),
+                                             engine.shapeLobeWidth (ear), engine.shapeStepDb (ear),
+                                             engine.shapeHumBaseHz (ear), engine.shapeResonanceHz (ear));
             return e;
         };
         snap.earL = earSnap (0);
@@ -1992,6 +2000,10 @@ MainComponent::ShapeResult MainComponent::runShapeDetectors (int ear, bool grade
             if (tr.valid) {
                 res.effLoHz = tr.effLoHz;
                 res.effHiHz = tr.effHiHz;
+                // No measurable measurement band under a VALID reference (both edges zero): the loudest D3
+                // finding — the chain is dropping content the reference had. detectTruncation reports this
+                // as valid-with-zero-edges (spec §6); raise kNoBand so the INFO note words it separately.
+                if (tr.effLoHz == 0.0f && tr.effHiHz == 0.0f) res.flags |= eb::ShapeFlag::kNoBand;
                 if (tr.truncatedHi) res.flags |= eb::ShapeFlag::kTruncHi;
                 if (tr.truncatedLo) res.flags |= eb::ShapeFlag::kTruncLo;
             }
@@ -2201,7 +2213,14 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
                     const eb::PolarityReport pol = eb::crossEarPolarity (
                         mc->shapePeakSegPerEar_[0].data(), kShapePolaritySeg,
                         mc->shapePeakSegPerEar_[1].data(), kShapePolaritySeg);
-                    if (pol.valid && pol.inverted) shape.flags |= eb::ShapeFlag::kPolarity;   // both ears carry it
+                    if (pol.valid && pol.inverted) {
+                        // A cross-ear inversion is a property of the PAIR, so BOTH ears carry it. THIS ear
+                        // gets the bit in its own flags (published just below); the OTHER ear was already
+                        // published on its grade tick, so OR the bit straight into its published flags
+                        // (message thread == single writer, so no store races the publish).
+                        shape.flags |= eb::ShapeFlag::kPolarity;
+                        mc->engine.raiseShapeFlag (other, eb::ShapeFlag::kPolarity);
+                    }
                 }
                 mc->engine.publishShapeAnomalies (ear, shape.flags, shape.driftMaxDb, shape.hfShelfDb,
                                                   shape.combDepthDb, shape.combDelayMs, shape.effLoHz,
@@ -2219,7 +2238,6 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
                         + " step=" + juce::String (shape.stepDb, 1) + "dB"
                         + " hum=" + juce::String (shape.humBaseHz) + "Hz"
                         + " reson=" + juce::String (shape.resonanceHz, 0) + "Hz");
-                juce::ignoreUnused (other);
             }
             // Ratification-grade summary: ONE comprehensive line PER EAR per graded sweep so a single real
             // measurement carries everything needed to set the IR-SNR / THD / sweep-SNR / match-coherence cutoffs
@@ -2368,6 +2386,11 @@ void MainComponent::timerCallback() {
                 { "lowlevel",    "Running - level low: turn your amp up to the green band",                          "",                                         false, false },
                 { "error",       "EARS or audio cable disconnected - measurement stopped.",                          "",                                         false, false },
                 { "update+full", "Running - no input signal (check the EARS)",                                       "R weak impulse response - time-variance?", true,  true  },
+                // SP3 shape INFO note RENDERED on the per-ear line, worst case: a verified line + peak tail
+                // + the LONGEST note (the drift copy), already run through earStatusLine's #68 length budget
+                // (the note elides with ".." past 78 chars; the full text rides the tooltip). Proves the
+                // populated status line does not clip at the app's minimum width.
+                { "shapenote",   "L: verified - IR-SNR 56 dB, THD 0% (calibration pending) (peak -8 dBFS)  -  res..", "R: verified 54 dB", false, true  },
             };
             for (auto& s : states) {
                 statusLine.setText  (s.l, juce::dontSendNotification);

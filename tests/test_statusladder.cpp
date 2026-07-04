@@ -331,3 +331,66 @@ TEST_CASE("shapeInfoNote: each line quantifies its finding and stays <= ~70 char
     CHECK (eb::shapeInfoNote (ShapeFlag::kComb, 0, 5.3f, 0, 0, 0).contains ("5.3 ms"));
     CHECK (eb::shapeInfoNote (ShapeFlag::kHum, 0, 0, 0, 0, 50).contains ("50 Hz"));
 }
+
+// MAJOR-1 (verifier gate): the spec §6 "no measurable band" finding is the loudest note.
+TEST_CASE("shapeInfoNote: kNoBand copy + precedence over every other finding") {
+    // The exact spec copy, and it stays within the line budget.
+    const auto note = eb::shapeInfoNote (ShapeFlag::kNoBand, 0, 0, 0, 0, 0);
+    CHECK (note == "no measurable response band - check the chain");
+    CHECK (note.length() <= 70);
+    // No-band OUTRANKS even truncation/comb (a bare truncation edge would understate a fully-empty band).
+    unsigned withComb = ShapeFlag::kNoBand | ShapeFlag::kComb | ShapeFlag::kTruncHi;
+    CHECK (eb::shapeInfoNote (withComb, 0, 5.3f, 12000.0f, 0, 0).contains ("no measurable response band"));
+}
+
+// MAJOR-2 (verifier gate): the numbers-bearing multi-line tooltip.
+TEST_CASE("shapeInfoTip: empty on flags==0/baseline; carries the full numbers otherwise") {
+    // Empty when there is no finding (bare baseline is not one).
+    CHECK (eb::shapeInfoTip (0u, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0).isEmpty());
+    CHECK (eb::shapeInfoTip (ShapeFlag::kBaselineSet, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0).isEmpty());
+
+    // Drift: max delta + HF shelf, both quantified on their own line.
+    const auto drift = eb::shapeInfoTip (ShapeFlag::kDrift, /*driftMax*/ 6.4f, /*hfShelf*/ -3.2f,
+                                         0, 0, 0, 0, 0, 0, 0, 0);
+    CHECK (drift.contains ("6.4"));
+    CHECK (drift.contains ("-3.2"));
+
+    // Comb: depth + delay. Every active flag contributes a line, so a multi-finding tip is multi-line.
+    const auto multi = eb::shapeInfoTip (ShapeFlag::kComb | ShapeFlag::kHum,
+                                         0, 0, /*combDepth*/ 8.0f, /*combDelay*/ 5.3f,
+                                         0, 0, 0, 0, /*humBase*/ 50, 0);
+    CHECK (multi.contains ("8.0"));
+    CHECK (multi.contains ("5.3"));
+    CHECK (multi.contains ("50"));
+    CHECK (multi.contains ("\n"));   // one line per finding
+
+    // Truncation edges + step + resonance + skew carry their measured numbers.
+    CHECK (eb::shapeInfoTip (ShapeFlag::kTruncHi, 0, 0, 0, 0, 0, 12000.0f, 0, 0, 0, 0).contains ("12.00 kHz"));
+    CHECK (eb::shapeInfoTip (ShapeFlag::kStep, 0, 0, 0, 0, 0, 0, 0, 2.5f, 0, 0).contains ("2.5"));
+    CHECK (eb::shapeInfoTip (ShapeFlag::kResonance, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4200.0f).contains ("4200"));
+    CHECK (eb::shapeInfoTip (ShapeFlag::kSkew, 0, 0, 0, 0, 0, 0, /*lobe*/ 14.0f, 0, 0, 0).contains ("14"));
+}
+
+// MAJOR-3 (verifier gate): a long verified line + tails + the LONGEST note stays under the line budget
+// (the note elides with ".."); the full note/numbers move to the tooltip.
+TEST_CASE("earStatusLine: a long-tails + drift-note composition stays within the length budget") {
+    static constexpr int kBudget = 78;   // earStatusLine's #68 per-ear title-bar budget
+    auto e = ear (RefMonState::GradedClean, /*ir*/ 56.0f, /*thd*/ 0.0f, /*sweepSnr*/ 30.0f, /*peak*/ -8.0f);
+    e.shapeNote = "response drifted since sweep 1 (6.4 dB) - re-seat or check the chain";   // the longest copy
+    e.shapeTip  = "Drift: max delta 6.4 dB vs sweep 1, HF shelf -3.2 dB";
+    const auto out = eb::earStatusLine ("L", e);
+    INFO ("line = " << out.text.toStdString() << " (len " << out.text.length() << ")");
+    CHECK (out.text.length() <= kBudget);                 // never overflows the title-bar line
+    CHECK (out.text.contains (".."));                     // elided, since the full note wouldn't fit
+    CHECK (out.tip.contains ("HF shelf"));                // the full numbers rode into the tooltip
+    // A note that DOES fit within the budget is appended WHOLE (no elision) and still carries the tip.
+    // Use a peak below the -119 readout gate so the base carries no peak tail, then a short note that fits.
+    auto e2 = ear (RefMonState::GradedClean, 56.0f, 0.0f, 30.0f, -120.0f);
+    e2.shapeNote = "short note";
+    e2.shapeTip  = "Full: short-note detail";
+    const auto out2 = eb::earStatusLine ("L", e2);
+    CHECK (out2.text.length() <= kBudget);
+    CHECK (out2.text.contains ("short note"));
+    CHECK_FALSE (out2.text.endsWith (".."));              // it fit, so no elision
+    CHECK (out2.tip.contains ("short-note detail"));      // the tip still carries the full numbers
+}
