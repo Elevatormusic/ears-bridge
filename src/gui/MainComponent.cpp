@@ -2392,20 +2392,40 @@ void MainComponent::timerCallback() {
                 // populated status line does not clip at the app's minimum width.
                 { "shapenote",   "L: verified - IR-SNR 56 dB, THD 0% (calibration pending) (peak -8 dBFS)  -  res..", "R: verified 54 dB", false, true  },
             };
-            for (auto& s : states) {
-                statusLine.setText  (s.l, juce::dontSendNotification);
-                statusLineR.setText (s.r, juce::dontSendNotification);
-                if (s.update) updateLink.setButtonText ("Update available");
-                updateLink.setVisible (s.update);
-                if (s.dots) {
-                    gradeDotsL_.setMetrics (eb::QualityBand::Green,  "28 dB", eb::QualityBand::Green, "56 dB", eb::QualityBand::Orange, "0.8%");
-                    gradeDotsR_.setMetrics (eb::QualityBand::Orange, "18 dB", eb::QualityBand::Green, "52 dB", eb::QualityBand::Green,  "0.3%");
-                } else { gradeDotsL_.clear(); gradeDotsR_.clear(); }
-                resized();
-                hig::writeDesignProbe (*getTopLevelComponent(),
-                    dir.getChildFile (juce::String ("hig-") + s.name + ".json"),
-                    dir.getChildFile (juce::String ("hig-") + s.name + ".png"));
+            // APPEARANCE MATRIX (EARS-vendored extension, 2026-07-04): the base sweep only rendered the
+            // OS launch mode at normal contrast, but the composited-pixel HIG checks are mode/contrast
+            // specific - primary-CTA label contrast (dark), control-boundary 3:1 (light), meter warn-zone
+            // (light), and the increaseContrast() palette strengthening. So drive every status state
+            // through {dark,light} x {normal, increase-contrast} and emit one descriptor+PNG per cell.
+            // Dev-QA only (compile-gated). forceThemeForTest reapplies the palette + settles labels;
+            // SystemA11y::setForTest forces the a11y flags Theme reads.
+            struct Ap { const char* tag; bool dark; bool hc; };
+            static const Ap appears[] = {
+                { "dark-normal",   true,  false }, { "light-normal",   false, false },
+                { "dark-contrast", true,  true  }, { "light-contrast", false, true  },
+            };
+            const bool wasDark = eb::Theme::dark();
+            for (auto& ap : appears) {
+                eb::SystemA11y::setForTest (false, ap.hc, ap.hc);   // reduceMotion off; contrast+transparency = hc
+                forceThemeForTest (ap.dark);                        // reapply palette + settle the non-owned labels
+                for (auto& s : states) {
+                    statusLine.setText  (s.l, juce::dontSendNotification);
+                    statusLineR.setText (s.r, juce::dontSendNotification);
+                    if (s.update) updateLink.setButtonText ("Update available");
+                    updateLink.setVisible (s.update);
+                    if (s.dots) {
+                        gradeDotsL_.setMetrics (eb::QualityBand::Green,  "28 dB", eb::QualityBand::Green, "56 dB", eb::QualityBand::Orange, "0.8%");
+                        gradeDotsR_.setMetrics (eb::QualityBand::Orange, "18 dB", eb::QualityBand::Green, "52 dB", eb::QualityBand::Green,  "0.3%");
+                    } else { gradeDotsL_.clear(); gradeDotsR_.clear(); }
+                    resized();
+                    const juce::String stem = juce::String ("hig-") + ap.tag + "-" + s.name;
+                    hig::writeDesignProbe (*getTopLevelComponent(),
+                        dir.getChildFile (stem + ".json"),
+                        dir.getChildFile (stem + ".png"));
+                }
             }
+            eb::SystemA11y::setForTest (false, false, false);       // restore; the next theme tick re-reads the OS
+            forceThemeForTest (wasDark);
             }   // if (outDir.isNotEmpty())
         }
     }
