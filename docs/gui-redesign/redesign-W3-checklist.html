@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EARS Bridge - guided setup</title>
+<style>
+  :root{
+    --bg:#1E1E1E; --surface:#2A2A2A; --rail:#232323; --ctrl:#38383A; --ctrl-h:#414146; --bar:#262626; --plot:#202020;
+    --track:#161616; --grid:rgba(255,255,255,.08); --chip-bg:rgba(255,255,255,.10); --info-tx:#5AB7FF; --info-bg:rgba(0,145,255,.16);
+    --sep:rgba(255,255,255,.12); --sep2:rgba(255,255,255,.16);
+    --tx:#FFFFFF; --tx2:rgba(255,255,255,.62); --tx3:rgba(255,255,255,.35); --axis:#98989D;
+    --accent:#0091FF; --accent-fill:#0A6FE0; --accent-h:#1F9DFF; --ok:#30D158; --warn:#FF9E3D; --err:#FF4245;
+    --sans:-apple-system,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:#111; color:var(--tx); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    min-height:100vh; display:flex; justify-content:center; align-items:flex-start;
+    padding:40px 20px 64px;
+  }
+  .num{font-variant-numeric:tabular-nums;}
+
+  /* ---- window chrome ---- */
+  .window{
+    width:900px; max-width:100%; background:var(--bg);
+    border:.5px solid var(--sep2); border-radius:14px; overflow:hidden;
+    box-shadow:0 24px 70px rgba(0,0,0,.55);
+  }
+  .titlebar{
+    height:44px; display:flex; align-items:center; gap:10px;
+    padding:0 16px; background:var(--rail); border-bottom:.5px solid var(--sep);
+  }
+  .traffic{display:flex; gap:8px;}
+  .traffic i{width:12px; height:12px; border-radius:50%; display:block;}
+  .traffic .r{background:#FF5F57;} .traffic .y{background:#FEBC2E;} .traffic .g{background:#28C840;}
+  .brand{display:flex; align-items:center; gap:8px; margin-left:6px;}
+  .glyph{width:18px; height:18px; display:block; color:var(--tx);}
+  .brand .name{font-size:13px; font-weight:500; letter-spacing:.1px; color:var(--tx);}
+  .titlebar .spec{margin-left:auto; display:flex; align-items:center; gap:8px;}
+  .spec .chip{
+    font-size:11px; color:var(--tx2); background:var(--chip-bg);
+    padding:3px 9px; border-radius:999px; letter-spacing:.2px;
+  }
+
+  /* ---- progress header ---- */
+  .head{padding:26px 32px 20px; border-bottom:.5px solid var(--sep); background:var(--bg);}
+  .head .eyebrow{font-size:12px; letter-spacing:.4px; text-transform:uppercase; color:var(--tx3); margin:0 0 8px;}
+  .head h1{margin:0; font-size:22px; font-weight:600; letter-spacing:-.2px;}
+  .head p{margin:8px 0 0; font-size:13.5px; line-height:1.5; color:var(--tx2); max-width:560px;}
+  .prog{margin-top:18px; display:flex; align-items:center; gap:12px;}
+  .prog .track{flex:0 0 190px; height:5px; border-radius:999px; background:var(--track); overflow:hidden;}
+  .prog .track i{display:block; height:100%; width:75%; background:var(--accent); border-radius:999px;}
+  .prog .lbl{font-size:12px; color:var(--tx2);}
+  .prog .lbl b{color:var(--tx); font-weight:500;}
+
+  /* ---- checklist column ---- */
+  .column{max-width:640px; margin:0 auto; padding:24px 0 34px;}
+  .step{
+    margin:0 32px 14px; border:.5px solid var(--sep); border-radius:12px;
+    background:var(--surface); overflow:hidden;
+  }
+  .step:last-child{margin-bottom:0;}
+
+  /* completed summary row */
+  .summary{
+    display:flex; align-items:center; gap:14px; padding:15px 18px; cursor:default;
+  }
+  .badge{
+    flex:0 0 26px; width:26px; height:26px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center; font-size:14px;
+  }
+  .badge.done{background:rgba(48,209,88,.16); color:var(--ok);}
+  .badge.active{background:var(--accent-fill); color:#fff; font-size:13px; font-weight:600;}
+  .badge.lock{background:var(--ctrl); color:var(--tx3); font-size:13px;}
+  .summary .stepno{font-size:12px; color:var(--tx3); font-variant-numeric:tabular-nums; margin-right:-6px;}
+  .summary .titletext{font-size:14px; font-weight:500; color:var(--tx);}
+  .summary .detail{font-size:13px; color:var(--tx2); margin-left:2px;}
+  .summary .detail b{color:var(--tx); font-weight:500;}
+  .summary .edit{
+    margin-left:auto; font-size:12.5px; color:var(--accent-h); font-weight:500;
+    background:none; border:none; padding:6px 4px; cursor:pointer; font-family:inherit;
+  }
+  .summary .edit:hover{text-decoration:underline;}
+  .sep-dot{color:var(--tx3);}
+
+  /* locked (upcoming) row */
+  .step.locked{opacity:.5; background:var(--rail);}
+  .step.locked .summary .titletext{color:var(--tx2);}
+  .step.locked .summary .hint{margin-left:auto; font-size:12px; color:var(--tx3);}
+
+  /* active expanded card */
+  .step.active{border-color:var(--sep2); background:var(--surface); box-shadow:0 8px 30px rgba(0,0,0,.35);}
+  .cardhead{
+    display:flex; align-items:flex-start; gap:14px; padding:18px 20px 4px;
+  }
+  .cardhead .meta{flex:1;}
+  .cardhead .stepno{font-size:12px; color:var(--tx3); font-variant-numeric:tabular-nums;}
+  .cardhead h2{margin:2px 0 3px; font-size:16px; font-weight:600; letter-spacing:-.1px;}
+  .cardhead .need{font-size:13px; color:var(--tx2); line-height:1.45; max-width:420px;}
+  .cardbody{padding:6px 20px 20px;}
+
+  /* meters */
+  .meters{display:flex; flex-direction:column; gap:12px; margin:8px 0 18px;}
+  .meter{display:flex; align-items:center; gap:12px;}
+  .meter .name{flex:0 0 30px; font-size:12px; color:var(--tx2); font-weight:500;}
+  .meter .rail{
+    position:relative; flex:1; height:16px; border-radius:5px; background:var(--track);
+    overflow:hidden; border:.5px solid var(--sep);
+  }
+  .meter .band{
+    position:absolute; top:0; bottom:0; left:66%; right:22%;
+    background:rgba(48,209,88,.14); border-left:1px solid rgba(48,209,88,.4);
+    border-right:1px solid rgba(48,209,88,.4);
+  }
+  .meter .fill{position:absolute; top:0; bottom:0; left:0; border-radius:4px 0 0 4px;}
+  .meter .fill.ok{background:var(--ok);}
+  .meter .fill.low{background:var(--warn);}
+  .meter .fill.neu{background:var(--axis);}
+  .meter .val{flex:0 0 78px; text-align:right; font-size:12.5px; font-variant-numeric:tabular-nums; color:var(--tx);}
+  .meter .val .tag{font-size:10.5px; padding:1px 6px; border-radius:999px; margin-left:6px; letter-spacing:.2px;}
+  .tag.green{background:rgba(48,209,88,.18); color:var(--ok);}
+  .tag.amber{background:rgba(255,158,61,.18); color:var(--warn);}
+
+  /* buttons */
+  .btnrow{display:flex; align-items:center; gap:12px; margin-top:8px;}
+  .btn{
+    font-family:inherit; font-size:13.5px; font-weight:500; border-radius:999px;
+    padding:9px 20px; cursor:pointer; border:.5px solid transparent; letter-spacing:.1px;
+    display:inline-flex; align-items:center; gap:8px;
+  }
+  .btn.primary{background:var(--accent-fill); color:#fff; border-color:var(--accent-fill);}
+  .btn.primary:hover{background:var(--accent-h);}
+  .btn.secondary{background:var(--ctrl); color:var(--tx); border-color:var(--sep2);}
+  .btn.secondary:hover{background:var(--ctrl-h);}
+  .btn svg{width:15px; height:15px; display:block;}
+  .btnrow .aside{font-size:12px; color:var(--tx2); margin-left:2px;}
+
+  /* verdict block */
+  .verdict-intro{
+    display:flex; align-items:center; gap:8px; margin:6px 0 12px; font-size:12px;
+    letter-spacing:.4px; text-transform:uppercase; color:var(--tx3);
+  }
+  .verdict-intro::after{content:""; flex:1; height:.5px; background:var(--sep);}
+  .runline{
+    display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--tx2); margin-bottom:14px;
+  }
+  .runline .ok-dot{width:7px; height:7px; border-radius:50%; background:var(--ok); display:block;}
+
+  .verdicts{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  .earcard{
+    border:.5px solid var(--sep); border-radius:12px; padding:16px 16px 15px; background:var(--bar);
+  }
+  .earcard.clean{border-color:rgba(48,209,88,.38);}
+  .earcard.marginal{border-color:rgba(255,158,61,.42);}
+  .earhead{display:flex; align-items:center; gap:9px; margin-bottom:12px;}
+  .earhead .side{font-size:13px; font-weight:600; color:var(--tx); letter-spacing:.2px;}
+  .earhead .grade{
+    margin-left:auto; font-size:11.5px; font-weight:600; padding:3px 11px; border-radius:999px; letter-spacing:.2px;
+    display:inline-flex; align-items:center; gap:5px;
+  }
+  .grade.clean{background:rgba(48,209,88,.16); color:var(--ok);}
+  .grade.marginal{background:rgba(255,158,61,.16); color:var(--warn);}
+  .grade svg{width:12px; height:12px; display:block;}
+  .stats{display:flex; flex-direction:column; gap:0; margin-bottom:12px;}
+  .stat{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:6px 0; border-bottom:.5px solid var(--sep); font-size:12.5px;
+  }
+  .stat:last-child{border-bottom:none;}
+  .stat .k{color:var(--tx2);}
+  .stat .v{font-variant-numeric:tabular-nums; color:var(--tx); font-weight:500;}
+  .stat .v.warnv{color:var(--warn);}
+  .note{font-size:12px; line-height:1.5; color:var(--tx2);}
+  .note.good{color:var(--tx2);}
+  .note b{color:var(--tx); font-weight:500;}
+  .earcard.marginal .redo{
+    margin-top:11px; width:100%; justify-content:center; padding:8px 0; font-size:12.5px;
+  }
+
+  /* FR caption info bar */
+  .infobar{
+    margin:16px 0 2px; display:flex; align-items:flex-start; gap:10px;
+    background:var(--info-bg); border:.5px solid rgba(90,183,255,.28); border-radius:10px;
+    padding:11px 14px;
+  }
+  .infobar svg{width:16px; height:16px; flex:0 0 16px; margin-top:1px; color:var(--info-tx);}
+  .infobar p{margin:0; font-size:12.5px; line-height:1.5; color:var(--tx);}
+  .infobar p b{color:var(--info-tx); font-weight:500;}
+
+  /* mini FR sparkline inside step 2 summary is omitted; keep clean */
+  .footnote{margin:20px 32px 0; font-size:11.5px; color:var(--tx3); text-align:center;}
+</style>
+</head>
+<body>
+  <div class="window" role="application" aria-label="EARS Bridge guided setup">
+
+    <!-- titlebar -->
+    <div class="titlebar">
+      <div class="traffic" aria-hidden="true"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="brand">
+        <svg class="glyph" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 14 A8 8 0 0 1 20 14" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/>
+          <rect x="3" y="13.5" width="3.4" height="7" rx="1.6" fill="currentColor"/>
+          <rect x="17.6" y="13.5" width="3.4" height="7" rx="1.6" fill="currentColor"/>
+        </svg>
+        <span class="name">EARS Bridge</span>
+      </div>
+      <div class="spec">
+        <span class="chip num">48 kHz</span>
+        <span class="chip num">24-bit</span>
+        <span class="chip">Auto per-ear</span>
+      </div>
+    </div>
+
+    <!-- progress header -->
+    <div class="head">
+      <p class="eyebrow">Guided setup</p>
+      <h1>Measure your headphones through Dirac</h1>
+      <p>Four steps take you from plugging in the EARS jig to a trustworthy per-ear result. Setup steps fold away once done - the last step is where you run the sweep and read the verdict.</p>
+      <div class="prog">
+        <span class="track" aria-hidden="true"><i></i></span>
+        <span class="lbl"><b>Step 4 of 4</b> &nbsp;&middot;&nbsp; Measure &amp; verify</span>
+      </div>
+    </div>
+
+    <!-- checklist -->
+    <div class="column">
+
+      <!-- STEP 1 - completed -->
+      <section class="step" aria-label="Step 1, completed">
+        <div class="summary">
+          <span class="badge done" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none"><path d="M5 12.5 10 17.5 19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="stepno num">1</span>
+          <span class="titletext">Connected</span>
+          <span class="detail"><b>miniDSP EARS</b> <span class="sep-dot">&rarr;</span> <b>VB-Audio Cable</b></span>
+          <button class="edit">Edit</button>
+        </div>
+      </section>
+
+      <!-- STEP 2 - completed -->
+      <section class="step" aria-label="Step 2, completed">
+        <div class="summary">
+          <span class="badge done" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none"><path d="M5 12.5 10 17.5 19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="stepno num">2</span>
+          <span class="titletext">Calibration loaded</span>
+          <span class="detail"><b>L / R HEQ</b> <span class="sep-dot">&middot;</span> serial <b class="num">000-0000</b></span>
+          <button class="edit">Edit</button>
+        </div>
+      </section>
+
+      <!-- STEP 3 - completed -->
+      <section class="step" aria-label="Step 3, completed">
+        <div class="summary">
+          <span class="badge done" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none"><path d="M5 12.5 10 17.5 19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="stepno num">3</span>
+          <span class="titletext">Level set</span>
+          <span class="detail">L <b class="num">-14 dBFS</b> in the green band</span>
+          <button class="edit">Edit</button>
+        </div>
+      </section>
+
+      <!-- STEP 4 - active / culmination -->
+      <section class="step active" aria-label="Step 4, active">
+        <div class="cardhead">
+          <span class="badge active" aria-hidden="true">4</span>
+          <div class="meta">
+            <div class="stepno num">Step 4 of 4</div>
+            <h2>Measure &amp; verify</h2>
+            <p class="need">Run Dirac's sweep once. We deconvolve each ear against the reference learned from Windows Audio and grade the capture. A sweep just finished - here's how each earcup came out.</p>
+          </div>
+        </div>
+
+        <div class="cardbody">
+
+          <!-- live level reference -->
+          <div class="meters" aria-label="Levels">
+            <div class="meter">
+              <span class="name">L</span>
+              <span class="rail"><span class="band" aria-hidden="true"></span><span class="fill ok" style="width:56%"></span></span>
+              <span class="val"><span class="num">-14</span> dB<span class="tag green">green</span></span>
+            </div>
+            <div class="meter">
+              <span class="name">R</span>
+              <span class="rail"><span class="band" aria-hidden="true"></span><span class="fill low" style="width:38%"></span></span>
+              <span class="val"><span class="num">-24</span> dB<span class="tag amber">low</span></span>
+            </div>
+            <div class="meter">
+              <span class="name">Out</span>
+              <span class="rail"><span class="band" aria-hidden="true"></span><span class="fill neu" style="width:50%"></span></span>
+              <span class="val"><span class="num">-16</span> dB</span>
+            </div>
+          </div>
+
+          <div class="btnrow">
+            <button class="btn primary">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+              Re-run sweep
+            </button>
+            <span class="aside">Reference: learned from Windows Audio &middot; <b style="color:var(--ok);font-weight:500;">matched</b></span>
+          </div>
+
+          <!-- verdict payoff -->
+          <div class="verdict-intro">Per-ear verdict</div>
+          <div class="runline">
+            <span class="ok-dot" aria-hidden="true"></span>
+            Sweep captured &middot; graded against matched reference
+          </div>
+
+          <div class="verdicts">
+
+            <!-- LEFT - clean -->
+            <div class="earcard clean">
+              <div class="earhead">
+                <span class="side">Left ear</span>
+                <span class="grade clean">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12.5 10 17.5 19 7" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  Clean
+                </span>
+              </div>
+              <div class="stats">
+                <div class="stat"><span class="k">SNR</span><span class="v num">28 dB</span></div>
+                <div class="stat"><span class="k">IR-SNR</span><span class="v num">56 dB</span></div>
+                <div class="stat"><span class="k">THD</span><span class="v num">0.8%</span></div>
+              </div>
+              <p class="note good"><b>Strong capture, safe to keep.</b></p>
+            </div>
+
+            <!-- RIGHT - marginal -->
+            <div class="earcard marginal">
+              <div class="earhead">
+                <span class="side">Right ear</span>
+                <span class="grade marginal">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3 22 20H2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 9v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17" r="1.1" fill="currentColor"/></svg>
+                  Marginal SNR
+                </span>
+              </div>
+              <div class="stats">
+                <div class="stat"><span class="k">SNR</span><span class="v warnv num">18 dB</span></div>
+                <div class="stat"><span class="k">IR-SNR</span><span class="v num">52 dB</span></div>
+                <div class="stat"><span class="k">THD</span><span class="v num">0.3%</span></div>
+              </div>
+              <p class="note"><b>Dirac may mark this ear imprecise.</b> Raise your level or lower room noise, then re-run this earcup.</p>
+              <button class="btn secondary redo">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20 5v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Re-run right earcup
+              </button>
+            </div>
+
+          </div>
+
+          <!-- FR caption, informational, once -->
+          <div class="infobar">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 11v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="7.6" r="1.1" fill="currentColor"/></svg>
+            <p><b>HEQ curves include a mild bass boost</b> - in Dirac, start from a flat bass target.</p>
+          </div>
+
+        </div>
+      </section>
+
+      <p class="footnote">You're at the last step. Change a device or swap a cal any time with Edit above.</p>
+
+    </div>
+  </div>
+</body>
+</html>

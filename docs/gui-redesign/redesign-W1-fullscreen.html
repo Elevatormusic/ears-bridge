@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EARS Bridge — Measure</title>
+<style>
+  :root{
+    --bg:#1E1E1E; --surface:#2A2A2A; --rail:#232323; --ctrl:#38383A; --ctrl-h:#414146; --bar:#262626; --plot:#202020;
+    --track:#161616; --grid:rgba(255,255,255,.08); --chip-bg:rgba(255,255,255,.10); --info-tx:#5AB7FF; --info-bg:rgba(0,145,255,.16);
+    --sep:rgba(255,255,255,.12); --sep2:rgba(255,255,255,.16);
+    --tx:#FFFFFF; --tx2:rgba(255,255,255,.62); --tx3:rgba(255,255,255,.35); --axis:#98989D;
+    --accent:#0091FF; --accent-fill:#0A6FE0; --accent-h:#1F9DFF; --ok:#30D158; --warn:#FF9E3D; --err:#FF4245;
+    --sans:-apple-system,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:#111; color:var(--tx); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    display:flex; align-items:flex-start; justify-content:center;
+    padding:44px 24px; min-height:100vh;
+  }
+  .num{font-variant-numeric:tabular-nums}
+
+  /* ---- window chrome ---- */
+  .win{
+    width:900px; background:var(--bg); border:.5px solid var(--sep2);
+    border-radius:14px; overflow:hidden;
+    box-shadow:0 24px 70px rgba(0,0,0,.55), 0 2px 0 rgba(255,255,255,.03) inset;
+  }
+  .titlebar{
+    height:44px; display:flex; align-items:center; gap:12px;
+    padding:0 16px; background:var(--bar); border-bottom:.5px solid var(--sep);
+  }
+  .lights{display:flex; gap:8px}
+  .lights i{width:12px;height:12px;border-radius:50%;display:block}
+  .lights .r{background:#FF5F57}.lights .y{background:#FEBC2E}.lights .g{background:#28C840}
+  .wtitle{display:flex; align-items:center; gap:9px; margin-left:2px}
+  .glyph{width:17px;height:17px;display:block}
+  .glyph path{stroke:var(--tx); stroke-width:2.1; fill:none; stroke-linecap:round}
+  .wtitle b{font-size:13px; font-weight:500; letter-spacing:.1px}
+  .wtitle span{font-size:12px; color:var(--tx3); margin-left:2px}
+
+  /* ---- progress spine ---- */
+  .steps{
+    display:flex; align-items:stretch; padding:0 22px;
+    background:var(--rail); border-bottom:.5px solid var(--sep);
+  }
+  .step{
+    appearance:none; background:none; border:none; cursor:pointer; font-family:inherit;
+    display:flex; align-items:center; gap:11px; padding:15px 4px; flex:1;
+    color:var(--tx3); text-align:left; position:relative;
+  }
+  .step:focus-visible{outline:2px solid var(--accent); outline-offset:-3px; border-radius:8px}
+  .step .dot{
+    width:23px;height:23px;border-radius:50%; flex:none;
+    display:flex;align-items:center;justify-content:center;
+    font-size:12px; font-weight:500; border:1.5px solid var(--sep2);
+    color:var(--tx2); transition:.15s;
+  }
+  .step .dot i{width:11px;height:8px}
+  .step .dot i path{stroke:#fff;stroke-width:2.4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  .step .lbl{display:flex; flex-direction:column; line-height:1.25}
+  .step .lbl small{font-size:10.5px; letter-spacing:.5px; text-transform:uppercase; color:var(--tx3)}
+  .step .lbl b{font-size:13px; font-weight:500; color:var(--tx2)}
+  .step.done .dot{background:var(--ok); border-color:var(--ok)}
+  .step.done .lbl b{color:var(--tx2)}
+  .step.current .dot{background:var(--accent-fill); border-color:var(--accent); color:#fff}
+  .step.current .lbl small{color:var(--accent)}
+  .step.current .lbl b{color:var(--tx)}
+  .step:hover:not(.current) .lbl b{color:var(--tx)}
+  .step .bar{position:absolute; left:0; right:0; bottom:0; height:2px; background:transparent}
+  .step.current .bar{background:var(--accent)}
+  .cx{display:flex; align-items:center; color:var(--tx3); font-size:14px; padding:0 2px}
+  .cx i{width:7px;height:11px}
+  .cx i path{stroke:var(--sep2);stroke-width:1.6;fill:none;stroke-linecap:round;stroke-linejoin:round}
+
+  /* ---- content column ---- */
+  .stage{padding:40px 24px 30px; display:flex; justify-content:center}
+  .col{width:560px; max-width:100%}
+
+  .lead{text-align:center; margin-bottom:26px}
+  .lead .kick{
+    font-size:11px; letter-spacing:.8px; text-transform:uppercase;
+    color:var(--accent); font-weight:500; margin-bottom:9px;
+  }
+  .lead h1{font-size:27px; font-weight:500; letter-spacing:-.4px; line-height:1.15}
+  .lead p{font-size:15px; color:var(--tx2); line-height:1.5; margin-top:9px; max-width:440px; margin-inline:auto}
+
+  /* ---- run panel ---- */
+  .run{
+    background:var(--surface); border:.5px solid var(--sep); border-radius:12px;
+    padding:18px 20px; margin-bottom:14px;
+  }
+  .runtop{display:flex; align-items:center; justify-content:space-between; gap:16px}
+  .runtop .info{display:flex; align-items:center; gap:13px; min-width:0}
+  .runicon{
+    width:38px;height:38px;border-radius:10px;flex:none;
+    background:var(--info-bg); display:flex;align-items:center;justify-content:center;
+  }
+  .runicon i{width:19px;height:19px}
+  .runicon i path,.runicon i circle{stroke:var(--info-tx);stroke-width:1.7;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  .runtxt b{font-size:15px; font-weight:500; display:block}
+  .runtxt small{font-size:12.5px; color:var(--tx2)}
+  .btn{
+    appearance:none; font-family:inherit; cursor:pointer;
+    display:inline-flex; align-items:center; gap:8px;
+    font-size:14px; font-weight:500; border-radius:20px; height:40px; padding:0 20px;
+    border:.5px solid transparent; white-space:nowrap; transition:.13s;
+  }
+  .btn:focus-visible{outline:2px solid var(--accent-h); outline-offset:2px}
+  .btn i{width:14px;height:14px}
+  .btn i path,.btn i polygon{stroke-width:0}
+  .btn.primary{background:var(--accent-fill); color:#fff}
+  .btn.primary:hover{background:var(--accent-h)}
+  .btn.primary i polygon{fill:#fff}
+  .btn.ghost{background:var(--ctrl); color:var(--tx); border-color:var(--sep2)}
+  .btn.ghost:hover{background:var(--ctrl-h)}
+  .btn.ghost i path{stroke:var(--tx); stroke-width:1.7; fill:none; stroke-linecap:round; stroke-linejoin:round}
+
+  .runmeta{
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    margin-top:16px; padding-top:14px; border-top:.5px solid var(--sep);
+  }
+  .chip{
+    display:inline-flex; align-items:center; gap:6px;
+    background:var(--chip-bg); border-radius:7px; padding:5px 10px;
+    font-size:12px; color:var(--tx2);
+  }
+  .chip b{color:var(--tx); font-weight:500}
+  .chip .mk{width:6px;height:6px;border-radius:50%;background:var(--ok)}
+  .meters{display:flex; gap:16px; margin-left:auto; align-items:center}
+  .mtr{display:flex; align-items:center; gap:7px}
+  .mtr .cap{font-size:11px; color:var(--tx3); width:26px; text-align:right}
+  .mtr .track{
+    width:64px;height:6px;border-radius:3px; background:var(--track);
+    position:relative; overflow:hidden;
+  }
+  .mtr .band{position:absolute; top:0; bottom:0; background:rgba(48,209,88,.14)}
+  .mtr .fill{position:absolute; top:0; bottom:0; left:0; border-radius:3px}
+  .mtr .val{font-size:11.5px; color:var(--tx2); width:52px}
+
+  /* ---- verdict ---- */
+  .payoff-head{
+    display:flex; align-items:center; gap:10px; margin:22px 2px 12px;
+  }
+  .payoff-head .ln{height:.5px; background:var(--sep); flex:1}
+  .payoff-head b{font-size:12px; letter-spacing:.6px; text-transform:uppercase; color:var(--tx3); font-weight:500}
+
+  .verdicts{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+  .card{
+    background:var(--surface); border:.5px solid var(--sep); border-radius:12px;
+    padding:16px 16px 15px; position:relative; overflow:hidden;
+  }
+  .card::before{content:""; position:absolute; left:0; top:0; bottom:0; width:3px}
+  .card.clean::before{background:var(--ok)}
+  .card.marg::before{background:var(--warn)}
+  .card .ear{
+    display:flex; align-items:center; justify-content:space-between; margin-bottom:11px;
+  }
+  .card .ear .side{display:flex; align-items:center; gap:9px}
+  .earbadge{
+    width:26px;height:26px;border-radius:8px; flex:none;
+    display:flex;align-items:center;justify-content:center;
+    font-size:12px; font-weight:500; background:var(--ctrl); color:var(--tx2);
+  }
+  .card .ear .side b{font-size:14px; font-weight:500}
+  .grade{
+    display:inline-flex; align-items:center; gap:6px;
+    font-size:12px; font-weight:500; border-radius:6px; padding:3px 9px;
+  }
+  .grade i{width:11px;height:11px}
+  .grade.g-clean{background:rgba(48,209,88,.16); color:var(--ok)}
+  .grade.g-clean i path{stroke:var(--ok);stroke-width:2.4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  .grade.g-marg{background:rgba(255,158,61,.16); color:var(--warn)}
+  .grade.g-marg i path{stroke:var(--warn);stroke-width:2.2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+
+  .bigword{font-size:23px; font-weight:500; letter-spacing:-.3px; line-height:1; margin-bottom:2px}
+  .card.clean .bigword{color:var(--ok)}
+  .card.marg .bigword{color:var(--warn)}
+  .subword{font-size:12.5px; color:var(--tx2); margin-bottom:14px}
+
+  .metrics{display:flex; gap:0; border-top:.5px solid var(--sep); padding-top:12px}
+  .metric{flex:1; text-align:center; position:relative}
+  .metric + .metric::before{content:""; position:absolute; left:0; top:2px; bottom:2px; width:.5px; background:var(--sep)}
+  .metric .mv{font-size:15px; font-weight:500; letter-spacing:-.2px}
+  .metric .mv.amb{color:var(--warn)}
+  .metric .mk{font-size:10.5px; letter-spacing:.4px; text-transform:uppercase; color:var(--tx3); margin-top:3px}
+
+  .fix{
+    display:flex; gap:9px; align-items:flex-start; margin-top:13px;
+    font-size:12.5px; line-height:1.45; color:var(--tx2);
+  }
+  .fix i{width:14px;height:14px;flex:none;margin-top:1px}
+  .card.clean .fix i path{stroke:var(--ok)}
+  .card.marg .fix i path{stroke:var(--warn)}
+  .fix i path,.fix i circle{stroke-width:1.8;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  .fix b{color:var(--tx); font-weight:500}
+
+  /* HEQ curve callout */
+  .heq{
+    display:flex; gap:16px; align-items:center; margin-top:14px;
+    background:var(--surface); border:.5px solid var(--sep); border-radius:12px; padding:14px 16px;
+  }
+  .plotbox{width:150px; height:56px; flex:none; background:var(--plot); border-radius:8px; padding:6px}
+  .plotbox svg{display:block; width:100%; height:100%}
+  .heqtxt{min-width:0}
+  .heqtag{
+    display:inline-flex; align-items:center; gap:6px; font-size:10.5px; font-weight:500;
+    letter-spacing:.4px; text-transform:uppercase; color:var(--info-tx);
+    background:var(--info-bg); border-radius:5px; padding:3px 8px; margin-bottom:6px;
+  }
+  .heqtag i{width:11px;height:11px}
+  .heqtag i path,.heqtag i circle{stroke:var(--info-tx);stroke-width:1.9;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  .heqtxt p{font-size:12.5px; color:var(--tx2); line-height:1.5}
+  .heqtxt p b{color:var(--tx); font-weight:500}
+
+  /* ---- footer ---- */
+  .footer{
+    display:flex; align-items:center; justify-content:space-between; gap:16px;
+    padding:16px 24px; border-top:.5px solid var(--sep); background:var(--bar);
+  }
+  .footer .hint{font-size:12.5px; color:var(--tx3); display:flex; align-items:center; gap:7px}
+  .footer .hint i{width:13px;height:13px}
+  .footer .hint i path,.footer .hint i circle{stroke:var(--tx3);stroke-width:1.7;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  .footer .acts{display:flex; gap:10px}
+  .btn.back{background:var(--ctrl); color:var(--tx); border-color:var(--sep2)}
+  .btn.back:hover{background:var(--ctrl-h)}
+  .btn.back i path{stroke:var(--tx);stroke-width:1.9;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  .btn.done-btn{background:var(--accent-fill); color:#fff}
+  .btn.done-btn:hover{background:var(--accent-h)}
+  .btn.done-btn i path{stroke:#fff;stroke-width:2.2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+</style>
+</head>
+<body>
+  <main class="win" role="dialog" aria-label="EARS Bridge measurement assistant">
+
+    <div class="titlebar">
+      <div class="lights"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="wtitle">
+        <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14a8 8 0 0 1 16 0"/><path d="M4 14v3.5"/><path d="M20 14v3.5"/></svg>
+        <b>EARS Bridge</b><span>Setup assistant</span>
+      </div>
+    </div>
+
+    <nav class="steps" aria-label="Setup progress">
+      <button class="step done" type="button" aria-label="Step 1, Connect, completed. Go back to change devices.">
+        <span class="dot"><svg viewBox="0 0 12 8" aria-hidden="true"><path d="M1 4.2 4.4 7.2 11 1"/></svg></span>
+        <span class="lbl"><small>Step 1</small><b>Connect</b></span>
+        <span class="bar"></span>
+      </button>
+      <span class="cx"><svg viewBox="0 0 7 11" aria-hidden="true"><path d="M1 1l4.5 4.5L1 10"/></svg></span>
+
+      <button class="step done" type="button" aria-label="Step 2, Calibrate, completed. Go back to swap a calibration file.">
+        <span class="dot"><svg viewBox="0 0 12 8" aria-hidden="true"><path d="M1 4.2 4.4 7.2 11 1"/></svg></span>
+        <span class="lbl"><small>Step 2</small><b>Calibrate</b></span>
+        <span class="bar"></span>
+      </button>
+      <span class="cx"><svg viewBox="0 0 7 11" aria-hidden="true"><path d="M1 1l4.5 4.5L1 10"/></svg></span>
+
+      <button class="step done" type="button" aria-label="Step 3, Level, completed. Go back to reset the level.">
+        <span class="dot"><svg viewBox="0 0 12 8" aria-hidden="true"><path d="M1 4.2 4.4 7.2 11 1"/></svg></span>
+        <span class="lbl"><small>Step 3</small><b>Level</b></span>
+        <span class="bar"></span>
+      </button>
+      <span class="cx"><svg viewBox="0 0 7 11" aria-hidden="true"><path d="M1 1l4.5 4.5L1 10"/></svg></span>
+
+      <button class="step current" type="button" aria-current="step" aria-label="Step 4, Measure, current step.">
+        <span class="dot">4</span>
+        <span class="lbl"><small>Step 4</small><b>Measure</b></span>
+        <span class="bar"></span>
+      </button>
+    </nav>
+
+    <div class="stage">
+      <div class="col">
+
+        <div class="lead">
+          <div class="kick">Final step</div>
+          <h1>Measure your headphones</h1>
+          <p>Run Dirac's sweep. We grade each ear so you know the capture is trustworthy before you save it.</p>
+        </div>
+
+        <section class="run" aria-label="Run controls">
+          <div class="runtop">
+            <div class="info">
+              <div class="runicon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h3l2.5-6 4 15 2.5-9H21"/></svg></div>
+              <div class="runtxt">
+                <b>Sweep complete</b>
+                <small>Both earcups captured through Dirac Live · <span class="num">4.2 s</span></small>
+              </div>
+            </div>
+            <button class="btn primary" type="button">
+              <svg viewBox="0 0 12 12" aria-hidden="true"><polygon points="2,1.5 10.5,6 2,10.5"></polygon></svg>
+              Re-run sweep
+            </button>
+          </div>
+
+          <div class="runmeta">
+            <span class="chip"><b>Auto per-ear</b></span>
+            <span class="chip"><b class="num">48 kHz</b></span>
+            <span class="chip"><b class="num">24-bit</b></span>
+            <span class="chip"><span class="mk"></span>Reference matched</span>
+
+            <div class="meters">
+              <div class="mtr" title="Left input level, in the green target band">
+                <span class="cap">L</span>
+                <span class="track"><span class="band" style="left:41%;right:23%"></span><span class="fill" style="width:64%;background:var(--ok)"></span></span>
+                <span class="val num">−14 dB</span>
+              </div>
+              <div class="mtr" title="Right input level, low — below the target band">
+                <span class="cap">R</span>
+                <span class="track"><span class="band" style="left:41%;right:23%"></span><span class="fill" style="width:41%;background:var(--warn)"></span></span>
+                <span class="val num">−24 dB</span>
+              </div>
+              <div class="mtr" title="Output level to the virtual cable">
+                <span class="cap">Out</span>
+                <span class="track"><span class="band" style="left:41%;right:23%"></span><span class="fill" style="width:58%;background:var(--tx2)"></span></span>
+                <span class="val num">−16 dB</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div class="payoff-head">
+          <b>Per-ear verdict</b>
+          <span class="ln"></span>
+        </div>
+
+        <div class="verdicts">
+
+          <article class="card clean" aria-label="Left ear verdict: clean">
+            <div class="ear">
+              <span class="side"><span class="earbadge">L</span><b>Left ear</b></span>
+              <span class="grade g-clean"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.3 4.8 9 10 2.5"/></svg>Pass</span>
+            </div>
+            <div class="bigword">Clean</div>
+            <div class="subword">Strong capture, safe to keep.</div>
+            <div class="metrics">
+              <div class="metric"><div class="mv num">28 dB</div><div class="mk">SNR</div></div>
+              <div class="metric"><div class="mv num">56 dB</div><div class="mk">IR-SNR</div></div>
+              <div class="metric"><div class="mv num">0.8%</div><div class="mk">THD</div></div>
+            </div>
+            <div class="fix">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3"></circle><path d="M5.3 8.1 7.2 10 10.8 6"></path></svg>
+              <span>Keep this ear. No action needed.</span>
+            </div>
+          </article>
+
+          <article class="card marg" aria-label="Right ear verdict: marginal SNR">
+            <div class="ear">
+              <span class="side"><span class="earbadge">R</span><b>Right ear</b></span>
+              <span class="grade g-marg"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 2.3v4.4"/><path d="M6 8.9v.1"/></svg>Marginal SNR</span>
+            </div>
+            <div class="bigword">Marginal</div>
+            <div class="subword">Dirac may mark this ear imprecise.</div>
+            <div class="metrics">
+              <div class="metric"><div class="mv num amb">18 dB</div><div class="mk">SNR</div></div>
+              <div class="metric"><div class="mv num">52 dB</div><div class="mk">IR-SNR</div></div>
+              <div class="metric"><div class="mv num">0.3%</div><div class="mk">THD</div></div>
+            </div>
+            <div class="fix">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6 14.4 13H1.6L8 1.6z"></path><path d="M8 6.2v3.1"/><path d="M8 11.3v.1"/></svg>
+              <span><b>Raise your level</b> or lower room noise, then re-run this earcup.</span>
+            </div>
+          </article>
+
+        </div>
+
+        <section class="heq" aria-label="Calibration curve note">
+          <div class="plotbox">
+            <svg viewBox="0 0 150 56" preserveAspectRatio="none" aria-hidden="true">
+              <line x1="0" y1="14" x2="150" y2="14" stroke="var(--grid)" stroke-width="1"/>
+              <line x1="0" y1="28" x2="150" y2="28" stroke="var(--grid)" stroke-width="1"/>
+              <line x1="0" y1="42" x2="150" y2="42" stroke="var(--grid)" stroke-width="1"/>
+              <path d="M2 34 C 26 33, 42 40, 62 30 C 82 20, 96 16, 112 27 C 126 35, 138 33, 148 33"
+                    fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="heqtxt">
+            <span class="heqtag"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5"></circle><path d="M6 5.4v3"/><path d="M6 3.4v.1"/></svg>HEQ curve</span>
+            <p>HEQ curves include a mild bass boost — in Dirac, <b>start from a flat bass target</b>.</p>
+          </div>
+        </section>
+
+      </div>
+    </div>
+
+    <div class="footer">
+      <div class="hint">
+        <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M8.5 3 4.5 7l4 4"/></svg>
+        <span>Click a step above to change a device or swap a cal.</span>
+      </div>
+      <div class="acts">
+        <button class="btn back" type="button">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M7.5 2 3.5 6l4 4"/></svg>
+          Back
+        </button>
+        <button class="btn done-btn" type="button">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.3 4.8 9 10 2.5"/></svg>
+          Save calibration
+        </button>
+      </div>
+    </div>
+
+  </main>
+</body>
+</html>
