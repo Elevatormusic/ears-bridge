@@ -57,4 +57,21 @@ struct DriftReport {
 // 8 kHz, +/-8 dB to 14 kHz, effectively unlimited (report-only) above 14 kHz.
 [[nodiscard]] float driftToleranceDb (float hz);
 
+struct CombReport {
+    bool  found = false;
+    float depthDb = 0.0f;      // peak-to-peak ripple 20*log10((1+a)/(1-a))
+    float delayMs = 0.0f, spacingHz = 0.0f;
+    float prominence = 0.0f;   // cepstral peak / MAD of the search region
+    bool  fromEnvelope = false;// true when only the IR-envelope arm fired (tau >= 2 ms)
+};
+// D2 (spec 4.D2). Comb / echo detector. Primary arm = band-limited POWER CEPSTRUM over the
+// analysis band: the low-quefrency lifter (0.4 ms) IS the de-trend, and unlike the REJECTED
+// autocorrelation (ACF) formulation - which carried a tau-dependent blind band worst at short tau
+// (the 1 ms echo it missed) - the cepstrum has UNIFORM tau sensitivity across 0.4..25 ms. A
+// secondary IR-envelope arm (moving max, 2..50 ms after the main peak) corroborates and reaches
+// the long-tau echoes beyond the cepstral window (sets fromEnvelope). PROVISIONAL thresholds
+// pending the on-device campaign (#54C): cepstral prominence >= 4x the search-region MAD and
+// ripple amplitude a >= 0.1 (== a -20 dB echo); envelope arm fires at a secondary peak >= -20 dB.
+[[nodiscard]] CombReport detectComb (const WindowedSpectrum& ws, const float* ir, int n);
+
 } // namespace eb

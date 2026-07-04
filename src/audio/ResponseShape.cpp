@@ -154,4 +154,94 @@ DriftReport compareCurves (const BandCurve& baseline, const BandCurve& current) 
     return r;
 }
 
+CombReport detectComb (const WindowedSpectrum& ws, const float* ir, int n) {
+    CombReport out;
+    if (! ws.valid || ir == nullptr || n <= 0) return out;
+
+    // --- Primary: band-limited power cepstrum (spec 4.D2). The low-quefrency lifter IS the
+    // de-trend; unlike a fractional-octave residual it has UNIFORM tau sensitivity (the rejected
+    // ACF formulation had a tau-dependent blind band, worst at short tau).
+    const int nb = ws.kHi - ws.kLo + 1;
+    std::vector<double> x ((size_t) nb, 0.0);
+    double mean = 0.0;
+    for (int i = 0; i < nb; ++i) {
+        x[(size_t) i] = 0.5 * std::log (std::max ((double) ws.power[(size_t) (ws.kLo + i)], 1e-30));
+        mean += x[(size_t) i];
+    }
+    mean /= nb;
+    double winSum = 0.0;
+    for (int i = 0; i < nb; ++i) {                            // mean-subtract + Hann taper
+        const double w = 0.5 * (1.0 - std::cos (2.0 * kPiD * (double) i / (double) (nb - 1)));
+        x[(size_t) i] = (x[(size_t) i] - mean) * w;
+        winSum += w;
+    }
+    const int cN = nextPow2R (nb * 2);
+    juce::dsp::FFT cfft (orderForR (cN));
+    std::vector<float> cin ((size_t) cN * 2, 0.0f), cout ((size_t) cN * 2, 0.0f);
+    for (int i = 0; i < nb; ++i) cin[(size_t) i * 2] = (float) x[(size_t) i];
+    cfft.perform (reinterpret_cast<juce::dsp::Complex<float>*> (cin.data()),
+                  reinterpret_cast<juce::dsp::Complex<float>*> (cout.data()), false);
+
+    // Quefrency mapping: the transform runs over LINEAR-f bins spaced binHz apart, so cepstral
+    // sample q corresponds to tau = q / (cN * binHz) seconds.
+    const double binHz = ws.fs / (double) ws.fftSize;
+    const double tauPerSample = 1.0 / ((double) cN * binHz);
+    const int qLo = std::max (1, (int) std::ceil  (0.0004 / tauPerSample));   // 0.4 ms lifter
+    const int qHi = std::min (cN / 2 - 1, (int) std::floor (0.025 / tauPerSample)); // 25 ms
+    if (qHi > qLo + 8) {
+        std::vector<double> mag ((size_t) (qHi - qLo + 1), 0.0);
+        int    qPk = qLo; double mPk = 0.0;
+        for (int q = qLo; q <= qHi; ++q) {
+            const float re = cout[(size_t) q * 2], im = cout[(size_t) q * 2 + 1];
+            const double m = std::sqrt ((double) re * re + (double) im * im);
+            mag[(size_t) (q - qLo)] = m;
+            if (m > mPk) { mPk = m; qPk = q; }
+        }
+        std::vector<double> tmp = mag;                        // MAD of the search region
+        std::nth_element (tmp.begin(), tmp.begin() + (std::ptrdiff_t) (tmp.size() / 2), tmp.end());
+        const double med = tmp[tmp.size() / 2];
+        for (auto& v : tmp) v = std::abs (v - med);
+        std::nth_element (tmp.begin(), tmp.begin() + (std::ptrdiff_t) (tmp.size() / 2), tmp.end());
+        const double mad = std::max (tmp[tmp.size() / 2], 1e-12);
+        const double prominence = mPk / mad;
+        // DFT amplitude estimate of the log-mag cosine ripple: a ~ 2*|C| / sum(window).
+        const double a = std::clamp (2.0 * mPk / std::max (winSum, 1e-9), 0.0, 0.98);
+        if (prominence >= 4.0 && a >= 0.1) {                  // -20 dB echo INFO line (spec)
+            out.found      = true;
+            out.prominence = (float) prominence;
+            out.delayMs    = (float) (qPk * tauPerSample * 1000.0);
+            out.spacingHz  = (float) (1.0 / (qPk * tauPerSample));
+            out.depthDb    = (float) (20.0 * std::log10 ((1.0 + a) / (1.0 - a)));
+        }
+    }
+
+    // --- Corroboration / long-tau arm: IR-envelope secondary peak, 2..50 ms after the main peak
+    // (REW-documented multi-sweep sync loss lands here; legitimate cup acoustics are sub-ms and
+    // decay within a few ms). Envelope = moving max over +/-4 samples.
+    int peak = 0; float peakMag = 0.0f;
+    for (int i = 0; i < n; ++i) { const float m = std::abs (ir[i]); if (m > peakMag) { peakMag = m; peak = i; } }
+    if (peakMag > 0.0f) {
+        const int from = peak + (int) std::lround (0.002 * ws.fs);
+        const int to   = std::min (n - 1, peak + (int) std::lround (0.050 * ws.fs));
+        int   sPk = 0; float sMag = 0.0f;
+        for (int i = from; i <= to; ++i) {
+            float env = 0.0f;
+            for (int j = std::max (0, i - 4); j <= std::min (n - 1, i + 4); ++j)
+                env = std::max (env, std::abs (ir[j]));
+            if (env > sMag) { sMag = env; sPk = i; }
+        }
+        const float echoDb = 20.0f * std::log10 (std::max (sMag, 1e-12f) / peakMag);
+        if (echoDb >= -20.0f && sPk > from) {
+            if (! out.found) {
+                out.found = true; out.fromEnvelope = true;
+                out.delayMs   = (float) ((sPk - peak) * 1000.0 / ws.fs);
+                out.spacingHz = (float) (ws.fs / (double) (sPk - peak));
+                out.depthDb   = 20.0f * std::log10 ((1.0f + std::pow (10.0f, echoDb / 20.0f))
+                                                  / (1.0f - std::pow (10.0f, echoDb / 20.0f)));
+            }
+        }
+    }
+    return out;
+}
+
 } // namespace eb

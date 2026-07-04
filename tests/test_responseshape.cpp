@@ -120,3 +120,62 @@ TEST_CASE("driftToleranceDb is the spec envelope") {
     const float mid = eb::driftToleranceDb (400.0f);        // 300..500: log-f interpolation 6 -> 3
     CHECK (mid < 6.0f); CHECK (mid > 3.0f);
 }
+
+TEST_CASE("detectComb finds echoes across the tau window (cepstrum), incl. the 1 ms ACF blind spot") {
+    const int n = 1 << 16; const double fs = 48000.0;
+    auto mk = [&] (double tauMs, float a) {
+        auto ir = bandIr (n, fs, 20000.0);                   // main arrival at 400
+        const int d = (int) std::lround (tauMs * 1e-3 * fs);
+        auto echo = bandIr (n, fs, 20000.0, 400 + d, a);     // band-limited delayed copy
+        for (int i = 0; i < n; ++i) ir[(size_t) i] += echo[(size_t) i];
+        return ir;
+    };
+    for (const double tauMs : { 1.0, 5.0, 15.0 }) {          // 1 ms = the rejected-ACF blind spot
+        auto ir = mk (tauMs, 0.316f);                        // -10 dB echo
+        auto ws = eb::windowedBandSpectrum (ir.data(), n, fs, 20.0, 20000.0);
+        REQUIRE (ws.valid);
+        auto c = eb::detectComb (ws, ir.data(), n);
+        INFO ("tau=" << tauMs << " found=" << c.found << " delay=" << c.delayMs
+              << " depth=" << c.depthDb << " prom=" << c.prominence);
+        CHECK (c.found);
+        CHECK (std::abs (c.delayMs - tauMs) < 0.2 + 0.05 * tauMs);
+        CHECK (c.depthDb > 2.5f);                            // a=0.316 -> pp ~5.7 dB; allow estimator slack
+        CHECK (c.depthDb < 12.0f);
+    }
+}
+
+TEST_CASE("detectComb stays silent on clean, sub-lifter, and below-threshold cases") {
+    const int n = 1 << 16; const double fs = 48000.0;
+    auto clean = bandIr (n, fs, 20000.0);
+    auto wsC = eb::windowedBandSpectrum (clean.data(), n, fs, 20.0, 20000.0);
+    REQUIRE (wsC.valid);
+    CHECK_FALSE (eb::detectComb (wsC, clean.data(), n).found);
+    // 0.2 ms is a legitimate intra-cup reflection: below the 0.4 ms lifter -> silent.
+    auto cup = clean;
+    { auto e = bandIr (n, fs, 20000.0, 400 + (int) std::lround (0.0002 * fs), 0.4f);
+      for (int i = 0; i < n; ++i) cup[(size_t) i] += e[(size_t) i]; }
+    auto wsCup = eb::windowedBandSpectrum (cup.data(), n, fs, 20.0, 20000.0);
+    REQUIRE (wsCup.valid);
+    CHECK_FALSE (eb::detectComb (wsCup, cup.data(), n).found);
+    // -32 dB echo: well under the -20 dB INFO line -> silent.
+    auto faint = clean;
+    { auto e = bandIr (n, fs, 20000.0, 400 + (int) std::lround (0.005 * fs), 0.025f);
+      for (int i = 0; i < n; ++i) faint[(size_t) i] += e[(size_t) i]; }
+    auto wsF = eb::windowedBandSpectrum (faint.data(), n, fs, 20.0, 20000.0);
+    REQUIRE (wsF.valid);
+    CHECK_FALSE (eb::detectComb (wsF, faint.data(), n).found);
+}
+
+TEST_CASE("detectComb envelope arm catches a 35 ms echo beyond the cepstral window") {
+    const int n = 1 << 17; const double fs = 48000.0;
+    auto ir = bandIr (n, fs, 20000.0);
+    const int d = (int) std::lround (0.035 * fs);
+    auto e = bandIr (n, fs, 20000.0, 400 + d, 0.25f);        // -12 dB echo at 35 ms
+    for (int i = 0; i < n; ++i) ir[(size_t) i] += e[(size_t) i];
+    auto ws = eb::windowedBandSpectrum (ir.data(), n, fs, 20.0, 20000.0);
+    REQUIRE (ws.valid);
+    auto c = eb::detectComb (ws, ir.data(), n);
+    CHECK (c.found);
+    CHECK (c.fromEnvelope);
+    CHECK (std::abs (c.delayMs - 35.0) < 2.0);
+}
