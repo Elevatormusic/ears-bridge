@@ -36,6 +36,7 @@ add_executable(eb_tests
     test_statusphase.cpp
     test_statusladder.cpp
     test_wizardstate.cpp
+    test_wizardspine.cpp
     test_signalchainview.cpp
     test_irquality.cpp
     test_hysteresis.cpp

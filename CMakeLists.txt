@@ -141,6 +141,7 @@ add_library(eb_gui STATIC
     src/gui/CalSlotComponent.cpp
     src/gui/DevicePicker.cpp
     src/gui/HigScore.cpp
+    src/gui/WizardSpine.cpp
     src/gui/MainComponent.cpp
     src/net/UpdateChecker.cpp
     src/platform/DiracCompat.cpp     # Windows: Dirac shared-mode env-var helper (no-op elsewhere)
