@@ -85,6 +85,8 @@ TEST_CASE("WizardNav focus lands inside the shown stage on switch") {
     auto* target = mc.firstFocusTargetForTest();
     REQUIRE (target != nullptr);
     CHECK (isDescendantOf (target, &mc.calibrateStageForTest()));
+    // minor-3: focus must land on a real control, never the scroll Viewport (which wants focus by default).
+    CHECK (dynamic_cast<juce::Viewport*> (target) == nullptr);
 
     tmp.deleteRecursively();
 }
@@ -109,6 +111,35 @@ TEST_CASE("WizardNav H2 device pickers carry inner-combo accessible titles") {
 
     CHECK (mc.inputPickerForTest().comboTitleForTest() == juce::String ("Input device"));
     CHECK (mc.outputPickerForTest().comboTitleForTest() == juce::String ("Output virtual cable"));
+
+    tmp.deleteRecursively();
+}
+
+// M-2: the Level green-band latch must be invalidated on an input-device change through BOTH the user
+// pick and the hot-plug re-resolution. Both route through applyResolvedInput; this drives that shared
+// path directly (the hot-plug lambda's exact member) and asserts a CHANGED key clears the latch while an
+// UNCHANGED key leaves a still-valid latch alone. Guards the regression where a replug (or the EARS
+// gain-DIP rename fallback) re-applied the input without clearing the latch, so Level kept claiming
+// "In green band" on old-gain evidence.
+TEST_CASE("WizardNav levelLatched clears when the applied input key changes (M-2)") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (hermetic (tmp));
+    mc.setSize (960, 780);
+
+    // A distinct input device (its own uid -> its own key()). Applying it must clear a set latch.
+    eb::DeviceId dev; dev.typeName = "Windows Audio"; dev.name = "EARS"; dev.uid = "uid-A";
+    mc.applyResolvedInputForTest (dev);   // seed the memo to dev's key
+    mc.setLevelLatchedForTest (true);
+
+    // Same device again -> key unchanged -> the still-valid latch survives.
+    mc.applyResolvedInputForTest (dev);
+    CHECK (mc.levelLatchedForTest());
+
+    // A genuinely different device -> key changes -> the latch is invalidated.
+    eb::DeviceId dev2; dev2.typeName = "Windows Audio"; dev2.name = "EARS Pro"; dev2.uid = "uid-B";
+    mc.applyResolvedInputForTest (dev2);
+    CHECK_FALSE (mc.levelLatchedForTest());
 
     tmp.deleteRecursively();
 }

@@ -197,6 +197,34 @@ TEST_CASE("WizardState regression banner: all Done, pin Measure, then deviceErro
     CHECK (pinnedConnect.banner.isEmpty());
 }
 
+// ---- 9b. composeBanner against a SHOWN step (held-pin scenario, minor-1) -------------------------
+// The banner must follow the SHOWN stage, not ws.active. During a held-pin rebuild the shown stage can be
+// EARLIER than active; a deviceError before it must still surface a banner + jump on the held stage.
+// composeBanner re-runs the machine's rule against any shown step: an Error strictly before it -> banner;
+// the shown step being (or preceding) the broken step -> none. This is what the view calls with `toShow`.
+TEST_CASE("WizardState composeBanner: follows the shown step, not just ws.active") {
+    WizardInputs in = allDone();
+    in.deviceError = true;   // Connect regresses to Error
+    const auto ws = eb::computeWizardState (in, WizardStep::Measure);
+    REQUIRE (ws.steps[(int) WizardStep::Connect].state == StepState::Error);
+
+    // Shown = Measure (after Connect) -> banner points back to Connect.
+    const auto atMeasure = eb::composeBanner (ws, WizardStep::Measure);
+    CHECK (atMeasure.text.isNotEmpty());
+    CHECK (atMeasure.target == WizardStep::Connect);
+    CHECK (atMeasure.text.contains ("Device error - check the EARS and cable"));
+
+    // Shown = Calibrate (still after Connect) -> banner also surfaces (the held-pin case: the shown stage
+    // is EARLIER than ws.active == Measure, yet an Error before it must not be swallowed).
+    const auto atCalibrate = eb::composeBanner (ws, WizardStep::Calibrate);
+    CHECK (atCalibrate.text.isNotEmpty());
+    CHECK (atCalibrate.target == WizardStep::Connect);
+
+    // Shown = Connect itself (the broken step) -> no banner (that stage surfaces its own error).
+    const auto atConnect = eb::composeBanner (ws, WizardStep::Connect);
+    CHECK (atConnect.text.isEmpty());
+}
+
 // ---- 10. Stale verdicts -------------------------------------------------------------------------
 
 TEST_CASE("WizardState stale verdicts: ears graded at gen 3, configGen 4 -> Measure Todo, stale true") {

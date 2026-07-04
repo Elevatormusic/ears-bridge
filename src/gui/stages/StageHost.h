@@ -33,7 +33,12 @@ public:
     // Feed the regression banner. Empty text hides it (stages reclaim the full height). `fixStepName` is the
     // jump-destination label ("Connect"); onFix fires the user-invoked jump (never auto-navigation, §3.1).
     void setBanner (const juce::String& text, const juce::String& fixStepName, std::function<void()> onFix) {
-        onBannerFix_ = std::move (onFix);
+        // setBanner runs at 30 Hz (from refreshWizardView). minor-6: only re-assign the onFix std::function
+        // when the jump TARGET actually changes — reallocating a std::function 30x/s is pure churn.
+        if (fixStepName != fixStepName_) {
+            onBannerFix_ = std::move (onFix);
+            fixStepName_ = fixStepName;
+        }
         const bool show = text.isNotEmpty();
         bool changed = false;
         if (text != bannerLabel_.getText()) { bannerLabel_.setText (text, juce::dontSendNotification); changed = true; }
@@ -44,10 +49,12 @@ public:
             bannerFix_.setVisible (show && btn.isNotEmpty());
             changed = true;
         }
-        if (changed) {
-            bannerLabel_.setColour (juce::Label::textColourId, Theme::warn());
+        // minor-6: re-apply the banner colour unconditionally (outside the `changed` guard) so a live
+        // light/dark theme flip re-tints it — a flip changes Theme::warn() but not the text, so the old
+        // guard left a stale colour. This is a cheap idempotent setColour (Label only repaints on a delta).
+        bannerLabel_.setColour (juce::Label::textColourId, Theme::warn());
+        if (changed)
             resized();   // re-flow: the stages shift down/up as the banner appears/disappears
-        }
     }
     bool bannerVisibleForTest() const { return bannerLabel_.isVisible(); }
 
@@ -78,7 +85,10 @@ public:
                 st->setVisible (i == (int) step);
         // Explicit focus placement on the newly-shown stage's first focusable control (§4: a hidden
         // component gives focus away, so we place it deterministically rather than let it wander).
-        if (auto* st = stages_[(size_t) step])
+        // Guard on isShowing(): JUCE asserts (jassert isShowing(), juce_Component.cpp:2694) if you grab
+        // focus on a component not yet on screen (construction/headless). Release compiles the jassert
+        // out; debug builds abort on launch. A not-yet-showing stage takes focus on its next paint anyway.
+        if (auto* st = stages_[(size_t) step]; st != nullptr && st->isShowing())
             st->grabKeyboardFocus();
     }
 
@@ -105,6 +115,7 @@ private:
     juce::Label      bannerLabel_;
     juce::TextButton bannerFix_;
     std::function<void()> onBannerFix_;
+    juce::String     fixStepName_;   // the current jump target's name; onBannerFix_ is re-bound only on a change
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StageHost)
 };

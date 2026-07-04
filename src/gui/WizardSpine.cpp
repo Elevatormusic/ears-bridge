@@ -65,6 +65,14 @@ struct WizardSpine::StepRow : public juce::Component {
     bool         isActive = false;
     bool         isLastRow = false;
 
+    // Repaint discipline (M-1): the spine is ALWAYS visible and setState runs at 30 Hz from
+    // refreshWizardView, so an unconditional row->repaint() there re-invalidates all four rows forever
+    // (see the set-if-changed comment at :44-46 — the same discipline, now extended to the paint call).
+    // Every repaint this row issues funnels through markDirty() so setState can repaint a row ONLY when
+    // something it actually renders changed, and tests can observe the count.
+    int repaintCount = 0;
+    void markDirty() { ++repaintCount; repaint(); }
+
     juce::Label  title, meta, tag;   // tag = the "You are here" pill text on the active row
 
     StepRow (WizardSpine& o, int i) : owner (o), index (i) {
@@ -179,8 +187,8 @@ struct WizardSpine::StepRow : public juce::Component {
         return false;
     }
 
-    void focusGained (juce::Component::FocusChangeType) override { repaint(); }
-    void focusLost   (juce::Component::FocusChangeType) override { repaint(); }
+    void focusGained (juce::Component::FocusChangeType) override { markDirty(); }
+    void focusLost   (juce::Component::FocusChangeType) override { markDirty(); }
 };
 
 // ================================================================================================
@@ -265,6 +273,13 @@ void WizardSpine::setState (const WizardState& ws, const juce::String viewMetas[
         const auto& st = ws.steps[i];
         const bool isActiveStep = ((int) ws.active == i);
 
+        // M-1: repaint a row only when something it PAINTS changed. The node fill/glyph is a function of
+        // `state`; the active pill is a function of `isActive`; the label text/colours are tracked by the
+        // set-if-changed writes below. Anything else (a11y title, tag VISIBILITY) is not painted by this
+        // component, so it never forces a repaint. Track the state/activeness deltas before overwriting.
+        const bool stateChanged  = (row->state != st.state);
+        const bool activeChanged = (row->isActive != isActiveStep);
+
         row->state    = st.state;
         row->isActive = isActiveStep;
 
@@ -275,21 +290,21 @@ void WizardSpine::setState (const WizardState& ws, const juce::String viewMetas[
         // Title colour: dim upcoming/blocked rows.
         const bool upcoming = (st.state == StepState::Todo || st.state == StepState::Blocked)
                            && ! isActiveStep;
-        setLabelIfChanged (row->title, kStepNames[i],
-                           upcoming ? Theme::textDim() : Theme::text());
+        bool labelChanged = setLabelIfChanged (row->title, kStepNames[i],
+                                               upcoming ? Theme::textDim() : Theme::text());
 
         // Meta line: a non-empty viewMeta overrides the machine reason (DONE summaries the view owns).
         // The active step's "You are here" affordance renders as a SEPARATE tag label (mirrors the
         // prototype's .step-meta vs .step-tag split), so the meta text stays the pure summary/reason.
         const juce::String metaText = viewMetas[i].isNotEmpty() ? viewMetas[i] : st.reason;
         const juce::Colour metaCol  = (st.state == StepState::Done) ? Theme::textDim() : Theme::textFaint();
-        setLabelIfChanged (row->meta, metaText, metaCol);
+        labelChanged |= setLabelIfChanged (row->meta, metaText, metaCol);
 
         row->tag.setVisible (isActiveStep);
         // accent() as small TEXT is only ~3.5:1 in light mode (the whole-app HIG gate flags it); use the
         // repo's established accent-as-text token infoText() (~4.6:1) — same convention as the update link.
-        setLabelIfChanged (row->tag, isActiveStep ? juce::String ("You are here") : juce::String(),
-                           Theme::infoText());
+        labelChanged |= setLabelIfChanged (row->tag, isActiveStep ? juce::String ("You are here") : juce::String(),
+                                           Theme::infoText());
 
         // A11y title: "Step N of 4, <name>, <state word>[, <click clause>]".
         juce::String t;
@@ -299,7 +314,11 @@ void WizardSpine::setState (const WizardState& ws, const juce::String viewMetas[
             t << ", " << clickClause ((WizardStep) i);
         if (row->getTitle() != t) row->setTitle (t);
 
-        row->repaint();
+        // Repaint ONLY on an actual visual delta (M-1) — a Label's own text/colour setter already
+        // invalidated its child bounds, so the row-level repaint is needed only for what THIS paint()
+        // draws (node + active pill). Without this guard the always-visible spine repainted at 30 Hz.
+        if (stateChanged || activeChanged || labelChanged)
+            row->markDirty();
     }
 
     // Reference footer. Tone the value by CONTENT: ok() (green) only for a POSITIVE reference status
@@ -340,5 +359,11 @@ juce::String WizardSpine::rowMetaForTest (int step) const {
 }
 
 void WizardSpine::clickStepForTest (int step) { rowActivated (step); }
+
+// The number of repaints this row has issued through markDirty() (M-1). A second setState with the
+// SAME inputs must NOT increment it — the always-visible spine used to repaint unconditionally at 30 Hz.
+int WizardSpine::rowRepaintCountForTest (int step) const {
+    return (step >= 0 && step < rows.size()) ? rows[step]->repaintCount : -1;
+}
 
 } // namespace eb

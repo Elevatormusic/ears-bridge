@@ -48,6 +48,9 @@ public:
     // Drive a row's click path programmatically (mirrors a Return/Space/mouse activation). A Blocked
     // row is inert, so this is a no-op there — exactly what a real click would do.
     void         clickStepForTest (int step);
+    // Repaint discipline (M-1): the count of repaints a row has issued. An identical second setState
+    // must leave this unchanged (the always-visible spine must not re-invalidate at 30 Hz).
+    int          rowRepaintCountForTest (int step) const;
 
 private:
     struct StepRow;                 // node circle + title + meta labels; clickable; focusable

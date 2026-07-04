@@ -138,6 +138,36 @@ TEST_CASE("WizardSpine: reference value tone follows content (positive green, ne
     CHECK (spine.refValueColourForTest() == eb::Theme::textDim());
 }
 
+// M-1: the always-visible spine must NOT repaint on an identical re-render. refreshWizardView runs at
+// 30 Hz, so an unconditional row->repaint() in setState would re-invalidate all four rows forever. A
+// second setState with the SAME inputs must leave every row's repaint count unchanged; a DIFFERENT
+// snapshot must repaint the rows whose paint-relevant state actually changed.
+TEST_CASE("WizardSpine: an identical re-render does not repaint any row (M-1)") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    WizardSpine spine;
+    spine.setSize (spine.preferredWidth(), 560);
+    juce::String metas[eb::kWizardStepCount];
+    for (int i = 0; i < eb::kWizardStepCount; ++i) metas[i] = kViewMetas[i];
+
+    // First render establishes the rows' state; a second identical render must be a no-op paint-wise.
+    spine.setState (makeSnapshot(), metas, "matched", "Windows Audio");
+    int before[eb::kWizardStepCount];
+    for (int i = 0; i < eb::kWizardStepCount; ++i) before[i] = spine.rowRepaintCountForTest (i);
+
+    spine.setState (makeSnapshot(), metas, "matched", "Windows Audio");
+    for (int i = 0; i < eb::kWizardStepCount; ++i)
+        CHECK (spine.rowRepaintCountForTest (i) == before[i]);   // no churn on the identical second call
+
+    // A genuine change (Calibrate Active -> Done) must repaint at least the rows that changed.
+    WizardState changed = makeSnapshot();
+    changed.steps[(int) WizardStep::Calibrate] = { StepState::Done, {} };
+    changed.steps[(int) WizardStep::Level]     = { StepState::Active, juce::String ("Start monitoring and set the level") };
+    changed.active = WizardStep::Level;
+    spine.setState (changed, metas, "matched", "Windows Audio");
+    CHECK (spine.rowRepaintCountForTest ((int) WizardStep::Calibrate) > before[(int) WizardStep::Calibrate]);
+    CHECK (spine.rowRepaintCountForTest ((int) WizardStep::Level)     > before[(int) WizardStep::Level]);
+}
+
 // Probe sanity: at the production width x 560 the given metas must not overflow any label.
 TEST_CASE("WizardSpine: probe reports no text overflow at 248x560") {
     juce::ScopedJuceInitialiser_GUI juceInit;

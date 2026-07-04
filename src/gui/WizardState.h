@@ -36,6 +36,16 @@ namespace eb {
 enum class WizardStep : int { Connect = 0, Calibrate = 1, Level = 2, Measure = 3 };
 constexpr int kWizardStepCount = 4;
 
+// Shared machine-reason strings (minor-4): the SINGLE source of the Connect/Calibrate first-unmet reasons,
+// used by BOTH the state machine (resolveConnect/resolveCalibrate) AND MainComponent's Start-gate helpText,
+// so the two can never drift. The neutral machine phrasing has no trailing period; the helpText site appends
+// one at composition (a full sentence for a screen reader). Inline functions (not constexpr String — juce::
+// String is not a literal type) with static locals so each returns a single shared instance.
+inline const juce::String& kReasonNoDevices()  { static const juce::String s ("Select an input and output device");        return s; }
+inline const juce::String& kReasonNoCals()     { static const juce::String s ("Load both ear calibration files");          return s; }
+inline const juce::String& kReasonWrongMode()  { static const juce::String s ("Set Combine Mode to Auto per-ear (Dirac)"); return s; }
+inline const juce::String& kReasonPhysicalOut(){ static const juce::String s ("Choose a virtual cable output");            return s; }
+
 struct WizardInputs {
     // GateSnapshot mirror (MainComponent feeds its own GateSnapshot fields verbatim)
     bool haveDevs = false, haveCals = false, wrongMode = false,
@@ -77,11 +87,11 @@ struct WizardState {
         return { StepState::Error, juce::String ("Device error - check the EARS and cable") };
 
     if (! in.haveDevs)
-        return { StepState::Todo, juce::String ("Select an input and output device") };
+        return { StepState::Todo, kReasonNoDevices() };
     if (in.wrongMode && ! in.overrideOn)
-        return { StepState::Todo, juce::String ("Set Combine Mode to Auto per-ear (Dirac)") };
+        return { StepState::Todo, kReasonWrongMode() };
     if (in.physicalOutput && ! in.overrideOn)
-        return { StepState::Todo, juce::String ("Choose a virtual cable output") };
+        return { StepState::Todo, kReasonPhysicalOut() };
 
     return { StepState::Done, {} };
 }
@@ -94,7 +104,7 @@ struct WizardState {
         return { StepState::Todo, juce::String ("Rebuilding filters...") };
     if ((in.haveCals && ! in.calBuilding && ! in.calProblem) || in.unityAccepted)
         return { StepState::Done, {} };
-    return { StepState::Todo, juce::String ("Load both ear calibration files") };
+    return { StepState::Todo, kReasonNoCals() };
 }
 
 // Level: Blocked while its prerequisites are genuinely un-started (Connect/Calibrate not yet Done and
@@ -125,6 +135,25 @@ struct WizardState {
     return { StepState::Todo, (! in.referenceLoaded && ! in.hwDirac)
                  ? juce::String ("Learn the reference")
                  : juce::String ("Run the measurement in Dirac Live") };
+}
+
+// ---- banner composition (§3.1) ------------------------------------------------------------------
+
+struct BannerComposition {
+    juce::String text;                       // "" = no banner
+    WizardStep   target = WizardStep::Connect;
+};
+
+// The regression-banner rule, factored so BOTH the machine (against ws.active) and the VIEW (against the
+// actually-SHOWN step, which may be a held pin EARLIER than ws.active) compose it identically: the first
+// step with state == Error strictly BEFORE `shownStep`. Never fires when the shown step IS (or precedes)
+// the broken one — that stage surfaces its own error natively. Pure: reads only the resolved steps[].
+[[nodiscard]] inline BannerComposition composeBanner (const WizardState& ws, WizardStep shownStep) {
+    const int shownIdx = (int) shownStep;
+    for (int i = 0; i < shownIdx; ++i)
+        if (ws.steps[i].state == StepState::Error)
+            return { juce::String ("Needs attention - ") + ws.steps[i].reason, (WizardStep) i };
+    return {};
 }
 
 // ---- the machine --------------------------------------------------------------------------------
@@ -179,20 +208,16 @@ struct WizardState {
     if (activeStatus.state == StepState::Todo)
         activeStatus.state = StepState::Active;
 
-    // 5) Banner: a broken step BEFORE the active one, OR (active == Measure) a regressed
-    //    Connect/Calibrate. Never when the active step IS the broken step. bannerTarget = the first
-    //    such step; text = "Needs attention - " + that step's reason.
-    const int activeIdx = (int) out.active;
-    for (int i = 0; i < activeIdx; ++i) {
-        if (out.steps[i].state == StepState::Error) {
-            out.banner       = juce::String ("Needs attention - ") + out.steps[i].reason;
-            out.bannerTarget = (WizardStep) i;
-            break;
-        }
-    }
+    // 5) Banner: a broken step BEFORE the active one. Never when the active step IS the broken step (that
+    //    stage surfaces the error natively). Composed via the shared composeBanner() so the VIEW can re-run
+    //    the SAME rule against a held-pin shown step earlier than active (§ minor-1). bannerTarget = the
+    //    first such step; text = "Needs attention - " + that step's reason.
+    const auto banner = composeBanner (out, out.active);
+    out.banner       = banner.text;
+    out.bannerTarget = banner.target;
     // (The former "active == Measure with a regressed Connect/Calibrate" clause was DEAD: when active is
     // Measure, every earlier step is Done — a regressed Connect/Calibrate is Error, not Todo/Blocked, and
-    // an Error step BEFORE the active one is already caught by the loop above (its bannerTarget/text are
+    // an Error step BEFORE the active one is already caught by composeBanner (its bannerTarget/text are
     // identical). Blocked upstream would keep Measure Blocked so active could never be Measure. Removed.)
 
     return out;

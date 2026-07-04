@@ -87,6 +87,12 @@ public:
     juce::TextButton& startButtonForTest() { return startStop; }
     DevicePicker&    inputPickerForTest()  { return inputPicker; }
     DevicePicker&    outputPickerForTest() { return outputPicker; }
+    // M-2 seams: drive the Level green-band latch and route an input through the SAME apply path both the
+    // user pick (onInputChosen) and the hot-plug lambda use, so a test can prove a changed input key clears
+    // the latch (the spine must not keep reading "In green band" on old-gain evidence after a replug).
+    void setLevelLatchedForTest (bool v) { levelLatched_ = v; }
+    bool levelLatchedForTest() const { return levelLatched_; }
+    void applyResolvedInputForTest (const DeviceId& d) { applyResolvedInput (d); }
 
 private:
     // The reference/schedule store dir: the TestConfig override (#24, hermetic tests), else %APPDATA%/EarsBridge.
@@ -98,6 +104,14 @@ private:
     juce::File appDataOverride_;   // empty = real location
     void refreshDeviceLists();
     void autoSelectDefaults();       // first run / empty slot: pick a recognised EARS + a standard VB-CABLE
+    // Apply an input to the engine and, when the applied device KEY changed since the last apply, invalidate
+    // the Level green-band latch (§3.2: a different device/gain is different level evidence). BOTH the user
+    // pick (onInputChosen) and the hot-plug re-resolution (engine.onDevicesChanged, incl. the EARS gain-DIP
+    // rename fallback) route through here, so the spine can never keep claiming "In green band" on old-gain
+    // evidence. Message-thread only (lastAppliedInputKey_ has no cross-thread reader). Returns nothing; the
+    // caller owns persistence/menu-rebuild (those differ between the two paths).
+    void applyResolvedInput (const DeviceId&);
+    juce::String lastAppliedInputKey_;   // the key() of the input last pushed to the engine (latch memo)
     void onInputChosen  (const DeviceId&);
     void onOutputChosen (const DeviceId&);
     void updateDiracCableHint();     // standard-VB-CABLE-vs-Dirac warning + one-click shared-mode fix

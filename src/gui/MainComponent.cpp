@@ -191,7 +191,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
     // --- Input picker ---
     inputPicker.onDeviceChosen = [this] (const DeviceId& d) { onInputChosen (d); };
     inputPicker.setTitle ("Input device");   // HIG: accessible name (the eyebrow label is not auto-associated to the control)
-    inputPicker.setExplicitFocusOrder (1);   // HIG M4: keyboard focus order matches the visual top-down rail order
+    // (No ctor setExplicitFocusOrder here: adopt() re-scopes every control's focus order per stage — minor-5.)
     inputGainHint.setText ("Leave the EARS gain switch alone (changing it drops the jig from Windows). "
                            "Set levels in Dirac: Master output, then Mic gain.",
                            juce::dontSendNotification);
@@ -219,7 +219,6 @@ MainComponent::MainComponent (const TestConfig& cfg)
     }
     combineBox.onChange = [this] { onCombineChosen(); };
     combineBox.setTitle ("Combine mode");
-    combineBox.setExplicitFocusOrder (2);
     combineHint.setColour (juce::Label::textColourId, Theme::textDim());
     combineHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     combineHint.setJustificationType (juce::Justification::topLeft);
@@ -228,7 +227,6 @@ MainComponent::MainComponent (const TestConfig& cfg)
     // --- Output picker + Dirac hint + preflight ---
     outputPicker.onDeviceChosen = [this] (const DeviceId& d) { onOutputChosen (d); };
     outputPicker.setTitle ("Output virtual cable");
-    outputPicker.setExplicitFocusOrder (3);
     outputHint.setText ("In Dirac Live, choose this device's capture side as the recording input.",
                         juce::dontSendNotification);
     outputHint.setColour (juce::Label::textColourId, Theme::textDim());
@@ -264,13 +262,11 @@ MainComponent::MainComponent (const TestConfig& cfg)
     styleEyebrow (rateLabel, "RATE");
     rateBox.onChange = [this] { onRateChosen(); };
     rateBox.setTitle ("Sample rate");
-    rateBox.setExplicitFocusOrder (4);
     rateWarn.setColour (juce::Label::textColourId, Theme::warn());
     rateWarn.setFont (juce::Font (juce::FontOptions (12.0f)));
     styleEyebrow (bitLabel, "BIT DEPTH");
     bitBox.onChange = [this] { onBitDepthChosen(); };
     bitBox.setTitle ("Preferred bit depth");
-    bitBox.setExplicitFocusOrder (5);
 
     // --- FIR / options controls (the Advanced disclosure died; children re-homed into stages) ---
     complexPhaseToggle.setButtonText ("Complex (with-phase) FIR");
@@ -323,7 +319,6 @@ MainComponent::MainComponent (const TestConfig& cfg)
         rebuildFirsAsync();
     };
     firLenBox.setTitle ("FIR length");   // HIG: accessible name (the eyebrow label is not auto-associated to the control)
-    firLenBox.setExplicitFocusOrder (6);
     styleEyebrow (trimLabel, "OUTPUT TRIM (dB)");
     trimSlider.setRange (-24.0, 0.0, 0.1);
     trimSlider.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -333,7 +328,6 @@ MainComponent::MainComponent (const TestConfig& cfg)
         engine.setOutputTrimDb (trimSlider.getValue());   // apply live (the graph reads it lock-free)
     };
     trimSlider.setTitle ("Output trim");   // HIG: accessible name
-    trimSlider.setExplicitFocusOrder (7);
 
     // L/R wiring check: play a tone into the LEFT earcup, then the engine reports which mic responded.
     verifyButton.onClick = [this] {
@@ -478,7 +472,11 @@ MainComponent::MainComponent (const TestConfig& cfg)
         refreshDeviceLists();
         autoSelectDefaults();   // a freshly-plugged EARS / cable gets auto-selected into an empty slot
         if (engine.status() != EngineStatus::Running) {
-            if (auto in  = inputPicker.selectedDevice())  engine.setInput  (*in);
+            // Route the hot-plug input through applyResolvedInput so a re-resolution that lands on a
+            // DIFFERENT device (incl. the EARS gain-DIP rename fallback) clears the Level green-band latch
+            // (§3.2) — the direct engine.setInput here used to skip that, so Level kept claiming "In green
+            // band" on old-gain evidence after a replug.
+            if (auto in  = inputPicker.selectedDevice())  applyResolvedInput (*in);
             if (auto out = outputPicker.selectedDevice()) engine.setOutput (*out);
             rebuildRateMenu();
             rebuildBitDepthMenu();
@@ -500,7 +498,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
     // resolved via the single-EARS fallback (reliably the user's one EARS, so persisting is safe). Do
     // NOT auto-persist the OUTPUT: its fallback can pick a *different* virtual sink, and silently
     // overwriting the saved cable with a best-guess is worse than re-resolving it each launch.
-    if (auto in  = inputPicker.selectedDevice())  { engine.setInput  (*in);  if (in->key() != settings.inputKey()) settings.setInputKey (in->key()); }
+    if (auto in  = inputPicker.selectedDevice())  { applyResolvedInput (*in);  if (in->key() != settings.inputKey()) settings.setInputKey (in->key()); }
     if (auto out = outputPicker.selectedDevice()) engine.setOutput (*out);
     rebuildRateMenu();
     rebuildBitDepthMenu();
@@ -696,11 +694,23 @@ void MainComponent::autoSelectDefaults() {
     }
 }
 
+void MainComponent::applyResolvedInput (const DeviceId& d) {
+    engine.setInput (d);
+    // §3.2: a changed input device INVALIDATES the Level green-band latch — the latch is per-device level
+    // evidence, and a different device (or the same jig re-enumerated at a different gain, via the EARS
+    // gain-DIP rename fallback) is different evidence. Both the user pick and the hot-plug re-resolution
+    // land here, so the spine never keeps reading "In green band" on old-gain evidence. Guard on the KEY so
+    // a hot-plug that re-applies the SAME device does not spuriously drop a still-valid latch.
+    if (d.key() != lastAppliedInputKey_) {
+        levelLatched_       = false;
+        lastAppliedInputKey_ = d.key();
+    }
+}
+
 void MainComponent::onInputChosen (const DeviceId& d) {
     if (engine.status() == EngineStatus::Running) return;
-    engine.setInput (d);
+    applyResolvedInput (d);   // engine.setInput + latch invalidation on a key change (§3.2)
     settings.setInputKey (d.key());
-    levelLatched_ = false;   // §3.2: a new input invalidates the green-band latch (a different device/gain)
     auto rates = engine.supportedSampleRates (d);
     if (! rates.empty()) {
         bool ok = false;
@@ -1089,11 +1099,14 @@ void MainComponent::updateStartGate() {
     {
         juce::String reason;
         if (! (running || ready)) {
-            if (! haveDevs)                             reason = "Select an input and output device.";
-            else if (! haveCals && ! noCalsLoaded)      reason = "Load both ear calibration files.";
-            else if (wrongMode)                         reason = "Set Combine Mode to Auto per-ear (Dirac).";
-            else if (physicalOutput)                    reason = "Choose a virtual cable output.";
-            else                                        reason = "Finish the setup steps to start.";
+            // minor-4: reuse the WizardState machine reason strings (single source) + a trailing period so
+            // the same first-unmet phrasing reaches the screen reader here and the spine. Every way `ready`
+            // can be false with the four flags is covered by one of these branches (startReady's truth
+            // table), so the former "Finish the setup steps to start." else was unreachable — removed.
+            if (! haveDevs)                        reason = eb::kReasonNoDevices()   + ".";
+            else if (! haveCals && ! noCalsLoaded) reason = eb::kReasonNoCals()      + ".";
+            else if (wrongMode)                    reason = eb::kReasonWrongMode()   + ".";
+            else if (physicalOutput)               reason = eb::kReasonPhysicalOut() + ".";
         }
         if (reason != startStop.getHelpText())
             startStop.setHelpText (reason);
@@ -1335,8 +1348,13 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
     levelStage_.continueButton().setEnabled    (ws.steps[(int) WizardStep::Level].state     == StepState::Done);
 
     // ---- Regression banner (§3.1): render + wire the "Fix in <step>" jump --------------------------------
-    stageHost_.setBanner (ws.banner, ws.banner.isNotEmpty() ? stepName (ws.bannerTarget) : juce::String(),
-                          [this, target = ws.bannerTarget] { pinnedStep_ = target; refreshWizardView(); });
+    // Compose the banner against the SHOWN step (`toShow`), not ws.active (minor-1): during a held-pin
+    // rebuild the shown stage can be EARLIER than active, and a deviceError there must still surface a
+    // banner + jump on the held stage. composeBanner re-runs the machine's rule against toShow.
+    const auto shownBanner = eb::composeBanner (ws, toShow);
+    stageHost_.setBanner (shownBanner.text,
+                          shownBanner.text.isNotEmpty() ? stepName (shownBanner.target) : juce::String(),
+                          [this, target = shownBanner.target] { pinnedStep_ = target; refreshWizardView(); });
 
     // ---- Show the stage; on a REAL switch place focus + post the a11y announcement + refresh the title --
     const bool switching = (toShow != shownStage_) || (stageHost_.shown() != toShow);
@@ -1345,7 +1363,10 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
         shownStage_ = toShow;
         // The stage-area landmark is the visible stage's OWN title (its ctor set the step name); no host
         // title mirror (that would double-announce + trip the gate's duplicate-label check).
-        if (auto* f = firstFocusTarget (toShow)) f->grabKeyboardFocus();
+        // isShowing() guard: JUCE asserts (jassert isShowing(), juce_Component.cpp:2694) on a grab before
+        // the component is on screen (headless tests / mid-construction). Release strips the jassert; debug
+        // builds abort. Only grab when the target is actually showing.
+        if (auto* f = firstFocusTarget (toShow); f != nullptr && f->isShowing()) f->grabKeyboardFocus();
         postStageAnnouncement (toShow);
     }
 }
@@ -1376,7 +1397,11 @@ juce::Component* MainComponent::firstFocusTarget (WizardStep step) {
     if (stage == nullptr) return nullptr;
     std::function<juce::Component*(juce::Component*)> dfs = [&] (juce::Component* c) -> juce::Component* {
         for (auto* child : c->getChildren()) {
-            if (child->isVisible() && child->isEnabled() && child->getWantsKeyboardFocus())
+            // Skip a Viewport (minor-3): a juce::Viewport wants keyboard focus by default (to catch scroll
+            // keys), so a naive first-focusable DFS would land focus on the scroll container instead of the
+            // first real control inside it. Descend PAST it to the actual control.
+            if (child->isVisible() && child->isEnabled() && child->getWantsKeyboardFocus()
+                && dynamic_cast<juce::Viewport*> (child) == nullptr)
                 return child;
             if (auto* deeper = dfs (child)) return deeper;
         }
