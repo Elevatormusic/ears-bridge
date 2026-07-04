@@ -63,6 +63,31 @@ public:
     // the headless gate can iterate the WizardStep axis (the driven Measure labels now live in MeasureStage).
     void forceWizardStepForTest (WizardStep step);
 
+    // Keyboard step navigation: Ctrl/Cmd + 1..4 jumps to a step when it is navigable (pin, then refresh).
+    bool keyPressed (const juce::KeyPress& key) override;
+
+    // Pure view decision (Task 4): which stage to SHOW. Normally ws.active. Exception — the TRANSIENT-only
+    // pin illegality (recorded Task-3 carryover): when the pinned step is Blocked in `ws` ONLY because a FIR
+    // rebuild is in flight, HOLD it (masked == the state recomputed with calBuilding off). If the pin is
+    // still Blocked with the rebuild masked out, the illegality is real -> ws.active (first-unmet) wins.
+    // Static + pure so the hold rule is unit-testable without a peer (test_wizardnav.cpp).
+    static WizardStep resolveShownStage (const WizardState& ws, std::optional<WizardStep> pinned,
+                                         const WizardState& masked);
+
+    // ---- Task 4 navigation/a11y test seams (documented; used by tests/test_wizardnav.cpp) ----
+    // These expose the live navigation path + the wired surfaces so the headless suite can assert the
+    // tick-wiring outcomes without a peer. Unlike forceWizardStepForTest (which OVERRIDES pin legality
+    // for the gate), pinStepForTest goes through the SAME live path a spine/Ctrl-N click uses, so an
+    // illegal pin resolves to first-unmet exactly as it would in the app.
+    WizardStep     shownStageForTest() const { return stageHost_.shown(); }
+    void           pinStepForTest (WizardStep s) { pinnedStep_ = s; refreshWizardView(); }
+    juce::Component* firstFocusTargetForTest() { return firstFocusTarget (stageHost_.shown()); }
+    CalibrateStage&  calibrateStageForTest() { return calibrateStage_; }
+    juce::TextButton& connectContinueForTest() { return connectStage_.continueButton(); }
+    juce::TextButton& startButtonForTest() { return startStop; }
+    DevicePicker&    inputPickerForTest()  { return inputPicker; }
+    DevicePicker&    outputPickerForTest() { return outputPicker; }
+
 private:
     // The reference/schedule store dir: the TestConfig override (#24, hermetic tests), else %APPDATA%/EarsBridge.
     juce::File appDataDir() const {
@@ -129,6 +154,17 @@ private:
     // Fill a WizardInputs from the existing members (GateSnapshot fields + engine state). Pure reads.
     WizardInputs snapshotWizardInputs() const;
     std::optional<WizardStep> pinnedStep_;   // user navigation pin (empty = launch/first-unmet resolution)
+    // Which stage the view is CURRENTLY showing (mirror of stageHost_.shown()), so the tick wiring can
+    // detect a real switch (post the a11y announcement + place focus) vs a same-stage re-render.
+    WizardStep shownStage_ = WizardStep::Connect;
+    // Level SOFT-gate latch (§3.2): set once L and R meter dB both reached the green band [-18,-12] this
+    // session while Running; survives Stop (the knob didn't move); reset on an input-device change.
+    bool levelLatched_ = false;
+    // The first enabled, focusable leaf inside a stage's subtree (top-down), for explicit focus placement
+    // on a stage switch. Returns the stage itself when it has no focusable child (never null once built).
+    juce::Component* firstFocusTarget (WizardStep step);
+    // Post an AccessibilityHandler announcement ("<Step name>, step N of 4") on a real stage switch.
+    void postStageAnnouncement (WizardStep step);
 
     Theme theme;
     AudioEngine engine;

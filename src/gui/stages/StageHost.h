@@ -1,7 +1,9 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <array>
+#include <functional>
 #include "gui/WizardState.h"
+#include "gui/Theme.h"
 
 // StageHost — the single-child stage switcher (P1 Task 3 of the guided-wizard redesign).
 // Spec: docs/superpowers/specs/2026-07-04-wizard-redesign-design.md §4 (construct-once/reparent-once,
@@ -17,7 +19,37 @@ public:
     StageHost() {
         // A11y: the host is a transparent container; each stage is its own keyboardFocusContainer.
         setInterceptsMouseClicks (false, true);
+
+        // Regression banner (§3.1): a one-line attention label + a "Fix in <step>" jump, spanning the top
+        // of the stage area. Hidden until setBanner() is fed a nonempty line; when visible, the stages shift
+        // down kBannerH so the banner never overlaps stage content.
+        bannerLabel_.setJustificationType (juce::Justification::centredLeft);
+        bannerLabel_.setMinimumHorizontalScale (1.0f);
+        addChildComponent (bannerLabel_);
+        bannerFix_.onClick = [this] { if (onBannerFix_) onBannerFix_(); };
+        addChildComponent (bannerFix_);
     }
+
+    // Feed the regression banner. Empty text hides it (stages reclaim the full height). `fixStepName` is the
+    // jump-destination label ("Connect"); onFix fires the user-invoked jump (never auto-navigation, §3.1).
+    void setBanner (const juce::String& text, const juce::String& fixStepName, std::function<void()> onFix) {
+        onBannerFix_ = std::move (onFix);
+        const bool show = text.isNotEmpty();
+        bool changed = false;
+        if (text != bannerLabel_.getText()) { bannerLabel_.setText (text, juce::dontSendNotification); changed = true; }
+        const juce::String btn = fixStepName.isNotEmpty() ? ("Fix in " + fixStepName) : juce::String();
+        if (btn != bannerFix_.getButtonText()) { bannerFix_.setButtonText (btn); changed = true; }
+        if (show != bannerLabel_.isVisible()) {
+            bannerLabel_.setVisible (show);
+            bannerFix_.setVisible (show && btn.isNotEmpty());
+            changed = true;
+        }
+        if (changed) {
+            bannerLabel_.setColour (juce::Label::textColourId, Theme::warn());
+            resized();   // re-flow: the stages shift down/up as the banner appears/disappears
+        }
+    }
+    bool bannerVisibleForTest() const { return bannerLabel_.isVisible(); }
 
     // Reparent the four stages in ONCE (construction only). Order = the WizardStep enum order.
     void setStages (std::array<juce::Component*, (size_t) kWizardStepCount> s) {
@@ -53,14 +85,26 @@ public:
     WizardStep shown() const { return shown_; }
 
     void resized() override {
+        auto area = getLocalBounds();
+        if (bannerLabel_.isVisible()) {
+            auto strip = area.removeFromTop (kBannerH).reduced (16, 4);
+            if (bannerFix_.isVisible())
+                bannerFix_.setBounds (strip.removeFromRight (110));
+            bannerLabel_.setBounds (strip);
+        }
         for (auto* st : stages_)
             if (st != nullptr)
-                st->setBounds (getLocalBounds());
+                st->setBounds (area);
     }
+
+    static constexpr int kBannerH = 28;   // the regression-banner strip height (§ Task 4: stages shift 28px)
 
 private:
     std::array<juce::Component*, (size_t) kWizardStepCount> stages_ { { nullptr, nullptr, nullptr, nullptr } };
     WizardStep shown_ = WizardStep::Connect;
+    juce::Label      bannerLabel_;
+    juce::TextButton bannerFix_;
+    std::function<void()> onBannerFix_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StageHost)
 };

@@ -25,8 +25,16 @@ public:
 
     void resized() override;
 
+    // HIG H2: the inner ComboBox (the control a screen reader actually focuses) carries its own accessible
+    // name, derived from the caption in the ctor — the eyebrow Label is not auto-associated to the combo.
+    // Exposed read-only for the headless a11y test (test_wizardnav.cpp).
+    juce::String comboTitleForTest() const { return combo.getTitle(); }
+
 private:
     static juce::String rowText (const DeviceId&);
+    // Human accessible name for the inner combo, derived from the picker caption ("INPUT" -> "Input device",
+    // "OUTPUT (VIRTUAL CABLE)" -> "Output virtual cable"). Static + pure so it is testable in isolation.
+    static juce::String comboTitleFromCaption (const juce::String& caption);
 
     juce::Label label;
     juce::ComboBox combo;

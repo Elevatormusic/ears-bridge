@@ -46,6 +46,28 @@ static void styleEyebrow (juce::Label& l, const juce::String& t) {
     l.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")).withExtraKerningFactor (0.07f));
 }
 
+// Human-readable step name for the wizard view (a11y titles/announcements + the banner "Fix in <step>").
+static juce::String stepName (WizardStep s) {
+    switch (s) {
+        case WizardStep::Connect:   return "Connect";
+        case WizardStep::Calibrate: return "Calibrate";
+        case WizardStep::Level:     return "Level";
+        case WizardStep::Measure:   return "Measure";
+    }
+    return {};
+}
+
+// Short cal-type name for the Calibrate spine done-summary ("HEQ pair - <serial>").
+static juce::String calTypeShortName (eb::CalType t) {
+    switch (t) {
+        case eb::CalType::Heq: return "HEQ";
+        case eb::CalType::Idf: return "IDF";
+        case eb::CalType::Hpn: return "HPN";
+        case eb::CalType::Raw: return "Raw";
+        default:               return "Cal";
+    }
+}
+
 // Human-readable name for a RefMonState int (the engine publishes the enum's underlying int). Used only
 // for the diagnostic log so a transition reads "GradedClean" rather than a bare number.
 static const char* refMonStateName (int s) {
@@ -157,6 +179,12 @@ MainComponent::MainComponent (const TestConfig& cfg)
     // pure view of the WizardState; clicking a step pins it and re-resolves the view. addAndMakeVisible
     // BOTH; the controls are parented into their stages by the adopt() calls further down.
     spine_.onStepClicked = [this] (WizardStep s) { pinnedStep_ = s; refreshWizardView(); };
+    // L2 (spec §10): region titles so the spine + stage area are natural a11y landmarks. The spine sets its
+    // own "Setup steps" title (WizardSpine ctor); the stage AREA's landmark is the VISIBLE stage itself,
+    // which already carries the active step name as its title (ConnectStage/... ctors) and swaps on
+    // navigation — so the host is left untitled (mirroring the name onto the host would double-announce the
+    // step to a screen reader AND trips the gate's duplicate-label check).
+    setWantsKeyboardFocus (true);   // so Ctrl/Cmd+1..4 reach keyPressed when no child consumes them
     addAndMakeVisible (spine_);
     addAndMakeVisible (stageHost_);
 
@@ -672,6 +700,7 @@ void MainComponent::onInputChosen (const DeviceId& d) {
     if (engine.status() == EngineStatus::Running) return;
     engine.setInput (d);
     settings.setInputKey (d.key());
+    levelLatched_ = false;   // §3.2: a new input invalidates the green-band latch (a different device/gain)
     auto rates = engine.supportedSampleRates (d);
     if (! rates.empty()) {
         bool ok = false;
@@ -1054,6 +1083,21 @@ void MainComponent::updateStartGate() {
     const bool haveDevs = gate.haveDevs, haveCals = gate.haveCals, wrongMode = gate.wrongMode,
                physicalOutput = gate.physicalOutput, noCalsLoaded = gate.noCalsLoaded, ready = gate.ready;
     startStop.setEnabled (running || ready);
+    // M1 (HIG, spec §10): surface WHY Start is unavailable as the button's accessible help text — the same
+    // first-unmet reason the wizard machine emits for Connect/Calibrate, so a screen-reader user hears it.
+    // Empty when ready/running (nothing to explain). Additive: no gate/behavioral change.
+    {
+        juce::String reason;
+        if (! (running || ready)) {
+            if (! haveDevs)                             reason = "Select an input and output device.";
+            else if (! haveCals && ! noCalsLoaded)      reason = "Load both ear calibration files.";
+            else if (wrongMode)                         reason = "Set Combine Mode to Auto per-ear (Dirac).";
+            else if (physicalOutput)                    reason = "Choose a virtual cable output.";
+            else                                        reason = "Finish the setup steps to start.";
+        }
+        if (reason != startStop.getHelpText())
+            startStop.setHelpText (reason);
+    }
     // Debug, on-change only (updateStartGate runs at 30 Hz): record WHETHER the gate is enabled and, when
     // disabled, the exact reason from the locals above — this is what explains a greyed-out Start button.
     {
@@ -1211,7 +1255,7 @@ eb::WizardInputs MainComponent::snapshotWizardInputs() const {
     in.calProblem     = anyCalProblem();
     in.unityAccepted  = false;   // P1: no explicit continue-without-cal path yet (Task 4 / Phase 2)
     in.engineRunning  = engine.status() == EngineStatus::Running;
-    in.levelLatched   = false;   // P1 placeholder — Task 4 wires the L+R green-band latch
+    in.levelLatched   = levelLatched_;   // Task 4: set once L+R reached the green band this session (timerCallback)
     in.referenceLoaded = ! loadedReferenceL_.empty() && ! loadedReferenceR_.empty();
     in.hwDirac        = settings.diracHardwareProcessor();
     in.overrideOn     = settings.advancedOverride();
@@ -1234,12 +1278,26 @@ void MainComponent::refreshWizardView() {
 }
 
 void MainComponent::renderWizardView (const eb::WizardState& ws) {
-    // View-owned per-step summaries (§ spine meta override). P1: Connect carries the device pair when
-    // both devices are chosen; the rest keep the machine reason (empty override).
+    // View-owned per-step DONE summaries (§ spine meta override). Connect carries the device pair when both
+    // devices are chosen; Calibrate the loaded-pair "<type> pair · <serial>"; Level the green-band state.
     juce::String viewMetas[kWizardStepCount];
     if (auto in = inputPicker.selectedDevice())
         if (auto out = outputPicker.selectedDevice())
             viewMetas[(int) WizardStep::Connect] = in->name + " -> " + out->name;
+    // Calibrate done-summary "HEQ pair · <serial>" (spec § view metas). Only when the step is Done (both
+    // cals loaded + applied) — else the machine reason (Todo/Error/rebuilding) stays.
+    if (ws.steps[(int) WizardStep::Calibrate].state == StepState::Done) {
+        if (auto lc = leftCal.calFile()) {
+            const juce::String typeName = calTypeShortName (lc->type);
+            const juce::String serial   = lc->serial.isNotEmpty() ? lc->serial
+                                        : (rightCal.calFile() ? rightCal.calFile()->serial : juce::String());
+            viewMetas[(int) WizardStep::Calibrate] = serial.isNotEmpty()
+                ? (typeName + " pair - " + serial) : (typeName + " pair");
+        }
+    }
+    // Level done-summary "In green band" (spec § view metas). Only meaningful once Done (latched).
+    if (ws.steps[(int) WizardStep::Level].state == StepState::Done)
+        viewMetas[(int) WizardStep::Level] = "In green band";
     // Level and Measure share the SAME machine reason while both Blocked ("Finish Connect and Calibrate
     // first"), which renders two identical spine metas (a duplicate finding + it reads as a copy-paste bug).
     // Give the terminal Measure step a distinct, honest blocked summary so the two rows never collide.
@@ -1258,8 +1316,83 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
         refLine1 = "not learned";
     }
 
+    // The spine ALWAYS renders the machine's truth (which step regressed, is rebuilding, etc.).
     spine_.setState (ws, viewMetas, refLine1, refLine2);
-    stageHost_.showStage (ws.active);
+
+    // ---- Which stage to SHOW (view decision, distinct from ws.active) ----------------------------------
+    // Normally the view shows ws.active. The one exception is a TRANSIENT-only pin illegality (the recorded
+    // Task-3 carryover) — resolveShownStage() decides, taking the state recomputed with calBuilding masked
+    // out so the hold is honest (it holds a pin that is legal-but-for-the-rebuild, never a genuinely-blocked
+    // one). Re-snapshot + mask here rather than trusting a synthetic ws, so the LIVE path reads live truth.
+    auto maskedIn = snapshotWizardInputs();
+    maskedIn.calBuilding = false;
+    const WizardState masked = computeWizardState (maskedIn, pinnedStep_);
+    const WizardStep toShow = resolveShownStage (ws, pinnedStep_, masked);
+
+    // ---- CTA wiring: each non-Measure stage's Continue is enabled iff THAT step is Done -----------------
+    connectStage_.continueButton().setEnabled  (ws.steps[(int) WizardStep::Connect].state   == StepState::Done);
+    calibrateStage_.continueButton().setEnabled (ws.steps[(int) WizardStep::Calibrate].state == StepState::Done);
+    levelStage_.continueButton().setEnabled    (ws.steps[(int) WizardStep::Level].state     == StepState::Done);
+
+    // ---- Regression banner (§3.1): render + wire the "Fix in <step>" jump --------------------------------
+    stageHost_.setBanner (ws.banner, ws.banner.isNotEmpty() ? stepName (ws.bannerTarget) : juce::String(),
+                          [this, target = ws.bannerTarget] { pinnedStep_ = target; refreshWizardView(); });
+
+    // ---- Show the stage; on a REAL switch place focus + post the a11y announcement + refresh the title --
+    const bool switching = (toShow != shownStage_) || (stageHost_.shown() != toShow);
+    stageHost_.showStage (toShow);
+    if (switching) {
+        shownStage_ = toShow;
+        // The stage-area landmark is the visible stage's OWN title (its ctor set the step name); no host
+        // title mirror (that would double-announce + trip the gate's duplicate-label check).
+        if (auto* f = firstFocusTarget (toShow)) f->grabKeyboardFocus();
+        postStageAnnouncement (toShow);
+    }
+}
+
+eb::WizardStep MainComponent::resolveShownStage (const eb::WizardState& ws,
+                                                 std::optional<WizardStep> pinned,
+                                                 const eb::WizardState& masked) {
+    // Hold the pinned step across a TRANSIENT rebuild: it must be Blocked NOW (in ws) but NOT Blocked once
+    // calBuilding is masked out (in `masked`). That is exactly "Blocked only because a FIR rebuild is in
+    // flight" — a flicker to avoid. Everything else shows ws.active (the machine's first-unmet resolution).
+    if (pinned && *pinned != ws.active
+        && ws.steps[(int) *pinned].state == StepState::Blocked
+        && masked.steps[(int) *pinned].state != StepState::Blocked)
+        return *pinned;
+    return ws.active;
+}
+
+// The first enabled, focusable leaf inside a stage's subtree (top-down DFS). Used for explicit focus
+// placement on a stage switch (§4: a hidden component gives focus away, so we place it deterministically).
+juce::Component* MainComponent::firstFocusTarget (WizardStep step) {
+    juce::Component* stage = nullptr;
+    switch (step) {
+        case WizardStep::Connect:   stage = &connectStage_;   break;
+        case WizardStep::Calibrate: stage = &calibrateStage_; break;
+        case WizardStep::Level:     stage = &levelStage_;     break;
+        case WizardStep::Measure:   stage = &measureStage_;   break;
+    }
+    if (stage == nullptr) return nullptr;
+    std::function<juce::Component*(juce::Component*)> dfs = [&] (juce::Component* c) -> juce::Component* {
+        for (auto* child : c->getChildren()) {
+            if (child->isVisible() && child->isEnabled() && child->getWantsKeyboardFocus())
+                return child;
+            if (auto* deeper = dfs (child)) return deeper;
+        }
+        return nullptr;
+    };
+    if (auto* leaf = dfs (stage)) return leaf;
+    return stage;   // no focusable child -> the stage itself (a keyboardFocusContainer)
+}
+
+void MainComponent::postStageAnnouncement (WizardStep step) {
+    // §4 a11y: announce the newly-opened stage ("Level, step 3 of 4"). postAnnouncement is a static that
+    // routes to the active accessibility client; with no peer (headless tests) it is a safe no-op.
+    const int n = (int) step + 1;
+    const juce::String msg = stepName (step) + ", step " + juce::String (n) + " of "
+                           + juce::String (kWizardStepCount);
+    juce::AccessibilityHandler::postAnnouncement (msg, juce::AccessibilityHandler::AnnouncementPriority::medium);
 }
 
 void MainComponent::forceWizardStepForTest (WizardStep step) {
@@ -1276,6 +1409,25 @@ void MainComponent::forceWizardStepForTest (WizardStep step) {
     renderWizardView (ws);            // paints the spine + shows ws.active == step
     stageHost_.showStage (step);      // FORCE the shown stage even if renderWizardView showed another
     resized();
+}
+
+bool MainComponent::keyPressed (const juce::KeyPress& key) {
+    // Ctrl/Cmd + 1..4 -> jump to that step (§4), but only when it is NAVIGABLE (not Blocked). Pinning a
+    // Blocked step is a no-op — the machine would just fall back to first-unmet, so we don't even pin.
+    const auto mods = key.getModifiers();
+    if (! (mods.isCommandDown() || mods.isCtrlDown()))
+        return false;
+    for (int i = 0; i < kWizardStepCount; ++i) {
+        if (key.isKeyCode ('1' + i)) {
+            const auto ws = computeWizardState (snapshotWizardInputs(), pinnedStep_);
+            if (ws.steps[i].state == StepState::Blocked)
+                return true;                          // consumed but inert (un-navigable)
+            pinnedStep_ = (WizardStep) i;
+            refreshWizardView();
+            return true;
+        }
+    }
+    return false;
 }
 
 void MainComponent::forceThemeForTest (bool dark) {
@@ -2576,6 +2728,18 @@ void MainComponent::timerCallback() {
     meterL.setLevel  (lv.inL,     lv.clipL);
     meterR.setLevel  (lv.inR,     lv.clipR);
     meterOut.setLevel (lv.outMono, lv.clipOut);
+    // Level SOFT-gate latch (§3.2): the moment BOTH input channels reach the meters' green target band
+    // ([-18,-12] dBFS) while Running, latch it — the user set a good level once this session. It survives
+    // Stop (the knob didn't move) and is reset only on an input-device change (onInputChosen). Read the
+    // SAME linear values the meters render, converted with the meters' own band constants (single source).
+    if (engine.status() == EngineStatus::Running && ! levelLatched_) {
+        const auto inBand = [] (float lin) {
+            const float db = (lin <= 1.0e-6f) ? -120.0f : 20.0f * std::log10 (lin);
+            return db >= LevelMeter::kTargetLoDb && db <= LevelMeter::kTargetHiDb;
+        };
+        if (inBand (lv.inL) && inBand (lv.inR))
+            levelLatched_ = true;
+    }
     // Debounce the live silent-input check (read by updateStatusLine): count consecutive below-floor
     // ticks so brief pre-/inter-sweep gaps don't flicker the status; reset the instant signal returns.
     const bool blockSilent = lv.inL < HealthMonitor::kLowLevelLinear && lv.inR < HealthMonitor::kLowLevelLinear;
@@ -2680,6 +2844,12 @@ void MainComponent::timerCallback() {
             verifyResultLabel.setText ("No signal detected - play a tone into the LEFT earcup", juce::dontSendNotification);
         }
     }
+
+    // Tick wiring (Task 4): recompute the wizard view from live truth EVERY tick — snapshot -> the pure
+    // machine -> spine_.setState (label writes are set-if-changed) + stageHost_.showStage only on a real
+    // change (its early-return guards focus). This is the proper home for the recompute; the event-path
+    // updateStartGate() also calls it for immediate feedback (idempotent + cheap).
+    refreshWizardView();
 
     // Follow live system light/dark changes (~2 s cadence; cheap, no allocation on the hot path).
     if (++themeTick >= 60) {

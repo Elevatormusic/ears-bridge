@@ -48,6 +48,16 @@ void CalibrateStage::adopt (juce::Label& calEyebrow,
     firLenBox_ = &firLenBox;                 content_.addAndMakeVisible (firLenBox);
     trimLabel_ = &trimLabel;                 content_.addAndMakeVisible (trimLabel);
     trimSlider_ = &trimSlider;               content_.addAndMakeVisible (trimSlider);
+
+    // Explicit top-down focus order within this stage (§4): cards first, then the Advanced-FIR controls,
+    // then the Continue CTA (the old rail-wide orders 6/7 spanned stages — re-scope them per stage).
+    int fo = 1;
+    leftCal.setExplicitFocusOrder           (fo++);
+    rightCal.setExplicitFocusOrder          (fo++);
+    complexPhaseToggle.setExplicitFocusOrder (fo++);
+    firLenBox.setExplicitFocusOrder         (fo++);
+    trimSlider.setExplicitFocusOrder        (fo++);
+    continueButton_.setExplicitFocusOrder   (fo++);
 }
 
 void CalibrateStage::paint (juce::Graphics& g) {

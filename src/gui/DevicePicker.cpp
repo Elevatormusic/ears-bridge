@@ -19,6 +19,8 @@ DevicePicker::DevicePicker (juce::String caption) {
 
     combo.setTextWhenNoChoicesAvailable ("no devices found");
     combo.setTextWhenNothingSelected ("select a device");
+    // HIG H2: name the combo itself (not just the eyebrow Label, which the a11y tree does not associate).
+    combo.setTitle (comboTitleFromCaption (caption));
     addAndMakeVisible (combo);
 
     combo.onChange = [this] {
@@ -26,6 +28,15 @@ DevicePicker::DevicePicker (juce::String caption) {
         if (idx >= 0 && idx < (int) items.size() && onDeviceChosen)
             onDeviceChosen (items[(size_t) idx]);
     };
+}
+
+juce::String DevicePicker::comboTitleFromCaption (const juce::String& caption) {
+    // The two live captions map to the spec's human names (§10 H2). Fall back to a Title-Cased caption for
+    // any other picker so the combo is never left unnamed.
+    if (caption.equalsIgnoreCase ("INPUT"))                  return "Input device";
+    if (caption.startsWithIgnoreCase ("OUTPUT"))             return "Output virtual cable";
+    return caption.substring (0, 1).toUpperCase()
+         + caption.substring (1).toLowerCase();
 }
 
 juce::String DevicePicker::rowText (const DeviceId& d) {

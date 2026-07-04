@@ -69,6 +69,20 @@ void ConnectStage::adopt (DevicePicker& inputPicker, juce::Label& inputGainHint,
     verifyButton_ = &verifyButton;           content_.addAndMakeVisible (verifyButton);       // moved from Advanced — a connection concern
     verifyResultLabel_ = &verifyResultLabel; content_.addAndMakeVisible (verifyResultLabel);
     overrideToggle_ = &overrideToggle;       content_.addAndMakeVisible (overrideToggle);     // the disclosure dies; the toggle lives on
+
+    // Explicit top-down focus order within this stage (§4 / HIG M4). The old rail-wide orders (1..7 set in
+    // MainComponent) spanned two stages once re-homed; re-scope them here so Tab walks THIS stage's controls
+    // in visual order, then the Continue CTA last (set in the ctor).
+    int fo = 1;
+    inputPicker.setExplicitFocusOrder    (fo++);
+    combineBox.setExplicitFocusOrder     (fo++);
+    outputPicker.setExplicitFocusOrder   (fo++);
+    diracFixButton.setExplicitFocusOrder (fo++);
+    rateBox.setExplicitFocusOrder        (fo++);
+    bitBox.setExplicitFocusOrder         (fo++);
+    verifyButton.setExplicitFocusOrder   (fo++);
+    overrideToggle.setExplicitFocusOrder (fo++);
+    continueButton_.setExplicitFocusOrder (fo++);
 }
 
 void ConnectStage::paint (juce::Graphics& g) {

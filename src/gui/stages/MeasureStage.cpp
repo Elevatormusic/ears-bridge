@@ -45,6 +45,12 @@ void MeasureStage::adopt (juce::Label& statusLine, juce::Label& statusLineR,
     learnRefResultLabel_ = &learnRefResultLabel; addAndMakeVisible (learnRefResultLabel);
     hwDiracToggle_ = &hwDiracToggle;       addAndMakeVisible (hwDiracToggle);
 
+    // Explicit top-down focus order within this terminal stage (§4): the Learn-reference action then the
+    // hardware-Dirac toggle (no Continue — Measure is terminal).
+    int fo = 1;
+    learnRefButton.setExplicitFocusOrder (fo++);
+    hwDiracToggle.setExplicitFocusOrder  (fo++);
+
     // In the stage body the two status lines are left-aligned content (they were right-justified in the
     // title bar). This is layout, not new wording — the same labels, the same text.
     statusLine.setJustificationType (juce::Justification::centredLeft);

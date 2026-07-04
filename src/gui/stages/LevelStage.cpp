@@ -39,6 +39,9 @@ void LevelStage::adopt (juce::Label& levelsEyebrow, juce::Label& levelsHint, juc
     meterR_ = &meterR;                   addAndMakeVisible (meterR);
     meterOut_ = &meterOut;               addAndMakeVisible (meterOut);
     inputClipHint_ = &inputClipHint;     addChildComponent (inputClipHint);   // hidden until a raw-input clip
+
+    // The meters are non-interactive; the only focusable control this stage owns is the Continue CTA (§4).
+    continueButton_.setExplicitFocusOrder (1);
 }
 
 void LevelStage::paint (juce::Graphics& g) {
