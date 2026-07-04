@@ -193,7 +193,8 @@ float ReferenceGradePoller::sweepPeakDb (const float* window, int winLen, int al
 }
 
 GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winLen,
-                                                   const float* reference, int refLen, double rate) {
+                                                   const float* reference, int refLen, double rate,
+                                                   GradeArtifacts* artifacts) {
     GradePollResult r;
     if (window == nullptr || reference == nullptr || winLen <= 0 || refLen <= 0)
         return r;
@@ -202,7 +203,9 @@ GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winL
     // match-gate FIRST on the aligned segment, then quality — so a non-sweep window returns ReferenceStale
     // (never a clean grade). Safe to call off-thread; touches no debounce state. This is the verdict the GUI
     // publishes via publishReferenceGrade. (Used by the synchronous poll() and callers that did not run decide().)
-    GradePollResult g = packGrade (gradeMeasurementWindow (reference, refLen, window, winLen, rate));
+    // SP3: forward `artifacts` so the caller gets the graded IR + reference band (INFO-only shape detectors).
+    GradePollResult g = packGrade (gradeMeasurementWindow (reference, refLen, window, winLen, rate,
+                                                           20.0, 20000.0, kMinIrSnrDb, kMaxThdPct, artifacts));
     // Sweep-to-noise SNR from the SAME aligned window: locate the sweep the way gradeMeasurementWindow did
     // (winLen<refLen falls back to offset 0, matching gradeMeasurementWindowAt's short-window path) and measure
     // the sweep over the leading room noise. This overload re-runs the alignment; the alignOffset overload reuses
@@ -231,7 +234,7 @@ GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winL
 
 GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winLen,
                                                    const float* reference, int refLen, double rate,
-                                                   int alignOffset) {
+                                                   int alignOffset, GradeArtifacts* artifacts) {
     GradePollResult r;
     if (window == nullptr || reference == nullptr || winLen <= 0 || refLen <= 0)
         return r;
@@ -239,7 +242,9 @@ GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winL
     // the grade must quality-check the SAME segment. gradeMeasurementWindowAt re-runs the match-gate FIRST on
     // that segment (a non-sweep -> ReferenceStale), so this is just as honest as the self-aligning overload but
     // avoids a second (expensive) cross-correlation. The GUI worker path uses this.
-    GradePollResult g = packGrade (gradeMeasurementWindowAt (reference, refLen, window, winLen, alignOffset, rate));
+    // SP3: forward `artifacts` so the caller gets the graded IR + reference band (INFO-only shape detectors).
+    GradePollResult g = packGrade (gradeMeasurementWindowAt (reference, refLen, window, winLen, alignOffset, rate,
+                                                             20.0, 20000.0, kMinIrSnrDb, kMaxThdPct, artifacts));
     // Sweep-to-noise SNR from the SAME aligned window, reusing decide()'s alignOffset (no second xcorr). GUIDANCE.
     computeSweepSnr (window, winLen, alignOffset, refLen, g);
     g.sweepPeakDb = sweepPeakDb (window, winLen, alignOffset, refLen);   // raw input peak over the SAME sweep region
@@ -259,7 +264,8 @@ GradePollResult ReferenceGradePoller::gradeWindow (const float* window, int winL
 }
 
 GradePollResult ReferenceGradePoller::poll (const float* window, int winLen,
-                                            const float* reference, int refLen, double rate) {
+                                            const float* reference, int refLen, double rate,
+                                            GradeArtifacts* artifacts) {
     // The full synchronous decision: match + debounce, then (only on the stable-match edge) the grade.
     GradePollResult r = decide (window, winLen, reference, refLen);
     if (! r.didGrade)
@@ -267,8 +273,8 @@ GradePollResult ReferenceGradePoller::poll (const float* window, int winLen,
 
     // Grade at the SAME offset decide() located (Fix 1): reuse r.alignOffset so the gate and the grade agree on
     // where the sweep is, and the expensive cross-correlation runs once, not twice. Carry coherence/matched
-    // forward onto the graded result so a single poll() return is self-describing.
-    GradePollResult g = gradeWindow (window, winLen, reference, refLen, rate, r.alignOffset);
+    // forward onto the graded result so a single poll() return is self-describing. SP3: forward `artifacts`.
+    GradePollResult g = gradeWindow (window, winLen, reference, refLen, rate, r.alignOffset, artifacts);
     g.coherence   = r.coherence;
     g.matched     = r.matched;
     g.alignOffset = r.alignOffset;

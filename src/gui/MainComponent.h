@@ -255,6 +255,34 @@ private:
     // OWN two-poll debounce. Both are reset() on Start/Stop. The two ears are fully independent: one can grade
     // GradedClean while the other (silent ring / no sweep) never matches and stays Learned.
     eb::ReferenceGradePoller gradePollerL_, gradePollerR_;
+    // SP3 cross-ear polarity (D4): the 2048-sample peak segment of each ear's LAST graded IR this session,
+    // plus its freshness. crossEarPolarity runs only when BOTH ears carry a fresh, matched segment from the
+    // same run. Message-thread-only (written in the grade publish callAsync, which is serialized per ear by
+    // gradeInFlight_). The run generation stamps the segments so a Stop/Start invalidates a stale pair.
+    static constexpr int kShapePolaritySeg = 2048;
+    std::vector<float>    shapePeakSegPerEar_[2];             // the 2048-sample peak segment (empty until fresh)
+    uint32_t              shapePeakSegGenPerEar_[2] { 0u, 0u }; // run gen the segment was captured in
+    bool                  shapePeakSegFresh_[2] { false, false };
+    // The per-ear shape-detector result the WORKER produces (everything but cross-ear polarity, which needs
+    // both ears). Scalars are the worst-offender magnitudes; peakSeg is this ear's 2048-sample IR peak segment
+    // for the message-thread cross-ear polarity pass.
+    struct ShapeResult {
+        unsigned flags = 0u;
+        float driftMaxDb = 0.0f, hfShelfDb = 0.0f, combDepthDb = 0.0f, combDelayMs = 0.0f;
+        float effLoHz = 0.0f, effHiHz = 0.0f, lobeWidth = 0.0f, stepDb = 0.0f, resonanceHz = 0.0f;
+        int   humBaseHz = 0;
+        std::vector<float> peakSeg;    // 2048-sample IR peak segment (for D4 cross-ear), empty when not extracted
+        eb::BandCurve newBaseline;     // the curve to LEARN as this ear's baseline (valid only when it should set)
+        bool setBaseline = false;      // true == this is the FIRST GradedClean -> the message thread learns newBaseline
+    };
+    // WORKER-THREAD (heavy FFT detectors, off the message thread): run D1/D2/D3/D5a/D5b/D6/D7 for one graded
+    // ear against a COPY of that ear's current baseline (nullptr when none learned yet). PURE re the engine —
+    // it reads no engine state; the message thread owns the single-writer baseline set + the publish. Called
+    // only on a MATCHED grade (a graded state); non-graded outcomes never reach it (honesty gate).
+    static ShapeResult runShapeDetectors (int ear, bool gradedClean, const eb::BandCurve* baseline,
+                                          const std::vector<float>& ir, double bandLoHz, double bandHiHz,
+                                          const std::vector<float>& window, int windowStart, int gradedLen,
+                                          const std::vector<float>& reference, double rate);
     // Cancellable + restartable learn: the button doubles as Learn / Cancel. learnCancelRequested_ is the
     // message-thread -> firPool hand-off (set on a cancel click, polled inside captureLoopback). learning_ is
     // message-thread-only state guarding against a double-start during the brief cancel window.

@@ -79,8 +79,12 @@ public:
     //      segment, so a non-sweep window returns ReferenceStale, never a clean grade).
     // Returns the per-poll result; didGrade is true only on the grading poll. This runs the grade SYNCHRONOUSLY
     // (the headless harness + tests use it). A GUI that must grade off-thread can use decide() + gradeWindow().
+    // SP3: the trailing `artifacts` (default null) receives the byproducts the grade already computed
+    // (the graded IR + the reference band in Hz + the aligned-segment offset/len) so the GUI worker can
+    // run the shape detectors on the SAME IR/band — INFO-ONLY, never changes the grade or the debounce.
     GradePollResult poll (const float* window, int winLen,
-                          const float* reference, int refLen, double rate);
+                          const float* reference, int refLen, double rate,
+                          GradeArtifacts* artifacts = nullptr);
 
     // The match + debounce DECISION ONLY, without running the (heavy) grade. Steps 1 and 2 of poll(): the
     // match-gate publishes coherence/matched; didGrade tells the caller a grade SHOULD run now (the stable-match
@@ -114,9 +118,11 @@ public:
     // the SAME place the gate matched it, and the expensive cross-correlation runs once, not twice); the other
     // overload locates the sweep itself (for callers that did not run decide(), e.g. the synchronous poll()).
     static GradePollResult gradeWindow (const float* window, int winLen,
-                                        const float* reference, int refLen, double rate);
+                                        const float* reference, int refLen, double rate,
+                                        GradeArtifacts* artifacts = nullptr);
     static GradePollResult gradeWindow (const float* window, int winLen,
-                                        const float* reference, int refLen, double rate, int alignOffset);
+                                        const float* reference, int refLen, double rate, int alignOffset,
+                                        GradeArtifacts* artifacts = nullptr);
 
     // Sweep-to-room-noise SNR from the SAME match-aligned window the grade keyed off of. The SWEEP region is
     // [alignOffset, alignOffset+refLen) (clamped to the window); the NOISE region is the LEADING room noise the

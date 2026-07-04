@@ -169,6 +169,12 @@ BandedRegularization deriveBandedRegularization (const float* power, int numBins
 // power-of-two length (>= n), main lobe near index 0.
 // ---------------------------------------------------------------------------
 std::vector<float> deconvolve (const float* ref, const float* resp, int n, float regularization) {
+    return deconvolve (ref, resp, n, regularization, nullptr);   // SP3: 4-arg forwards, no banding out
+}
+
+std::vector<float> deconvolve (const float* ref, const float* resp, int n, float regularization,
+                               BandedRegularization* usedBanding) {
+    if (usedBanding != nullptr) *usedBanding = BandedRegularization{};   // default (invalid) until derived
     if (n <= 0 || ref == nullptr || resp == nullptr) return {};
 
     const int fftSize = nextPow2 (n);
@@ -218,6 +224,7 @@ std::vector<float> deconvolve (const float* ref, const float* resp, int n, float
 
     std::vector<float> ir ((size_t) fftSize, 0.0f);
     for (int i = 0; i < fftSize; ++i) ir[(size_t) i] = imp[(size_t) i * 2]; // real part
+    if (usedBanding != nullptr) *usedBanding = banded;   // SP3: hand the derived band out (invalid on the flat fallback)
     return ir;
 }
 

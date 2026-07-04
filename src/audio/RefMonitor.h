@@ -254,6 +254,25 @@ struct MeasurementGrade {
     IrQuality    quality;  // the Task 2 verdict — VALID ONLY when match.matched (else all-zero)
 };
 
+// SP3 (response-drift monitor): the byproducts the grade path already computed that the shape
+// detectors need — surfaced out so the GUI worker can run the detectors on the SAME IR/band the
+// grade keyed off (no re-deconvolution). INFO-ONLY: this NEVER changes the grade. Filled by the
+// gradeMeasurement*/gradeMeasurementWindow* overloads that take a trailing GradeArtifacts*; left
+// default when that pointer is null (the grade is byte-identical either way).
+//   ir              : the deconvolved IR (moved out of gradeMeasurement AFTER quality grading).
+//   bandLoHz/HiHz   : the reference's derived analysis band in Hz (bin * sampleRate / fftSize,
+//                     fftSize == ir.size()). BOTH 0 when the SP2 flat fallback ran (no valid band)
+//                     — the caller then falls back to the full 20..20000 span.
+//   windowStart     : where gradeMeasurementWindowAt located the sweep inside the window (== `start`),
+//                     so the caller can carve the PRE-sweep noise region [0, windowStart) for D5a.
+//   gradedLen       : the reference-length segment actually graded (== n passed to gradeMeasurement),
+//                     so the aligned pair for D7 is (window + windowStart, gradedLen) vs the reference.
+struct GradeArtifacts {
+    std::vector<float> ir;                 // moved out of gradeMeasurement (the graded IR)
+    double bandLoHz = 0.0, bandHiHz = 0.0; // 0 when the flat fallback ran (no valid band)
+    int    windowStart = 0, gradedLen = 0; // filled by gradeMeasurementWindowAt (the aligned-segment offset/len)
+};
+
 // Grade ONE completed measurement against the learned reference. The order is the
 // honesty contract from the spec (§5.2): the MATCH-GATE runs FIRST; only if it
 // passes do we deconvolve+grade quality. On a non-match we return ReferenceStale
@@ -280,7 +299,8 @@ struct MeasurementGrade {
                                                         int n, double sampleRate,
                                                         double f1 = 20.0, double f2 = 20000.0,
                                                         float minIrSnrDb = kMinIrSnrDb,
-                                                        float maxThdPct  = kMaxThdPct) {
+                                                        float maxThdPct  = kMaxThdPct,
+                                                        GradeArtifacts* artifacts = nullptr) {
     MeasurementGrade g;
     if (reference == nullptr || response == nullptr || n <= 0) {
         g.state = RefMonState::ReferenceStale;   // no data to trust -> treat as a mismatch, never green
@@ -294,8 +314,13 @@ struct MeasurementGrade {
         return g;
     }
 
-    // 2) MATCHED -> recover the IR and grade its quality (guidance only).
-    const std::vector<float> ir = deconvolve (reference, response, n);
+    // 2) MATCHED -> recover the IR and grade its quality (guidance only). SP3: on the sentinel default
+    //    the deconvolve out-param overload also hands back the reference-derived band it used; when a
+    //    caller asked for artifacts, capture it so the shape detectors run on the SAME band/IR (no math
+    //    change to the returned IR — the banding is a read-only byproduct).
+    BandedRegularization banded;
+    std::vector<float> ir = deconvolve (reference, response, n, kAutoRegularization,
+                                        artifacts != nullptr ? &banded : nullptr);
     // #18: the harmonic offsets scale with the ACTIVE sweep length, not the margin-padded buffer
     // length — measure it from the reference (falls back to n when no plausible sweep is found).
     const int sweepLen = measuredSweepLength (reference, n);
@@ -303,6 +328,17 @@ struct MeasurementGrade {
     g.quality = evaluateIr (ir.data(), (int) ir.size(), /*matched*/ true,
                             minIrSnrDb, maxThdPct, harm, sampleRate);
     g.state = g.quality.lowQuality ? RefMonState::GradedSuspect : RefMonState::GradedClean;
+    if (artifacts != nullptr) {
+        // Convert the derived band bins to Hz at the grade FFT size (== ir.size(), the padded pow-2
+        // length deconvolve returns). Leave BOTH edges 0 on the flat fallback (no valid band).
+        const int fftSize = (int) ir.size();
+        if (banded.valid && fftSize > 0) {
+            artifacts->bandLoHz = (double) banded.binLo * sampleRate / (double) fftSize;
+            artifacts->bandHiHz = (double) banded.binHi * sampleRate / (double) fftSize;
+        }
+        artifacts->gradedLen = n;                 // the reference-length segment that was graded
+        artifacts->ir        = std::move (ir);    // move AFTER evaluateIr — the IR is no longer needed here
+    }
     return g;
 }
 
@@ -339,19 +375,26 @@ struct MeasurementGrade {
                                                                double sampleRate,
                                                                double f1 = 20.0, double f2 = 20000.0,
                                                                float minIrSnrDb = kMinIrSnrDb,
-                                                               float maxThdPct  = kMaxThdPct) {
+                                                               float maxThdPct  = kMaxThdPct,
+                                                               GradeArtifacts* artifacts = nullptr) {
     MeasurementGrade g;
     if (reference == nullptr || window == nullptr || refLen <= 0 || windowLen <= 0) {
         g.state = RefMonState::ReferenceStale;   // no data to trust -> never green
         return g;
     }
-    if (windowLen < refLen)
-        return gradeMeasurement (reference, window, windowLen, sampleRate, f1, f2, minIrSnrDb, maxThdPct);
+    if (windowLen < refLen) {
+        // Short-window fall-through: the sweep sits at offset 0 (no aligned prefix to carve).
+        auto sg = gradeMeasurement (reference, window, windowLen, sampleRate, f1, f2, minIrSnrDb, maxThdPct, artifacts);
+        if (artifacts != nullptr) artifacts->windowStart = 0;
+        return sg;
+    }
     if (start < 0)                  start = 0;
     if (start > windowLen - refLen) start = windowLen - refLen;
     if (start < 0)                  start = 0;
     const int n = (windowLen - start < refLen) ? (windowLen - start) : refLen;
-    return gradeMeasurement (reference, window + start, n, sampleRate, f1, f2, minIrSnrDb, maxThdPct);
+    auto sg = gradeMeasurement (reference, window + start, n, sampleRate, f1, f2, minIrSnrDb, maxThdPct, artifacts);
+    if (artifacts != nullptr) artifacts->windowStart = start;   // SP3: where the sweep sits (pre-sweep noise = [0, start))
+    return sg;
 }
 
 [[nodiscard]] inline MeasurementGrade gradeMeasurementWindow (const float* reference, int refLen,
@@ -359,22 +402,26 @@ struct MeasurementGrade {
                                                              double sampleRate,
                                                              double f1 = 20.0, double f2 = 20000.0,
                                                              float minIrSnrDb = kMinIrSnrDb,
-                                                             float maxThdPct  = kMaxThdPct) {
+                                                             float maxThdPct  = kMaxThdPct,
+                                                             GradeArtifacts* artifacts = nullptr) {
     MeasurementGrade g;
     if (reference == nullptr || window == nullptr || refLen <= 0 || windowLen <= 0) {
         g.state = RefMonState::ReferenceStale;   // no data to trust -> never green
         return g;
     }
     // Short window: nothing to search through -> grade what we have (equal-length segment).
-    if (windowLen < refLen)
-        return gradeMeasurement (reference, window, windowLen, sampleRate, f1, f2, minIrSnrDb, maxThdPct);
+    if (windowLen < refLen) {
+        auto sg = gradeMeasurement (reference, window, windowLen, sampleRate, f1, f2, minIrSnrDb, maxThdPct, artifacts);
+        if (artifacts != nullptr) artifacts->windowStart = 0;
+        return sg;
+    }
 
     // Locate the sweep inside the long window: crossCorrelateAlign(ref, window) returns the lag of the
     // window relative to the reference, which clampSweepStart turns into the in-range segment start.
     const AlignResult a = crossCorrelateAlign (reference, refLen, window, windowLen);
     const int start = clampSweepStart (a.delaySamples, refLen, windowLen);
     return gradeMeasurementWindowAt (reference, refLen, window, windowLen, start,
-                                     sampleRate, f1, f2, minIrSnrDb, maxThdPct);
+                                     sampleRate, f1, f2, minIrSnrDb, maxThdPct, artifacts);
 }
 
 } // namespace eb

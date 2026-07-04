@@ -409,3 +409,68 @@ TEST_CASE("gradeMeasurement: real distortion is DETECTED through a margin-padded
     CHECK (clean.quality.thdPercent < 1.0f);
     CHECK (g.quality.thdPercent > 10.0f * (clean.quality.thdPercent + 0.01f));   // clear separation
 }
+
+// ===========================================================================
+// SP3 — the GradeArtifacts out-param (Task 5 plumbing: MUST NOT change grading)
+// ===========================================================================
+TEST_CASE("GradeArtifacts: gradeMeasurement fills the IR + reference band, grading is UNCHANGED") {
+    const int    n  = 1 << 15;        // 32768
+    const double fs = 48000.0;
+    std::vector<float> ref, resp;
+    makeCleanMeasurement (n, fs, ref, resp);
+    const int m = (int) resp.size();
+
+    // Grade WITHOUT artifacts (the baseline verdict).
+    const auto plain = eb::gradeMeasurement (ref.data(), resp.data(), m, fs);
+
+    // Grade WITH artifacts — the plumbing must be byte-for-byte identical on state/irSnr/thd.
+    eb::GradeArtifacts art;
+    const auto withA = eb::gradeMeasurement (ref.data(), resp.data(), m, fs, 20.0, 20000.0,
+                                             eb::kMinIrSnrDb, eb::kMaxThdPct, &art);
+    CHECK (withA.state == plain.state);
+    CHECK (withA.quality.irSnrDb   == plain.quality.irSnrDb);
+    CHECK (withA.quality.thdPercent == plain.quality.thdPercent);
+    CHECK (withA.match.matched == plain.match.matched);
+
+    // The IR is handed out (padded pow-2 length >= m).
+    CHECK (! art.ir.empty());
+    CHECK ((int) art.ir.size() >= m);
+    // gradedLen == the reference-length segment graded (== m here, the direct gradeMeasurement path).
+    CHECK (art.gradedLen == m);
+    // The derived reference band brackets the sweep's 20 Hz..20 kHz span. The SP2 band-edge derivation
+    // sits just OUTSIDE the nominal sweep edges (the smoothed -12 dB run extends a hair past f1/f2), so
+    // the low edge lands a little under 20 Hz — a low band of ~13 Hz and a high band of ~20 kHz is exactly
+    // the reference's usable range, which is what the shape detectors must analyse.
+    INFO ("bandLoHz=" << art.bandLoHz << " bandHiHz=" << art.bandHiHz);
+    CHECK (art.bandLoHz >= 10.0);
+    CHECK (art.bandLoHz <= 40.0);
+    CHECK (art.bandHiHz >= 15000.0);
+    CHECK (art.bandHiHz <= 21000.0);
+}
+
+TEST_CASE("GradeArtifacts: gradeMeasurementWindowAt reports the aligned windowStart, grade unchanged") {
+    const int    refLen = 1 << 15;    // 32768
+    const double fs     = 48000.0;
+    std::vector<float> ref, resp;
+    makeCleanMeasurement (refLen, fs, ref, resp);
+    const int segLen = (int) resp.size();
+
+    // Build a long window: leading room noise + the sweep somewhere inside.
+    const int lead = 40000;           // >= 16384 so D5a's pre-sweep region is usable
+    std::vector<float> window ((size_t) (lead + segLen), 0.0f);
+    auto noise = whiteNoise (lead, 1.0e-4f, 7u);
+    std::copy (noise.begin(), noise.end(), window.begin());
+    std::copy (resp.begin(), resp.end(), window.begin() + lead);
+
+    // Grade at the KNOWN offset (what decide()/matchAlign would locate).
+    const auto plain = eb::gradeMeasurementWindowAt (ref.data(), segLen, window.data(), (int) window.size(),
+                                                     lead, fs);
+    eb::GradeArtifacts art;
+    const auto withA = eb::gradeMeasurementWindowAt (ref.data(), segLen, window.data(), (int) window.size(),
+                                                     lead, fs, 20.0, 20000.0, eb::kMinIrSnrDb, eb::kMaxThdPct, &art);
+    CHECK (withA.state == plain.state);
+    CHECK (withA.quality.irSnrDb == plain.quality.irSnrDb);
+    CHECK (art.windowStart == lead);       // the pre-sweep noise region is [0, windowStart)
+    CHECK (art.windowStart >= 16384);      // D5a eligibility (the noise region is long enough)
+    CHECK (! art.ir.empty());
+}

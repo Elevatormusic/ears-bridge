@@ -87,6 +87,16 @@ static constexpr float kAutoRegularization = -1.0f;
 std::vector<float> deconvolve (const float* ref, const float* resp, int n,
                                float regularization = kAutoRegularization);
 
+// SP3 out-param overload (PLUMBING ONLY — identical math to the 4-arg above; that signature
+// forwards here with usedBanding == nullptr). When `usedBanding` is non-null it receives a COPY of
+// the reference-derived BandedRegularization the deconvolution actually used (valid only on the
+// sentinel default; a degenerate reference or an explicit positive eps leaves it invalid). The SP3
+// analysis pass reads usedBanding->binLo/binHi to derive the reference's analysis band in Hz
+// (bin * sampleRate / fftSize) — the SAME band the SP2 regularization keyed off, so the detectors
+// and the correction agree. No behavioural change to the returned IR.
+std::vector<float> deconvolve (const float* ref, const float* resp, int n,
+                               float regularization, BandedRegularization* usedBanding);
+
 // ---- The match-gate ------------------------------------------------------
 struct MatchVerdict {
     bool  matched               = false;

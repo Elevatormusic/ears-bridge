@@ -1,5 +1,6 @@
 #pragma once
 #include "audio/RefMonitor.h"   // RefMonState / refMonBlocksGreen / QualityVerdict / classify* / qualityNote
+#include "audio/ResponseShape.h"   // SP3: eb::ShapeFlag (the shape-anomaly bitmask the INFO note reads)
 #include "gui/SnrStatus.h"      // kMinSweepSnrDb (the per-ear "(low SNR)" tag threshold)
 #include <juce_core/juce_core.h>
 
@@ -37,6 +38,10 @@ struct EarGradeSnapshot {
     float thdPercent = 0.0f;
     float sweepSnrDb = 0.0f;     // > 0 only when this ear graded with a VALID sweep SNR
     float peakDb     = -120.0f;  // RAW input sweep peak (dBFS; positive = overshot full scale)
+    // SP3 INFO note (worst-offender shape anomaly for this ear, from shapeInfoNote()). Empty when there
+    // is no anomaly. INFO-ONLY: it decorates the line as a neutral clause + rides the tooltip; it NEVER
+    // changes the line's tone (never Warn/Danger) or the headline. Precomputed GUI-side from the engine.
+    juce::String shapeNote;
 };
 
 struct StatusLineOut {
@@ -153,9 +158,51 @@ struct RunningSnapshot {
         }
     }
     out.text += snrTail + peakTail;
+    // SP3 INFO note: append the worst-offender shape anomaly as a neutral clause (never changes the tone —
+    // it is INFO-only) and carry the same text in the tooltip so the full finding is discoverable. Only for
+    // graded ears (the note is meaningless on a waiting/stale line, and the engine clears it otherwise).
+    if (graded && e.shapeNote.isNotEmpty()) {
+        out.text += "  -  " + e.shapeNote;
+        out.tip   = out.tip.isNotEmpty() ? out.tip + "\n" + e.shapeNote : e.shapeNote;
+    }
     // #44: a green per-ear line is only ever the GradedClean verdict.
     jassert (out.tone != StatusTone::Ok || state == RefMonState::GradedClean);
     return out;
+}
+
+// ---- SP3 shape-anomaly INFO note (Task 5) --------------------------------------------------------
+// The single worst-offender INFO line for one ear's published shape anomalies. INFO-ONLY — this NEVER
+// changes a grade, a tone, or cleanCapture; the GUI renders it in the neutral info style (never Warn/
+// Danger). Worst-offender precedence (spec §5): truncation > comb > polarity > drift > hum > resonance
+// > skew > step. Copy strings are the spec §4 wording. Returns "" when there is no anomaly (flags == 0
+// or only kBaselineSet — the baseline being learned is not a finding). Each line stays <= ~70 chars (the
+// #8 title-bar cut-off lesson); the caller carries the FULL numbers in the tooltip.
+[[nodiscard]] inline juce::String shapeInfoNote (unsigned flags, float driftMaxDb, float combDelayMs,
+                                                float effHiHz, float effLoHz, int humBaseHz) {
+    using namespace eb;
+    juce::ignoreUnused (effLoHz);   // the LF-truncation copy names no frequency (spec §4.D3: position-only)
+    // Truncation FIRST (a truncated band is the most consequential — the chain is dropping content).
+    if (flags & ShapeFlag::kTruncHi)
+        return "content ends near " + juce::String (effHiHz / 1000.0f, 1)
+             + " kHz - the chain may be resampling";
+    if (flags & ShapeFlag::kTruncLo)
+        return "no low-frequency content - check the seal or the chain";
+    if (flags & ShapeFlag::kComb)
+        return "possible duplicate path - echo ~" + juce::String (combDelayMs, 1) + " ms";
+    if (flags & ShapeFlag::kPolarity)
+        return "the two ears measure with opposite polarity - check wiring";
+    if (flags & ShapeFlag::kDrift)
+        return "response drifted since sweep 1 (" + juce::String (driftMaxDb, 1)
+             + " dB) - re-seat or check the chain";
+    if (flags & ShapeFlag::kHum)
+        return "mains hum (" + juce::String (humBaseHz) + " Hz) in the noise floor - check ground/amp loop";
+    if (flags & ShapeFlag::kResonance)
+        return "possible narrow resonance in the response";
+    if (flags & ShapeFlag::kSkew)
+        return "clock skew suspected - check the device sample rates";
+    if (flags & ShapeFlag::kStep)
+        return "level changed mid-sweep - disable enhancements / AGC";
+    return {};   // no anomaly (or only the baseline-set bit): no note
 }
 
 // ---- per-ear COMPACT summary (the captured branch's shared second line, #4) ----------------------

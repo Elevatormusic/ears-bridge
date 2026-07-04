@@ -11,6 +11,7 @@
 #include "cal/CalibrationPairValidator.h"   // eb::validateCalibrationPair (P0-07)
 #include "audio/CalibrationGeneration.h"    // eb::CalibrationGeneration (generation lifecycle)
 #include "audio/RefMonitor.h"               // eb::RefMonState / gradeMeasurement / refMonBlocksGreen (Plan 5)
+#include "audio/ResponseShape.h"            // SP3: the seven shape detectors + BandCurve (INFO-only, grade worker)
 #include "audio/HardwareDiracDetect.h"      // eb::sweepWasInternal / hardwareDiracSuggestion (hardware-Dirac)
 #include "platform/OutputActivity.h"        // eb::outputRenderPeakForName (is Dirac's PC output rendering?)
 #include "gui/SnrStatus.h"                  // eb::kMinSweepSnrDb (sweep-to-noise SNR threshold; match-window SNR fix)
@@ -1375,6 +1376,11 @@ void MainComponent::updateStatusLine() {
             e.thdPercent = engine.refThdPercent (ear);
             e.sweepSnrDb = engine.refSweepSnrDb (ear);
             e.peakDb     = engine.referenceSweepPeakDb (ear);
+            // SP3 INFO note: the worst-offender shape anomaly for this ear (empty when none). Read the
+            // published flags + magnitudes lock-free and compose the neutral one-liner. INFO-ONLY.
+            e.shapeNote  = eb::shapeInfoNote (engine.shapeFlags (ear), engine.shapeDriftMaxDb (ear),
+                                              engine.shapeCombDelayMs (ear), engine.shapeEffHiHz (ear),
+                                              engine.shapeEffLoHz (ear), engine.shapeHumBaseHz (ear));
             return e;
         };
         snap.earL = earSnap (0);
@@ -1931,6 +1937,110 @@ void MainComponent::pollReferenceGrade() {
     }
 }
 
+MainComponent::ShapeResult MainComponent::runShapeDetectors (int ear, bool gradedClean,
+        const eb::BandCurve* baseline, const std::vector<float>& ir, double bandLoHz, double bandHiHz,
+        const std::vector<float>& window, int windowStart, int gradedLen,
+        const std::vector<float>& reference, double rate) {
+    // WORKER-THREAD (the single-thread firPool): the seven INFO-ONLY shape detectors, run on the SAME IR /
+    // band the grade already keyed off. Nothing here gates, demotes, or invalidates a grade or touches
+    // cleanCapture. It reads NO engine/component state (static): the D1 baseline is passed in as a COPY and
+    // the decision to LEARN a new baseline is returned, so the message thread stays the single writer of the
+    // engine baseline (mirrors publishReferenceGrade). spec 2026-07-03-response-drift-monitor-design §4/§5.
+    juce::ignoreUnused (ear);
+    ShapeResult res;
+    if (ir.empty() || rate <= 0.0) return res;
+
+    // The analysis band: the reference's derived band (SP2), pulled straight from the grade artifacts. On the
+    // flat fallback (bandLoHz == 0) fall back to the full 20 Hz .. 20 kHz sweep span (windowedBandSpectrum
+    // pulls it in 1/12 oct internally). D3 needs the SAME reference edges to compare the measurement against.
+    const bool haveBand = bandLoHz > 0.0 && bandHiHz > bandLoHz;
+    const double bLo = haveBand ? bandLoHz : 20.0;
+    const double bHi = haveBand ? bandHiHz : 20000.0;
+
+    const eb::WindowedSpectrum ws = eb::windowedBandSpectrum (ir.data(), (int) ir.size(), rate, bLo, bHi);
+
+    if (ws.valid) {
+        // ---- D1 session drift (baseline-relative) ----------------------------------------------------
+        const eb::BandCurve cur = eb::computeBandCurve (ws);
+        if (cur.valid) {
+            if (baseline != nullptr && baseline->valid) {
+                const eb::DriftReport d = eb::compareCurves (*baseline, cur);
+                if (d.valid) {
+                    res.driftMaxDb = d.maxDeltaDb;
+                    res.hfShelfDb  = d.hfShelfDb;
+                    if (d.exceedsTolerance) res.flags |= eb::ShapeFlag::kDrift;
+                }
+            } else if (gradedClean) {
+                // The FIRST GradedClean per ear learns the baseline (no note; D1 stays silent until it exists).
+                // Returned to the message thread, which is the engine baseline's single writer.
+                res.newBaseline = cur;
+                res.setBaseline = true;
+            }
+        }
+
+        // ---- D2 comb / echo --------------------------------------------------------------------------
+        const eb::CombReport comb = eb::detectComb (ws, ir.data(), (int) ir.size());
+        if (comb.found) {
+            res.flags      |= eb::ShapeFlag::kComb;
+            res.combDepthDb = comb.depthDb;
+            res.combDelayMs = comb.delayMs;
+        }
+
+        // ---- D3 band truncation vs the reference band (needs a valid reference band) ------------------
+        if (haveBand) {
+            const eb::TruncationReport tr = eb::detectTruncation (ws, bandLoHz, bandHiHz);
+            if (tr.valid) {
+                res.effLoHz = tr.effLoHz;
+                res.effHiHz = tr.effHiHz;
+                if (tr.truncatedHi) res.flags |= eb::ShapeFlag::kTruncHi;
+                if (tr.truncatedLo) res.flags |= eb::ShapeFlag::kTruncLo;
+            }
+        }
+
+        // ---- D5b narrow resonance --------------------------------------------------------------------
+        const eb::SpikeReport spk = eb::detectResonance (ws);
+        if (spk.found) {
+            res.flags      |= eb::ShapeFlag::kResonance;
+            res.resonanceHz = spk.hz;
+        }
+    }
+
+    // ---- D6 clock-skew lobe width (raw IR; no windowed spectrum needed) -------------------------------
+    const float lobe = eb::mainLobeWidthSamples (ir.data(), (int) ir.size());
+    if (lobe > 0.0f) {
+        res.lobeWidth = lobe;
+        constexpr float kLobeWidthMax = 10.0f;   // spec 4.D6 provisional (pending #54C on-device ratification)
+        if (lobe > kLobeWidthMax) res.flags |= eb::ShapeFlag::kSkew;
+    }
+
+    // ---- D5a mains hum in the PRE-SWEEP noise region [0, windowStart) ---------------------------------
+    // Only when the leading noise region is long enough for the Welch average (spec 4.D5a: len >= 16384).
+    if (windowStart >= 16384 && (int) window.size() >= windowStart) {
+        const eb::HumReport hum = eb::detectMainsHum (window.data(), windowStart, rate);
+        if (hum.found) {
+            res.flags    |= eb::ShapeFlag::kHum;
+            res.humBaseHz = (int) std::lround (hum.baseHz);
+        }
+    }
+
+    // ---- D7 level step on the ALIGNED pair (window+windowStart, gradedLen) vs the reference -----------
+    if (gradedLen > 0 && windowStart >= 0 && (int) window.size() >= windowStart + gradedLen
+        && (int) reference.size() >= gradedLen) {
+        const eb::StepReport st = eb::detectLevelStep (window.data() + windowStart, reference.data(),
+                                                       gradedLen, rate);
+        if (st.found) {
+            res.flags  |= eb::ShapeFlag::kStep;
+            res.stepDb  = st.stepDb;
+        }
+    }
+
+    // ---- D4 cross-ear polarity: extract THIS ear's 2048-sample peak segment (the pair is compared on the
+    //      message thread once BOTH ears have a fresh matched segment this session). ----------------------
+    res.peakSeg.assign ((size_t) kShapePolaritySeg, 0.0f);
+    eb::extractPeakSegment (ir.data(), (int) ir.size(), res.peakSeg.data(), kShapePolaritySeg);
+    return res;
+}
+
 bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
                                  const std::vector<float>& reference, double referenceRate) {
     // Grade ONE earcup against ITS OWN reference channel. Returns true iff it posted an off-thread grade job this
@@ -1996,12 +2106,18 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
         const int   refLen      = (int) refCopy.size();
         const int   alignOffset = mr.alignOffset;      // where matchAlign located the sweep (gate + grader agree)
         const float coherence   = mr.coherence;        // captured for the ratification log line
-        mc->firPool->addJob ([safe, ear, refCopy = std::move (refCopy), window = std::move (window), rate, refLen, alignOffset, coherence, myGen]() mutable {
+        // SP3: snapshot THIS ear's current D1 baseline (message thread — the engine baseline's single writer)
+        // so the worker can compute drift against a COPY without touching engine state off-thread. Empty (invalid)
+        // until the first GradedClean has set it; the worker returns setBaseline when it should be learned.
+        eb::BandCurve baselineCopy;
+        if (const eb::BandCurve* b = mc->engine.shapeBaseline (ear)) baselineCopy = *b;
+        mc->firPool->addJob ([safe, ear, refCopy = std::move (refCopy), window = std::move (window), rate, refLen, alignOffset, coherence, myGen, baselineCopy = std::move (baselineCopy)]() mutable {
         // OFFLINE on the worker: the pure grade for the window decide() said to grade. gradeWindow() grades at the
         // SAME offset decide() located (Fix 1 — gate and grade agree; no second xcorr), re-runs the match-gate
         // FIRST there, then quality — a non-sweep segment fails the gate -> stale.
+        eb::GradeArtifacts art;   // SP3: the graded IR + reference band + aligned-segment offset/len
         const auto g = eb::ReferenceGradePoller::gradeWindow (window.data(), (int) window.size(),
-                                                              refCopy.data(), refLen, rate, alignOffset);
+                                                              refCopy.data(), refLen, rate, alignOffset, &art);
         const int   state    = (int) g.state;
         const bool  mismatch = g.mismatch;
         const float irSnr    = g.irSnrDb;
@@ -2018,8 +2134,22 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
         const int snrBand = (int) g.sweepSnrBand;   // 3-color quality bands (sweepSNR gates; THD/IR-SNR advisory)
         const int irBand  = (int) g.irSnrBand;
         const int thdBand = (int) g.thdBand;
+        // SP3 (INFO-ONLY): run the seven shape detectors on the SAME IR/band the grade keyed off — but ONLY on a
+        // MATCHED graded outcome (GradedClean/Marginal/Suspect). A non-graded state (ReferenceStale) publishes
+        // NOTHING: no verdict, no numbers, no baseline (spec §6 honesty). The detectors are heavy FFTs, so they
+        // run here on the worker; the (cheap) cross-ear polarity + the publish happen on the message thread below.
+        const auto rs = (eb::RefMonState) state;
+        const bool graded = (rs == eb::RefMonState::GradedClean || rs == eb::RefMonState::GradedMarginal
+                             || rs == eb::RefMonState::GradedSuspect);
+        ShapeResult shape;
+        if (graded)
+            shape = runShapeDetectors (ear, /*gradedClean*/ rs == eb::RefMonState::GradedClean,
+                                       baselineCopy.valid ? &baselineCopy : nullptr,
+                                       art.ir, art.bandLoHz, art.bandHiHz,
+                                       window, art.windowStart, art.gradedLen, refCopy, rate);
         juce::MessageManager::callAsync ([safe, ear, state, irSnr, thd, mismatch, lowQ, sweepSnr, snrValid, sweepPeak,
-                                          snrBand, irBand, thdBand, coherence, alignOffset, refLen, rate, myGen]() {
+                                          snrBand, irBand, thdBand, coherence, alignOffset, refLen, rate, myGen,
+                                          graded, shape = std::move (shape)]() mutable {
             auto* mc = safe.getComponent();
             if (! mc) return;
             if (mc->gradeRunGen_.load (std::memory_order_relaxed) != myGen) return;   // a Stop/Start happened since post -> drop this stale publish (#4)
@@ -2049,6 +2179,48 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
             // per-ear status line can quantify the overshoot and suggest how much to lower the output. Always
             // published (no valid/invalid gate); GUIDANCE only — it does NOT invalidate the grade.
             mc->engine.publishCompletedSweepPeakDb (ear, sweepPeak);
+
+            // SP3 (INFO-ONLY): finalize + publish the shape anomalies for this ear. Only MATCHED grades ran the
+            // detectors (graded==true); a non-graded outcome publishes NOTHING here (no verdict, no numbers).
+            if (graded) {
+                const int e = (ear == 1) ? 1 : 0, other = 1 - e;
+                // The FIRST GradedClean per ear learns the D1 baseline (message thread == the single writer).
+                if (shape.setBaseline && shape.newBaseline.valid)
+                    mc->engine.setShapeBaseline (ear, shape.newBaseline);
+                // D4 cross-ear polarity: stash THIS ear's fresh peak segment (stamped with the run gen), then run
+                // the L-vs-R cross-correlation ONLY when BOTH ears carry a fresh, same-run segment (both matched).
+                if ((int) shape.peakSeg.size() == kShapePolaritySeg) {
+                    mc->shapePeakSegPerEar_[e]    = std::move (shape.peakSeg);
+                    mc->shapePeakSegGenPerEar_[e] = myGen;
+                    mc->shapePeakSegFresh_[e]     = true;
+                }
+                if (mc->shapePeakSegFresh_[0] && mc->shapePeakSegFresh_[1]
+                    && mc->shapePeakSegGenPerEar_[0] == myGen && mc->shapePeakSegGenPerEar_[1] == myGen
+                    && (int) mc->shapePeakSegPerEar_[0].size() == kShapePolaritySeg
+                    && (int) mc->shapePeakSegPerEar_[1].size() == kShapePolaritySeg) {
+                    const eb::PolarityReport pol = eb::crossEarPolarity (
+                        mc->shapePeakSegPerEar_[0].data(), kShapePolaritySeg,
+                        mc->shapePeakSegPerEar_[1].data(), kShapePolaritySeg);
+                    if (pol.valid && pol.inverted) shape.flags |= eb::ShapeFlag::kPolarity;   // both ears carry it
+                }
+                mc->engine.publishShapeAnomalies (ear, shape.flags, shape.driftMaxDb, shape.hfShelfDb,
+                                                  shape.combDepthDb, shape.combDelayMs, shape.effLoHz,
+                                                  shape.effHiHz, shape.lobeWidth, shape.stepDb,
+                                                  shape.humBaseHz, shape.resonanceHz);
+                if (shape.flags & ~eb::ShapeFlag::kBaselineSet)
+                    mc->logLine (eb::DiagnosticLog::Level::Info,
+                        juce::String ("SHAPE: ear=") + (ear == 1 ? "R" : "L")
+                        + " flags=0x" + juce::String::toHexString ((int) shape.flags)
+                        + " drift=" + juce::String (shape.driftMaxDb, 1) + "dB"
+                        + " hfShelf=" + juce::String (shape.hfShelfDb, 1) + "dB"
+                        + " comb=" + juce::String (shape.combDepthDb, 1) + "dB@" + juce::String (shape.combDelayMs, 1) + "ms"
+                        + " band=" + juce::String (shape.effLoHz, 0) + ".." + juce::String (shape.effHiHz, 0) + "Hz"
+                        + " lobe=" + juce::String (shape.lobeWidth, 1)
+                        + " step=" + juce::String (shape.stepDb, 1) + "dB"
+                        + " hum=" + juce::String (shape.humBaseHz) + "Hz"
+                        + " reson=" + juce::String (shape.resonanceHz, 0) + "Hz");
+                juce::ignoreUnused (other);
+            }
             // Ratification-grade summary: ONE comprehensive line PER EAR per graded sweep so a single real
             // measurement carries everything needed to set the IR-SNR / THD / sweep-SNR / match-coherence cutoffs
             // and flip kIrThresholdsRatified. Info level, message-thread-only, serial-scrubbed by logLine.

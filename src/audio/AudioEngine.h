@@ -12,6 +12,7 @@
 #include "audio/AsioFallback.h"
 #include "audio/CalibrationGeneration.h"
 #include "audio/RefMonitor.h"   // Plan 5: RefMonState (the per-ear published-grade enum)
+#include "audio/ResponseShape.h"   // SP3: BandCurve (the per-ear shape baseline the grade worker stores)
 #include "platform/AggregateDevice_mac.h"   // portable header; macOS-gated .mm (Plan 4 Task 7)
 #include "cal/CalFile.h"
 #include "cal/FirDesigner.h"
@@ -232,6 +233,58 @@ public:
     float refIrSnrDb()    const noexcept { return refIrSnrDb    (0); }
     float refThdPercent() const noexcept { return refThdPercent (0); }
 
+    // ---- SP3 response-drift / shape-anomaly detectors (INFO-ONLY; never gates a grade) ------------
+    // The seven shape detectors run on the GRADE WORKER (offline), exactly where the per-ear grade
+    // already runs. Their outputs land here via the SAME lock-free idioms as the grade: scalar values
+    // in per-ear milli atomics + ONE packed flags atomic per ear (GUI-safe relaxed reads). NONE of this
+    // touches cleanCapture, the grade state, or the audio thread. Non-graded outcomes publish NOTHING
+    // (honesty: no verdict, no numbers) and never set a baseline.
+    //
+    // Shape-anomaly flag bits (packed into shapeFlags(ear)). Canonical values live in ResponseShape.h's
+    // eb::ShapeFlag (single source shared with the pure GUI note composer); these aliases keep the
+    // AudioEngine::kShape* spelling the callers already use. kShapeBaselineSet marks that D1's baseline
+    // has been learned for that ear this session (the FIRST GradedClean sets it); it is NOT an anomaly.
+    static constexpr unsigned kShapeDrift       = ShapeFlag::kDrift;
+    static constexpr unsigned kShapeComb        = ShapeFlag::kComb;
+    static constexpr unsigned kShapeTruncHi     = ShapeFlag::kTruncHi;
+    static constexpr unsigned kShapeTruncLo     = ShapeFlag::kTruncLo;
+    static constexpr unsigned kShapePolarity    = ShapeFlag::kPolarity;
+    static constexpr unsigned kShapeHum         = ShapeFlag::kHum;
+    static constexpr unsigned kShapeResonance   = ShapeFlag::kResonance;
+    static constexpr unsigned kShapeSkew        = ShapeFlag::kSkew;
+    static constexpr unsigned kShapeStep        = ShapeFlag::kStep;
+    static constexpr unsigned kShapeBaselineSet = ShapeFlag::kBaselineSet;
+
+    // GRADE-WORKER-ONLY baseline access (SINGLE WRITER, same contract as the grade path — the worker
+    // sets the baseline on the FIRST GradedClean per ear and reads it on every later grade; NOTHING
+    // else touches it). Plain engine members (not atomics): the curve is a vector, only ever mutated on
+    // the worker, and only READ on the worker (the GUI reads the published SCALAR outputs, never the
+    // curve). shapeBaseline(ear) returns nullptr until the baseline is set. Reset in prepare()/start()
+    // and setReferenceLoaded(false) (mirrors the grade-atomic resets).
+    void             setShapeBaseline (int ear, BandCurve curve);
+    const BandCurve* shapeBaseline    (int ear) const;   // nullptr until set (worker-thread read)
+    bool             shapeBaselineSet (int ear) const noexcept;   // GUI-safe (reads the packed flag)
+
+    // Publish ONE ear's shape-detector outputs together (worker thread, lock-free stores). `flags` is the
+    // packed bitmask above; the floats are the worst-offender magnitudes the INFO note quantifies. Follows
+    // the refIrSnrDbMilli idiom exactly (value*1000 in an atomic<int>). INFO-ONLY.
+    void publishShapeAnomalies (int ear, unsigned flags, float driftMaxDb, float hfShelfDb,
+                                float combDepthDb, float combDelayMs, float effLoHz, float effHiHz,
+                                float lobeWidth, float stepDb, int humBaseHz, float resonanceHz) noexcept;
+
+    // GUI-safe per-ear reads (lock-free; the milli idiom). shapeFlags(ear) is the packed bitmask.
+    unsigned shapeFlags       (int ear) const noexcept;
+    float    shapeDriftMaxDb  (int ear) const noexcept;
+    float    shapeHfShelfDb   (int ear) const noexcept;
+    float    shapeCombDepthDb (int ear) const noexcept;
+    float    shapeCombDelayMs (int ear) const noexcept;
+    float    shapeEffLoHz     (int ear) const noexcept;
+    float    shapeEffHiHz     (int ear) const noexcept;
+    float    shapeLobeWidth   (int ear) const noexcept;
+    float    shapeStepDb      (int ear) const noexcept;
+    int      shapeHumBaseHz   (int ear) const noexcept;
+    float    shapeResonanceHz (int ear) const noexcept;
+
     // ---- Hardware-Dirac detect-and-degrade -------------------------------------------------------
     // The toggle (deterministic): ON -> publish the calm GradingOffHardware state on both ears + suppress
     // the loopback grade (the GUI poll checks diracHardwareProcessorActive()); OFF -> back to NotGraded so
@@ -417,6 +470,30 @@ private:
     // Initialised to the silent floor (-120 dB -> -120000 milli) so an ear that never graded reads "no peak",
     // never a false clip. The worker stores THIS ear's value on the graded edge; the status line reads it lock-free.
     std::atomic<int>  refSweepPeakMilliPerEar_[2]{ { -120000 }, { -120000 } };
+
+    // ---- SP3 shape-detector state -----------------------------------------------------------------
+    // Per-ear D1 baseline (the first-GradedClean response curve). GRADE-WORKER-ONLY (single writer):
+    // the worker sets it, the worker reads it. NOT an atomic — it is a vector, and nothing off the
+    // worker ever touches it (the GUI reads the published SCALAR outputs below, never the curve).
+    // shapeBaselineValid_ mirrors the flag but lives here so shapeBaseline() has a worker-local guard;
+    // reset (invalidated) in prepare()/start()/setReferenceLoaded(false).
+    BandCurve shapeBaselinePerEar_[2];
+    bool      shapeBaselineValid_[2] { false, false };
+    // Published shape outputs (GUI-safe): the packed flags bitmask + the worst-offender magnitudes,
+    // each the *Milli_ idiom (value*1000 in an atomic<int>). humBaseHz is a plain integer Hz (no milli).
+    std::atomic<unsigned> shapeFlagsPerEar_[2]        { { 0u }, { 0u } };
+    std::atomic<int>  shapeDriftMaxMilliPerEar_[2]    { { 0 }, { 0 } };
+    std::atomic<int>  shapeHfShelfMilliPerEar_[2]     { { 0 }, { 0 } };
+    std::atomic<int>  shapeCombDepthMilliPerEar_[2]   { { 0 }, { 0 } };
+    std::atomic<int>  shapeCombDelayMilliPerEar_[2]   { { 0 }, { 0 } };
+    std::atomic<int>  shapeEffLoMilliPerEar_[2]       { { 0 }, { 0 } };
+    std::atomic<int>  shapeEffHiMilliPerEar_[2]       { { 0 }, { 0 } };
+    std::atomic<int>  shapeLobeWidthMilliPerEar_[2]   { { 0 }, { 0 } };
+    std::atomic<int>  shapeStepMilliPerEar_[2]        { { 0 }, { 0 } };
+    std::atomic<int>  shapeHumBaseHzPerEar_[2]        { { 0 }, { 0 } };
+    std::atomic<int>  shapeResonanceMilliPerEar_[2]   { { 0 }, { 0 } };
+    // Reset all per-ear shape state to the silent default (no flags, no baseline). Message/worker thread.
+    void resetShapeState() noexcept;
 
     // Live grading buffers (reference-match detection). TWO independent rings — gradeRingL_ (left mic) and
     // gradeRingR_ (right mic) — each with its own snapshot buffer + ready flag. ALL are PRE-ALLOCATED in

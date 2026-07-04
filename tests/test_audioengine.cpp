@@ -416,3 +416,88 @@ TEST_CASE("AudioEngine: hardware-Dirac toggle publishes GradingOffHardware; auto
     e.updateHardwareDiracAutoDetect (false, 0.0f, true, true);
     CHECK_FALSE (e.autoDetectedHardwareDirac());                            // no mic sweep -> no
 }
+
+// ===========================================================================
+// SP3 shape detectors — the engine's per-ear baseline + published anomaly state
+// ===========================================================================
+TEST_CASE("AudioEngine SP3: shape baseline set / get / reset per ear") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 64);
+
+    // No baseline until set.
+    CHECK (e.shapeBaseline (0) == nullptr);
+    CHECK (e.shapeBaseline (1) == nullptr);
+    CHECK_FALSE (e.shapeBaselineSet (0));
+
+    // Set the LEFT ear's baseline (a valid curve).
+    eb::BandCurve curve;
+    curve.freqHz = { 20.0f, 100.0f, 1000.0f };
+    curve.dB     = { -3.0f, 0.0f, -1.5f };
+    curve.valid  = true;
+    e.setShapeBaseline (0, curve);
+    REQUIRE (e.shapeBaseline (0) != nullptr);
+    CHECK (e.shapeBaseline (0)->dB.size() == 3);
+    CHECK (e.shapeBaselineSet (0));
+    CHECK ((e.shapeFlags (0) & eb::AudioEngine::kShapeBaselineSet) != 0u);
+    CHECK (e.shapeBaseline (1) == nullptr);   // the RIGHT ear is independent
+
+    // prepare() resets the baseline (spec 4.D1 reset-on-prepare).
+    e.prepareForTest (48000.0, 64);
+    CHECK (e.shapeBaseline (0) == nullptr);
+    CHECK_FALSE (e.shapeBaselineSet (0));
+
+    // setReferenceLoaded(false) also resets (re-learn / clear).
+    e.setShapeBaseline (0, curve);
+    REQUIRE (e.shapeBaseline (0) != nullptr);
+    e.setReferenceLoaded (false);
+    CHECK (e.shapeBaseline (0) == nullptr);
+
+    // An INVALID curve never registers as a baseline.
+    eb::BandCurve bad;   // valid == false
+    e.setShapeBaseline (1, bad);
+    CHECK (e.shapeBaseline (1) == nullptr);
+    CHECK_FALSE (e.shapeBaselineSet (1));
+}
+
+TEST_CASE("AudioEngine SP3: publishShapeAnomalies round-trips flags + values through the atomics") {
+    eb::AudioEngine e;
+    e.prepareForTest (48000.0, 64);
+
+    const unsigned flags = eb::AudioEngine::kShapeComb | eb::AudioEngine::kShapeTruncHi
+                         | eb::AudioEngine::kShapeHum;
+    e.publishShapeAnomalies (1, flags,
+                             /*driftMaxDb*/ 4.5f, /*hfShelfDb*/ -6.25f, /*combDepthDb*/ 3.2f,
+                             /*combDelayMs*/ 5.0f, /*effLoHz*/ 22.0f, /*effHiHz*/ 12000.0f,
+                             /*lobeWidth*/ 14.0f, /*stepDb*/ 2.5f, /*humBaseHz*/ 60, /*resonanceHz*/ 7300.0f);
+
+    // The RIGHT ear carries the published values (milli idiom: round-trips to ~1e-3).
+    CHECK (e.shapeFlags (1) == flags);
+    CHECK (e.shapeDriftMaxDb (1)  == Catch::Approx (4.5f).margin (1e-3));
+    CHECK (e.shapeHfShelfDb (1)   == Catch::Approx (-6.25f).margin (1e-3));
+    CHECK (e.shapeCombDepthDb (1) == Catch::Approx (3.2f).margin (1e-3));
+    CHECK (e.shapeCombDelayMs (1) == Catch::Approx (5.0f).margin (1e-3));
+    CHECK (e.shapeEffLoHz (1)     == Catch::Approx (22.0f).margin (1e-3));
+    CHECK (e.shapeEffHiHz (1)     == Catch::Approx (12000.0f).margin (1e-2));
+    CHECK (e.shapeLobeWidth (1)   == Catch::Approx (14.0f).margin (1e-3));
+    CHECK (e.shapeStepDb (1)      == Catch::Approx (2.5f).margin (1e-3));
+    CHECK (e.shapeHumBaseHz (1)   == 60);
+    CHECK (e.shapeResonanceHz (1) == Catch::Approx (7300.0f).margin (1e-2));
+
+    // The LEFT ear is untouched (fully independent stores).
+    CHECK (e.shapeFlags (0) == 0u);
+    CHECK (e.shapeDriftMaxDb (0) == 0.0f);
+
+    // publishShapeAnomalies PRESERVES a previously-set baseline flag (it OR-keeps kShapeBaselineSet).
+    eb::BandCurve curve; curve.freqHz = { 20.0f }; curve.dB = { 0.0f }; curve.valid = true;
+    e.setShapeBaseline (0, curve);
+    e.publishShapeAnomalies (0, eb::AudioEngine::kShapeDrift,
+                             1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0.0f);
+    CHECK ((e.shapeFlags (0) & eb::AudioEngine::kShapeDrift) != 0u);
+    CHECK ((e.shapeFlags (0) & eb::AudioEngine::kShapeBaselineSet) != 0u);   // baseline bit survived
+
+    // resetShapeState via prepare clears the published outputs too.
+    e.prepareForTest (48000.0, 64);
+    CHECK (e.shapeFlags (0) == 0u);
+    CHECK (e.shapeFlags (1) == 0u);
+    CHECK (e.shapeHumBaseHz (1) == 0);
+}

@@ -16,6 +16,24 @@
 // in 1/12 octave each side (insurance against the SP2 eps-crossfade feet).
 namespace eb {
 
+// ---- SP3 shape-anomaly flag bits (Task 5) --------------------------------------------------------
+// The packed per-ear bitmask the engine publishes (AudioEngine::publishShapeAnomalies) and the GUI
+// note composer (shapeInfoNote) consume. Defined HERE — the pure module both the engine and the pure
+// status ladder depend on — so there is a SINGLE source of truth (no duplicated literals). kShapeBaselineSet
+// is NOT an anomaly: it records that D1's session baseline has been learned for that ear.
+namespace ShapeFlag {
+    inline constexpr unsigned kDrift       = 1u;     // D1 session response drift (exceedsTolerance)
+    inline constexpr unsigned kComb        = 2u;     // D2 comb / echo
+    inline constexpr unsigned kTruncHi     = 4u;     // D3 HF band truncation (SRC/Bluetooth cliff)
+    inline constexpr unsigned kTruncLo     = 8u;     // D3 LF band truncation (seal / chain HPF)
+    inline constexpr unsigned kPolarity    = 16u;    // D4 cross-ear inverted polarity
+    inline constexpr unsigned kHum         = 32u;    // D5a mains hum in the pre-sweep noise
+    inline constexpr unsigned kResonance   = 64u;    // D5b narrow resonance spike
+    inline constexpr unsigned kSkew        = 128u;   // D6 clock-skew smeared lobe
+    inline constexpr unsigned kStep        = 256u;   // D7 mid-sweep level step
+    inline constexpr unsigned kBaselineSet = 512u;   // D1 baseline learned this session (NOT an anomaly)
+}
+
 struct WindowedSpectrum {
     std::vector<float> power;      // FULL one-sided |X(k)|^2, k = 0..fftSize/2 (windowed IR)
     int    fftSize = 0;

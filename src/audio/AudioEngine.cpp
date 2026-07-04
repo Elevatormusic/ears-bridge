@@ -423,6 +423,9 @@ void AudioEngine::setReferenceLoaded (bool loaded) noexcept {
     // (Task 4) so each starts honest; a later per-ear match-poll grade overwrites only its ear; clearing the
     // reference returns BOTH to NotLearned. (Message-thread caller -- learn / startup reload.)
     publishBaseRefState (loaded ? RefMonState::Learned : RefMonState::NotLearned);
+    // SP3: a learn / re-learn / clear invalidates the D1 session baseline (spec 4.D1: reset on re-learn),
+    // so a stale baseline can never drift-compare against a different reference. Clears every ear's flags.
+    resetShapeState();
 }
 bool AudioEngine::referenceLoaded()        const noexcept { return referenceLoaded_.load(); }
 bool AudioEngine::gradeSignalPresent()     const noexcept { return gradeSignalPresent_.load (std::memory_order_relaxed); }
@@ -553,6 +556,83 @@ float AudioEngine::refIrSnrDb    (int ear) const noexcept { return refIrSnrDbMil
 float AudioEngine::refThdPercent (int ear) const noexcept { return refThdPctMilliPerEar_[(ear == 1) ? 1 : 0].load() / 1000.0f; }
 float AudioEngine::refSweepSnrDb (int ear) const noexcept { return refSweepSnrMilliPerEar_[(ear == 1) ? 1 : 0].load() / 1000.0f; }
 float AudioEngine::referenceSweepPeakDb (int ear) const noexcept { return refSweepPeakMilliPerEar_[(ear == 1) ? 1 : 0].load() / 1000.0f; }
+
+// ---- SP3 response-shape detectors (INFO-ONLY; grade worker only) --------------------------------
+// Baseline access is GRADE-WORKER-ONLY (single writer): the worker sets the curve on the first
+// GradedClean for that ear and reads it on every later grade to compute D1 drift. setShapeBaseline
+// also raises kShapeBaselineSet in the published flags so the GUI knows a baseline exists (D1 is
+// silent until then). Nothing off the worker mutates or reads the curve.
+void AudioEngine::setShapeBaseline (int ear, BandCurve curve) {
+    const int e = (ear == 1) ? 1 : 0;
+    shapeBaselinePerEar_[e] = std::move (curve);
+    shapeBaselineValid_[e]  = shapeBaselinePerEar_[e].valid;
+    // Mark the baseline in the published flags (idempotent; OR keeps any live anomaly bits).
+    if (shapeBaselineValid_[e])
+        shapeFlagsPerEar_[e].fetch_or (kShapeBaselineSet, std::memory_order_relaxed);
+}
+const BandCurve* AudioEngine::shapeBaseline (int ear) const {
+    const int e = (ear == 1) ? 1 : 0;
+    return shapeBaselineValid_[e] ? &shapeBaselinePerEar_[e] : nullptr;
+}
+bool AudioEngine::shapeBaselineSet (int ear) const noexcept {
+    return (shapeFlagsPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) & kShapeBaselineSet) != 0u;
+}
+
+// Publish ONE ear's shape outputs together (worker thread). Store the SCALARS first, then the flags
+// LAST (the flags gate the GUI note, so a reader that sees a bit is guaranteed to see fresh numbers).
+// The *Milli_ idiom mirrors publishReferenceGrade exactly. INFO-ONLY: no grade / cleanCapture touch.
+void AudioEngine::publishShapeAnomalies (int ear, unsigned flags, float driftMaxDb, float hfShelfDb,
+                                         float combDepthDb, float combDelayMs, float effLoHz, float effHiHz,
+                                         float lobeWidth, float stepDb, int humBaseHz, float resonanceHz) noexcept {
+    const int e = (ear == 1) ? 1 : 0;
+    shapeDriftMaxMilliPerEar_[e].store  ((int) std::lround (driftMaxDb   * 1000.0f), std::memory_order_relaxed);
+    shapeHfShelfMilliPerEar_[e].store   ((int) std::lround (hfShelfDb    * 1000.0f), std::memory_order_relaxed);
+    shapeCombDepthMilliPerEar_[e].store ((int) std::lround (combDepthDb  * 1000.0f), std::memory_order_relaxed);
+    shapeCombDelayMilliPerEar_[e].store ((int) std::lround (combDelayMs  * 1000.0f), std::memory_order_relaxed);
+    shapeEffLoMilliPerEar_[e].store     ((int) std::lround (effLoHz      * 1000.0f), std::memory_order_relaxed);
+    shapeEffHiMilliPerEar_[e].store     ((int) std::lround (effHiHz      * 1000.0f), std::memory_order_relaxed);
+    shapeLobeWidthMilliPerEar_[e].store ((int) std::lround (lobeWidth    * 1000.0f), std::memory_order_relaxed);
+    shapeStepMilliPerEar_[e].store      ((int) std::lround (stepDb       * 1000.0f), std::memory_order_relaxed);
+    shapeHumBaseHzPerEar_[e].store      (humBaseHz,                                  std::memory_order_relaxed);
+    shapeResonanceMilliPerEar_[e].store ((int) std::lround (resonanceHz  * 1000.0f), std::memory_order_relaxed);
+    // Preserve the baseline-set bit (setShapeBaseline may have raised it before the first anomaly pass).
+    const unsigned keep = shapeFlagsPerEar_[e].load (std::memory_order_relaxed) & kShapeBaselineSet;
+    shapeFlagsPerEar_[e].store (flags | keep, std::memory_order_relaxed);   // flags LAST (publish barrier)
+}
+
+unsigned AudioEngine::shapeFlags       (int ear) const noexcept { return shapeFlagsPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed); }
+float    AudioEngine::shapeDriftMaxDb  (int ear) const noexcept { return shapeDriftMaxMilliPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f; }
+float    AudioEngine::shapeHfShelfDb   (int ear) const noexcept { return shapeHfShelfMilliPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f; }
+float    AudioEngine::shapeCombDepthDb (int ear) const noexcept { return shapeCombDepthMilliPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f; }
+float    AudioEngine::shapeCombDelayMs (int ear) const noexcept { return shapeCombDelayMilliPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f; }
+float    AudioEngine::shapeEffLoHz     (int ear) const noexcept { return shapeEffLoMilliPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f; }
+float    AudioEngine::shapeEffHiHz     (int ear) const noexcept { return shapeEffHiMilliPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f; }
+float    AudioEngine::shapeLobeWidth   (int ear) const noexcept { return shapeLobeWidthMilliPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f; }
+float    AudioEngine::shapeStepDb      (int ear) const noexcept { return shapeStepMilliPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f; }
+int      AudioEngine::shapeHumBaseHz   (int ear) const noexcept { return shapeHumBaseHzPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed); }
+float    AudioEngine::shapeResonanceHz (int ear) const noexcept { return shapeResonanceMilliPerEar_[(ear == 1) ? 1 : 0].load (std::memory_order_relaxed) / 1000.0f; }
+
+// Reset ALL per-ear shape state — the baseline curves + every published output — to the silent default.
+// Called at the three baseline-reset sites (prepare()/start()/setReferenceLoaded(false)) so a stale
+// baseline or anomaly never outlives a learn/start/rate change. NOT called on the sweep-complete edge
+// (that would wipe a just-published anomaly). Message/worker thread.
+void AudioEngine::resetShapeState() noexcept {
+    for (int e = 0; e < 2; ++e) {
+        shapeBaselinePerEar_[e] = BandCurve{};
+        shapeBaselineValid_[e]  = false;
+        shapeFlagsPerEar_[e].store (0u, std::memory_order_relaxed);
+        shapeDriftMaxMilliPerEar_[e].store  (0, std::memory_order_relaxed);
+        shapeHfShelfMilliPerEar_[e].store   (0, std::memory_order_relaxed);
+        shapeCombDepthMilliPerEar_[e].store (0, std::memory_order_relaxed);
+        shapeCombDelayMilliPerEar_[e].store (0, std::memory_order_relaxed);
+        shapeEffLoMilliPerEar_[e].store     (0, std::memory_order_relaxed);
+        shapeEffHiMilliPerEar_[e].store     (0, std::memory_order_relaxed);
+        shapeLobeWidthMilliPerEar_[e].store (0, std::memory_order_relaxed);
+        shapeStepMilliPerEar_[e].store      (0, std::memory_order_relaxed);
+        shapeHumBaseHzPerEar_[e].store      (0, std::memory_order_relaxed);
+        shapeResonanceMilliPerEar_[e].store (0, std::memory_order_relaxed);
+    }
+}
 
 // ---- Diagnostic getters (Task 2): the *Milli_ fixed-point idiom, lock-free reads ----
 // lastInputBlockPeak() converts the audio-thread store back to float (relaxed; the GUI only needs the
@@ -719,6 +799,7 @@ bool AudioEngine::start (juce::String& errorOut) {
     // (a later per-ear match-poll grade overwrites this; the capture-callback/complete-edge NotGraded publishes
     // are untouched and still fire when ! referenceLoaded). Published for BOTH ears (Task 4) so each starts honest.
     publishBaseRefState (referenceLoaded_.load() ? RefMonState::Learned : RefMonState::NotLearned);
+    resetShapeState();   // SP3: a fresh run starts with no D1 baseline + no shape anomalies (spec 4.D1 reset-on-start)
     // D2: latch the raw-rail snapshot on this converged success path (always runs before a Running
     // return). reportRawRail MUST come AFTER hm.prepare() -- prepare resets flagBits, so reporting
     // before it would clear the OsResampled guidance flag this raises when the rail isn't verified.
@@ -803,6 +884,7 @@ void AudioEngine::prepareForTest (double sampleRate, int block) {
     session_.reset();
     grantedRate_ = sampleRate;             // so gradingResponseRate() reports the seam's capture rate
     allocateResponseBuffer (sampleRate, block);   // Plan 5: pre-allocate the live-grading ring + size the trigger
+    resetShapeState();                     // SP3: prepare() clears the D1 baseline + shape anomalies (reset-on-prepare)
     hm.notifyPreparedFormat (sampleRate, 32, 2);   // D8: register the test format so simulateFormatChangeForTest has a reference
 }
 void AudioEngine::processCaptureBlockForTest (const float* inL, const float* inR,
@@ -872,6 +954,7 @@ void AudioEngine::prepareCallbacksForTest (double sampleRate, int block, int fif
     // Mirror start(): hm.prepare() reset the published refMon state to NotLearned; re-publish the honest
     // state from referenceLoaded_ so the headless seam reflects a real run (Learned when a reference is loaded).
     publishBaseRefState (referenceLoaded_.load() ? RefMonState::Learned : RefMonState::NotLearned);   // both ears
+    resetShapeState();                                 // SP3: fresh prepare -> no D1 baseline / no shape anomalies
     session_.configure (block, sampleRate);            // D5: size the silence window for this block/rate
     session_.reset();                                  // D5: fresh session each run (Idle -> Preflight -> ...)
     grantedRate_ = sampleRate;                         // gradingResponseRate() reports the seam's capture rate
