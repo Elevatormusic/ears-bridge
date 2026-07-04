@@ -2,6 +2,7 @@ add_executable(eb_tests
     test_smoke.cpp
     test_calfile.cpp
     test_deconvolver.cpp
+    test_bandedreg.cpp
     test_calpairvalidator.cpp
     test_firdesigner.cpp
     test_processinggraph.cpp

@@ -44,6 +44,35 @@ struct AlignResult {
 AlignResult crossCorrelateAlign (const float* ref, int refLen,
                                  const float* resp, int respLen);
 
+// ---- Reference-derived banded regularization (sub-project 2) --------------
+// Kirkeby-Nelson frequency-dependent regularization, derived from the reference's own one-sided
+// power spectrum (research-validated; spec 2026-07-02-freq-dependent-regularization-design):
+//   1) fractional-octave smoothing (1/6-oct half-width, two cascaded prefix-sum passes),
+//   2) tilt-whitening Pw(k) = Ps(k)*k (cancels the ESS 1/f power tilt so LF and HF get EQUAL
+//      classification margin - a raw threshold would spend ~30 dB of margin on the tilt),
+//   3) in-band <=> whitened power within 12 dB of the plateau MEDIAN (ripple-robust), band =
+//      the longest contiguous run (isolated noise bins never extend it),
+//   4) eps_in = A*1e-6 (division stays the pure inverse in-band - preserves today's behavior),
+//      eps_out = A*10 (out-of-band content ATTENUATED, never boosted ~1/eps like the flat reg),
+//      raised-cosine crossfade of log10(eps) over 1/2 octave each side (protects the
+//      negative-time THD region from transition ringing).
+// Everything is in bin-index space (f proportional to k): no sample rate, no assumed sweep range
+// (a 100 Hz-8 kHz reference self-derives a narrow band), scale-invariant by construction (eps
+// scales with the reference power - fixes the latent absolute-eps defect).
+// `power` = |REF(k)|^2 for k = 0..numBins-1 (numBins = fftSize/2 + 1). valid=false on a
+// degenerate spectrum (all-zero / too few bins / run under 64 bins) - the caller falls back to
+// the legacy flat eps, so a broken learn never behaves WORSE than today.
+struct BandedRegularization {
+    std::vector<float> epsilon;   // per-bin eps, one-sided (numBins entries); empty unless valid
+    int  binLo = 0, binHi = 0;    // the derived in-band run (inclusive)
+    bool valid = false;
+};
+[[nodiscard]] BandedRegularization deriveBandedRegularization (const float* power, int numBins);
+
+// Sentinel for deconvolve's `regularization`: derive banded eps(k) from the reference (Task 2
+// wires the default; a degenerate reference falls back to the legacy flat 1e-3).
+static constexpr float kAutoRegularization = -1.0f;
+
 // ---- Regularized frequency-domain deconvolution --------------------------
 // IR = IFFT( FFT(resp) * conj(FFT(ref)) / (|FFT(ref)|^2 + regularization) ).
 // Out-of-place FFT. `n` is the working length; the inputs are read up to n
