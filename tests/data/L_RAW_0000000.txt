@@ -1,0 +1,16 @@
+"Sens Factor =0.9dB, EARS Serial 000-0000, compensation RAW"
+"Use this file on the LEFT channel. Your sensitive side is RIGHT."
+*
+* RAW: Uncompensated mic-capsule response, miniDSP EARS.
+*
+* Mic-only, no headphone compensation. miniDSP marks RAW unsupported for correction.
+* Provided here only as a test fixture for the RAW-caution UI path.
+*
+* Freq(Hz) SPL(dB) Phase(degrees)
+*
+    10.0     -3.0     -1.1
+    20.0     -1.6     -1.3
+    100.0     0.0      0.0
+    1000.0    1.2      0.4
+    10000.0  -0.8     -0.6
+    20000.0  -3.4     -1.9

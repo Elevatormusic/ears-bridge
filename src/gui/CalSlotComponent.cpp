@@ -215,8 +215,11 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
     // twice for a pair (the "duplicated warning"). CalibrateStage::stageCaptionFor owns it now.
     if (parsed.type == eb::CalType::Raw) {
         errorLabel.setColour (juce::Label::textColourId, Theme::warn());
-        errorLabel.setText ("RAW is mic-capsule-only with no compensation (miniDSP marks it unsupported). "
-                            "Use HEQ for Dirac unless you specifically need RAW.", juce::dontSendNotification);
+        // Kept to the note area's 2-line budget (kNoteH). The old two-sentence copy needed 3 lines at
+        // the narrow card width and clipped (caught by Task 8's RAW-caution gate case); this concise
+        // form preserves the three facts: RAW is uncompensated/mic-only, miniDSP-unsupported, use HEQ.
+        errorLabel.setText ("RAW is uncompensated (mic-only) and miniDSP-unsupported - use an HEQ file for Dirac.",
+                            juce::dontSendNotification);
         errorLabel.setVisible (true);
     } else if (parsed.type == eb::CalType::Unknown) {
         errorLabel.setColour (juce::Label::textColourId, Theme::warn());

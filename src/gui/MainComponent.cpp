@@ -2706,30 +2706,36 @@ void MainComponent::timerCallback() {
             if (outDir.isNotEmpty()) {
             const juce::File dir (outDir);
             // Each scene now carries the wizard STEP it renders (Task 5): the 9 status scenes drive the
-            // MeasureStage's status line + quality dots, so they pin Measure; the 3 stage scenes at the
-            // bottom pin Connect/Calibrate/Level and drive NO labels — the stage at its natural current
-            // state IS the scene. forceWizardStepForTest (below, per-scene) settles the shown stage.
-            struct St { const char* name; const char* l; const char* r; bool update; bool dots; WizardStep step; };
+            // MeasureStage's status line + quality dots, so they pin Measure; the 4 stage scenes at the
+            // bottom pin Connect/Calibrate/Level (+ calibrate-advanced, Task 8) and drive NO labels — the
+            // stage at its natural current state IS the scene. forceWizardStepForTest (below, per-scene)
+            // settles the shown stage; calAdv forces the Calibrate Advanced-FIR disclosure open/closed.
+            // Frame count: 13 scenes x 4 appearances + 2 startready = 54 frames (the P1 count was 50).
+            struct St { const char* name; const char* l; const char* r; bool update; bool dots; WizardStep step; bool calAdv; };
             static const St states[] = {
-                { "idle",        "",                                                                                 "",                                         false, false, WizardStep::Measure },
-                { "running",     "Running - waiting for the Dirac sweep...",                                         "",                                         false, false, WizardStep::Measure },
-                { "capturing",   "Auto per-ear - capturing the LEFT earcup",                                         "",                                         false, true,  WizardStep::Measure },
-                { "clean",       "Sweep captured - safe to run the next sweep",                                      "R clean - SNR 30 dB, IR 56 dB",            false, true,  WizardStep::Measure },
-                { "imprecise",   "Noisy capture - Dirac will likely mark it imprecise; raise level or lower noise.", "R marginal SNR 18 dB - re-measure",        false, true,  WizardStep::Measure },
-                { "lowlevel",    "Running - level low: turn your amp up to the green band",                          "",                                         false, false, WizardStep::Measure },
-                { "error",       "EARS or audio cable disconnected - measurement stopped.",                          "",                                         false, false, WizardStep::Measure },
-                { "update+full", "Running - no input signal (check the EARS)",                                       "R weak impulse response - time-variance?", true,  true,  WizardStep::Measure },
+                { "idle",        "",                                                                                 "",                                         false, false, WizardStep::Measure, false },
+                { "running",     "Running - waiting for the Dirac sweep...",                                         "",                                         false, false, WizardStep::Measure, false },
+                { "capturing",   "Auto per-ear - capturing the LEFT earcup",                                         "",                                         false, true,  WizardStep::Measure, false },
+                { "clean",       "Sweep captured - safe to run the next sweep",                                      "R clean - SNR 30 dB, IR 56 dB",            false, true,  WizardStep::Measure, false },
+                { "imprecise",   "Noisy capture - Dirac will likely mark it imprecise; raise level or lower noise.", "R marginal SNR 18 dB - re-measure",        false, true,  WizardStep::Measure, false },
+                { "lowlevel",    "Running - level low: turn your amp up to the green band",                          "",                                         false, false, WizardStep::Measure, false },
+                { "error",       "EARS or audio cable disconnected - measurement stopped.",                          "",                                         false, false, WizardStep::Measure, false },
+                { "update+full", "Running - no input signal (check the EARS)",                                       "R weak impulse response - time-variance?", true,  true,  WizardStep::Measure, false },
                 // SP3 shape INFO note RENDERED on the per-ear line, worst case: a verified line + peak tail
                 // + the LONGEST note (the drift copy), already run through earStatusLine's #68 length budget
                 // (the note elides with ".." past 78 chars; the full text rides the tooltip). Proves the
                 // populated status line does not clip at the app's minimum width.
-                { "shapenote",   "L: verified - IR-SNR 56 dB, THD 0% (calibration pending) (peak -8 dBFS)  -  res..", "R: verified 54 dB", false, true,  WizardStep::Measure },
+                { "shapenote",   "L: verified - IR-SNR 56 dB, THD 0% (calibration pending) (peak -8 dBFS)  -  res..", "R: verified 54 dB", false, true,  WizardStep::Measure, false },
                 // STAGE SCENES (Task 5): one per non-Measure step at its current state. No driven labels —
                 // the gate MEASURES each hand-laid stage body, so the descriptor element counts differ per
                 // step (this is the "step axis actually probes 4 stages" honesty check). Naming: hig-<ap>-<step>.
-                { "connect",     "", "", false, false, WizardStep::Connect   },
-                { "calibrate",   "", "", false, false, WizardStep::Calibrate },
-                { "level",       "", "", false, false, WizardStep::Level     },
+                { "connect",     "", "", false, false, WizardStep::Connect,   false },
+                { "calibrate",   "", "", false, false, WizardStep::Calibrate, false },
+                { "level",       "", "", false, false, WizardStep::Level,     false },
+                // P2 (Task 8): the Calibrate stage with the Advanced-FIR disclosure OPEN. The "calibrate"
+                // scene above renders it COLLAPSED (the launch default in the hermetic env); this one forces
+                // the disclosed section so native-review can measure the four advanced controls' layout.
+                { "calibrate-advanced", "", "", false, false, WizardStep::Calibrate, true },
             };
             // APPEARANCE MATRIX (EARS-vendored extension, 2026-07-04): the base sweep only rendered the
             // OS launch mode at normal contrast, but the composited-pixel HIG checks are mode/contrast
@@ -2761,6 +2767,7 @@ void MainComponent::timerCallback() {
                         gradeDotsL_.setMetrics (eb::QualityBand::Green,  "28 dB", eb::QualityBand::Green, "56 dB", eb::QualityBand::Orange, "0.8%");
                         gradeDotsR_.setMetrics (eb::QualityBand::Orange, "18 dB", eb::QualityBand::Green, "52 dB", eb::QualityBand::Green,  "0.3%");
                     } else { gradeDotsL_.clear(); gradeDotsR_.clear(); }
+                    calibrateStage_.setAdvancedOpen (s.calAdv);     // P2: force the Advanced-FIR disclosure per scene
                     forceWizardStepForTest (s.step);                // pin + render + show this scene's stage, then resize
                     const juce::String stem = juce::String ("hig-") + ap.tag + "-" + s.name;
                     hig::writeDesignProbe (*getTopLevelComponent(),
@@ -2786,6 +2793,10 @@ void MainComponent::timerCallback() {
 
             eb::SystemA11y::setForTest (false, false, false);       // restore; the next theme tick re-reads the OS
             forceThemeForTest (wasDark);
+            // P2 (Task 8): the calibrate-advanced scene forced the disclosure open; restore the launch policy
+            // (open iff any advanced FIR setting is non-default) so the live UI reflects the real settings.
+            calibrateStage_.setAdvancedOpen (settings.complexPhase() || settings.firLength() > 0
+                                             || settings.outputTrimDb() != 0.0);
             pinnedStep_ = pinnedWas;                                // restore the pre-sweep navigation pin
             refreshWizardView();
             }   // if (outDir.isNotEmpty())
