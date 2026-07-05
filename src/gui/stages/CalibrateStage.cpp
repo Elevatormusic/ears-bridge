@@ -15,6 +15,7 @@ CalibrateStage::CalibrateStage() {
     setTitle ("Calibrate");
 
     addAndMakeVisible (header_);
+    header_.setRunNoteComponentID ("calRunNote");      // this stage owns the "cal"-prefixed run-note id
     header_.continueButton().onClick = [this] { if (onContinue) onContinue(); };
 
     viewport_.setViewedComponent (&content_, false);   // false: content_ is a member

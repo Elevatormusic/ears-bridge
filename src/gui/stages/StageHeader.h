@@ -10,6 +10,10 @@ public:
                  const juce::String& sub, const juce::String& ctaText);
     juce::TextButton& continueButton() { return cta_; }
     void setRunNote (const juce::String& s);       // set-if-changed; 11px textDim, right-aligned
+    // The owner names its own run-note element (findable in the layout probe / tests). SHARED class:
+    // each stage instance must pick a UNIQUE id or a second stage would duplicate the first's (a
+    // Calibrate-prefixed "calRunNote" would collide with e.g. Connect's own run-note - #T7 defuse).
+    void setRunNoteComponentID (const juce::String& id) { runNote_.setComponentID (id); }
     void applyTheme();
     void resized() override;
     static constexpr int kHeight = 124;

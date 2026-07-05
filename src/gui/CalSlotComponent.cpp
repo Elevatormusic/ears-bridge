@@ -142,6 +142,9 @@ void CalSlotComponent::browseForCal() {
 }
 
 bool CalSlotComponent::loadFromFile (const juce::File& file) {
+    // Fire FIRST, before any parse/validation: ANY attempt (even one that fails below) signals intent
+    // to calibrate, so the owner revokes a stale unity acceptance. No mixed "Done (unity)" + red error.
+    if (onLoadAttempted) onLoadAttempted();
     if (! file.existsAsFile()) {
         errorLabel.setColour (juce::Label::textColourId, Theme::danger());   // real error, not a warning
         errorLabel.setText ("File not found: " + file.getFileName(), juce::dontSendNotification);
@@ -328,7 +331,7 @@ int CalSlotComponent::preferredHeight() const {
 // L6: the drop zone answers HOVER like it answers a file-drag (accent dashes). Keyboard focus
 // rides the Browse button (a TextButton paints the LnF focus treatment).
 void CalSlotComponent::mouseEnter (const juce::MouseEvent&) { if (! cal) { mouseHover = true; repaint(); } }
-void CalSlotComponent::mouseExit  (const juce::MouseEvent&) { mouseHover = false; repaint(); }
+void CalSlotComponent::mouseExit  (const juce::MouseEvent&) { if (! cal) { mouseHover = false; repaint(); } }
 
 void CalSlotComponent::setPlotRange (float topDb) { thumbnail.setRange (topDb); }
 

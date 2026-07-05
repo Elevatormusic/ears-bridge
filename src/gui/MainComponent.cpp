@@ -409,6 +409,13 @@ MainComponent::MainComponent (const TestConfig& cfg)
     // --- Right pane: cal cards + Levels ---
     leftCal.onCalLoaded  = [this] (const juce::File& f) { onLeftCalLoaded (f);  updateStartGate(); syncPlotScales(); };
     rightCal.onCalLoaded = [this] (const juce::File& f) { onRightCalLoaded (f); updateStartGate(); syncPlotScales(); };
+    // Any load ATTEMPT - success OR failure (parse-error / missing / oversize) - revokes a session's
+    // unity acceptance: the attempt signals intent to calibrate, so "Done (unity)" must never co-exist
+    // with a red load error. Refresh the gate/wizard NOW so the revoke is visible even on the FAILED path
+    // (a failed load never reaches onCalLoaded, which is where a success re-renders). On success onCalLoaded
+    // fires next and re-refreshes with the applied state; its own reset stays (idempotent, belt+braces).
+    leftCal.onLoadAttempted  = [this] { unityAcceptedSession_ = false; updateStartGate(); };
+    rightCal.onLoadAttempted = [this] { unityAcceptedSession_ = false; updateStartGate(); };
     // Removing a slot resets that ear to unity AND bumps a fresh (now-incomplete) generation, so the
     // Start gate (calibrationApplied()) closes instead of staying satisfied by the prior valid build.
     leftCal.onCalCleared  = [this] { settings.setLeftCalPath  ({}); engine.clearLeftCalFir();  logLine (eb::DiagnosticLog::Level::Info, "Cal cleared: LEFT");  rebuildFirsAsync(); updateStartGate(); syncPlotScales(); };

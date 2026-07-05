@@ -95,6 +95,14 @@ public:
     void setLevelLatchedForTest (bool v) { levelLatched_ = v; }
     bool levelLatchedForTest() const { return levelLatched_; }
     void applyResolvedInputForTest (const DeviceId& d) { applyResolvedInput (d); }
+    // §5.2 mask seam: force a stale unity acceptance so a test can prove the `&& noCalsLoaded` mask
+    // (snapshotWizardInputs) keeps the flag INERT once a cal loads - no public route leaves it set.
+    void setUnityAcceptedForTest (bool v) { unityAcceptedSession_ = v; }
+    // Reads the LIVE-snapshot `unityAccepted` (post-mask) so a test can pin the mask expression itself
+    // (`unityAcceptedSession_ && gate.noCalsLoaded`) directly - the cold-verifier MAJOR was that this
+    // AND-term is uncovered because every public route resets the flag before a cal loads (it goes RED
+    // if the `&& gate.noCalsLoaded` mask is deleted). Deterministic: no dependency on the async FIR build.
+    bool snapshotUnityAcceptedForTest() const { return snapshotWizardInputs().unityAccepted; }
 
 private:
     // The reference/schedule store dir: the TestConfig override (#24, hermetic tests), else %APPDATA%/EarsBridge.

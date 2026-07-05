@@ -288,3 +288,92 @@ TEST_CASE("Unity path: explicit accept completes Calibrate; a cal load revokes i
     CHECK_FALSE (stage.continueButton().isEnabled());
     tmp.deleteRecursively();
 }
+
+// P2 T6 decision (revoke-on-ATTEMPT): a FAILED cal load - parse error / missing / oversize - is still an
+// attempt to calibrate, so it revokes a session's unity acceptance exactly like a successful load. A red
+// "load failed" card must NEVER co-exist with a "Done (unity)" Calibrate. (The success case is covered by
+// the test above; this one pins the FAILED path, which onXCalLoaded's success-only reset does not reach.)
+TEST_CASE("Unity path: a FAILED cal-load attempt revokes the acceptance") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 780);
+    mc.pinStepForTest (eb::WizardStep::Calibrate);
+    auto& stage = mc.calibrateStageForTest();
+
+    // Accept unity through the REAL wired button path -> Calibrate Done (unity), the CTA enables, the
+    // button retires.
+    REQUIRE (stage.unityButtonForTest().isVisible());
+    stage.unityButtonForTest().onClick();
+    REQUIRE (stage.continueButton().isEnabled());             // Calibrate Done via unity
+    REQUIRE_FALSE (stage.unityButtonForTest().isVisible());
+
+    // Attempt to load an INVALID file (a missing path - onLoadAttempted fires, then the load returns false).
+    // This is the failed-attempt idiom the #38 stale-path test uses.
+    const juce::File gone ("Z:/definitely/not/here/L_HEQ_000-0000.txt");
+    REQUIRE_FALSE (mc.leftCalForTest().loadFromFile (gone));
+
+    // Revoked: the unity acceptance is gone even though the load FAILED. The hint + the
+    // "Continue without calibration" button are offered again, and Calibrate is no longer Done via unity.
+    CHECK (stage.unityButtonForTest().isVisible());           // the choice is offered again, not auto-kept
+    CHECK_FALSE (stage.continueButton().isEnabled());         // Calibrate NOT Done (unity revoked, no cal applied)
+    tmp.deleteRecursively();
+}
+
+// Cold-verifier MAJOR-1 (mask coverage): `in.unityAccepted = unityAcceptedSession_ && gate.noCalsLoaded`
+// was mutation-uncovered because every PUBLIC route resets the flag before a cal loads (removing the
+// `&& gate.noCalsLoaded` AND-term left all 670 green). This pins the AND-term DIRECTLY and deterministically:
+// force a stale acceptance (setUnityAcceptedForTest) with a cal LOADED (noCalsLoaded false), then read the
+// live-snapshot unityAccepted (snapshotUnityAcceptedForTest) - the mask must have zeroed it. Reading the
+// snapshot value avoids the async FIR build entirely (resolveCalibrate would short-circuit on calBuilding
+// while the build is in flight, so a state-level assertion could not exercise this line headlessly).
+// Verified RED under a temporary mutation (see below) then restored.
+TEST_CASE("Unity mask: a stale acceptance is inert once a cal is loaded") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 780);
+    mc.pinStepForTest (eb::WizardStep::Calibrate);
+    auto& stage = mc.calibrateStageForTest();
+
+    // Sanity: with BOTH slots empty and NO acceptance, unityAccepted is false (nothing to mask yet).
+    REQUIRE_FALSE (mc.snapshotUnityAcceptedForTest());
+
+    // Load ONE valid cal -> noCalsLoaded becomes false. The pair is incomplete, so it never becomes haveCals.
+    auto cal = juce::File::createTempFile (".txt");
+    cal.replaceWithText ("* HEQ\n20 0.0\n100 1.0\n1000 2.0\n10000 -1.0\n20000 -3.0\n");
+    REQUIRE (mc.leftCalForTest().loadFromFile (cal));
+    cal.deleteFile();
+
+    // Set the stale flag (a hypothetical missed reset) and refresh through the live path.
+    mc.setUnityAcceptedForTest (true);
+    mc.pinStepForTest (eb::WizardStep::Calibrate);   // refreshWizardView() -> re-snapshot + re-render
+
+    // The AND-mask keeps the stale flag inert: with a cal loaded, gate.noCalsLoaded is false, so the live
+    // snapshot's unityAccepted is false REGARDLESS of the raw flag. Deleting `&& gate.noCalsLoaded` flips this
+    // to true -> RED (verified by temporary mutation, then restored). This is the direct pin of the AND-term.
+    CHECK_FALSE (mc.snapshotUnityAcceptedForTest());
+
+    // Corroborating view surfaces: the unity affordance is gone (not both-empty) and the CTA is not enabled by
+    // the stale flag (Calibrate is not Done-via-unity - the mask neutralised it; one cal is not a valid pair).
+    CHECK_FALSE (stage.unityButtonForTest().isVisible());
+    CHECK_FALSE (stage.continueButton().isEnabled());
+
+    // And the spine's Calibrate meta must NOT read the unity string - the "No calibration (unity)" summary is
+    // stamped ONLY when both slots are empty, so a stale flag can never surface it with a cal loaded (this
+    // guard is independent of the AND-mask, but it confirms no unity wording leaks into the loaded-cal view).
+    const auto jf = tmp.getChildFile ("mask.json");
+    const auto pf = tmp.getChildFile ("mask.png");
+    hig::writeDesignProbe (mc, jf, pf);
+    const auto tree = juce::JSON::parse (jf);
+    bool sawUnityString = false;
+    if (const auto* els = tree.getProperty ("elements", {}).getArray())
+        for (auto& e : *els)
+            if ((bool) e.getProperty ("showing", false)
+                && e.getProperty ("label", {}).toString().containsIgnoreCase ("No calibration (unity)"))
+                sawUnityString = true;
+    CHECK_FALSE (sawUnityString);
+    tmp.deleteRecursively();
+}

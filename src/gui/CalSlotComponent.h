@@ -9,11 +9,12 @@
 namespace eb {
 
 // One per-ear calibration card ("Left ear" / "Right ear"). Empty, it shows a dashed
-// drop zone (drag a .txt/.frd file or click to browse) and a "Required" badge; loaded,
-// it shows the parsed FR thumbnail, the filename and the serial (each on its own line), a
-// type badge (HPN/HEQ), and a "Replace" button. Per-type HEQ/HPN guidance lives off-card now
-// (the stage caption hosts it); RAW surfaces as an amber badge (mic-only, miniDSP-unsupported).
-// Fires onCalLoaded with the absolute path when a valid cal is parsed.
+// drop zone (drag a .txt/.frd file or click to browse) and the sibling-conditional "Required"
+// line (shown only once the OTHER ear is loaded); loaded, it shows the parsed FR thumbnail, the
+// filename and the serial (each on its own line), a type badge (HPN/HEQ), and a "Replace" button.
+// Per-type HEQ/HPN guidance lives off-card now (the stage caption hosts it); RAW surfaces as an
+// amber badge (mic-only, miniDSP-unsupported). Fires onCalLoaded with the absolute path when a
+// valid cal is parsed.
 class CalSlotComponent : public juce::Component,
                          public juce::FileDragAndDropTarget {
 public:
@@ -44,6 +45,10 @@ public:
 
     std::function<void (const juce::File&)> onCalLoaded;
     std::function<void ()> onCalCleared;   // fired when the slot is emptied via Remove
+    // Fired at the START of any loadFromFile attempt, success or failure (parse-error / missing-file /
+    // oversize all count). The owner uses it to revoke a session's unity acceptance: a load attempt
+    // signals intent to calibrate, so "Done (unity)" must not co-exist with a red load error.
+    std::function<void ()> onLoadAttempted;
     // Fired with a loaded file's parse warnings (side-conflict, skipped/non-monotonic rows) so the owner can
     // LOG them through its redacting logger - the card shows the first inline (#54: they were write-only before).
     std::function<void (const juce::StringArray&)> onParseWarnings;

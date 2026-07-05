@@ -11,7 +11,8 @@ StageHeader::StageHeader (const juce::String& eyebrow, const juce::String& title
     sub_.setJustificationType (juce::Justification::topLeft);
     sub_.setMinimumHorizontalScale (1.0f);                    // wrap, never squish
     runNote_.setJustificationType (juce::Justification::centredRight);
-    runNote_.setComponentID ("calRunNote");                    // findable in the layout probe / tests
+    // ComponentID is owner-set (setRunNoteComponentID): this class is SHARED across stages, so a
+    // hard-coded "calRunNote" here would give every stage the SAME (Calibrate-prefixed) id.
     runNote_.setMinimumHorizontalScale (1.0f);                 // never squash - let the probe catch true overflow
     cta_.setButtonText (ctaText);
     cta_.getProperties().set ("primary", true);
