@@ -369,6 +369,11 @@ TEST_CASE("HIG gate: loaded cal card (caution + swap banner) scores clean standa
         rawSlot.setLookAndFeel (&theme);                      // themed bg for the probe (see note above)
         const juce::File rawFixture = juce::File (EB_TEST_DATA_DIR).getChildFile ("L_RAW_0000000.txt");
         REQUIRE (rawSlot.loadFromFile (rawFixture));
+        // Pin the resolved type: the fixture must parse AS RAW, or this case silently scores a
+        // no-note card (no amber chip, no caution) and stays green if CalFile detection ordering
+        // ever changed. Assert the seam the caution path keys off (rawCaution = type==Raw).
+        REQUIRE (rawSlot.calFile().has_value());
+        REQUIRE (rawSlot.calFile()->type == eb::CalType::Raw);
         rawSlot.setProblem ("This looks like the RIGHT cal, but it's in the LEFT slot - swap the files.");
         for (int w : { 289, 373 }) {
             rawSlot.setSize (w, rawSlot.preferredHeight());

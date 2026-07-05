@@ -2707,7 +2707,7 @@ void MainComponent::timerCallback() {
             const juce::File dir (outDir);
             // Each scene now carries the wizard STEP it renders (Task 5): the 9 status scenes drive the
             // MeasureStage's status line + quality dots, so they pin Measure; the 4 stage scenes at the
-            // bottom pin Connect/Calibrate/Level (+ calibrate-advanced, Task 8) and drive NO labels — the
+            // bottom pin Connect/Calibrate/Level (+ calibrate-advanced, Task 8) and drive NO labels - the
             // stage at its natural current state IS the scene. forceWizardStepForTest (below, per-scene)
             // settles the shown stage; calAdv forces the Calibrate Advanced-FIR disclosure open/closed.
             // Frame count: 13 scenes x 4 appearances + 2 startready = 54 frames (the P1 count was 50).
@@ -2777,9 +2777,10 @@ void MainComponent::timerCallback() {
             }
             // COMPONENT-STATE SCENE: the status sweep above leaves Start DISABLED (its accent fill paints
             // only when enabled), so force it enabled and capture the ready-CTA scene in dark+light. (The
-            // former "Advanced expanded" scene died with the disclosure — its children live in the stages,
-            // captured by the per-step gate axis instead.) The matrix loop left the pin on Level; re-pin
-            // Measure so the ready CTA renders in the measurement-step context, as before Task 5.
+            // former "Advanced expanded" scene died with the disclosure - its children live in the stages,
+            // captured by the per-step gate axis instead.) The matrix loop's last scene (calibrate-advanced)
+            // left the pin on Calibrate; re-pin Measure so the ready CTA renders in the measurement-step
+            // context, as before Task 5.
             forceWizardStepForTest (WizardStep::Measure);
             for (const bool dk : { true, false }) {
                 forceThemeForTest (dk);
