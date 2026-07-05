@@ -23,9 +23,9 @@ StageHeader::StageHeader (const juce::String& eyebrow, const juce::String& title
 }
 
 void StageHeader::applyTheme() {
-    // Eyebrow: textDim, not accent - light-mode accent text sits under the 4.5:1 gate floor;
-    // the accessible accent-text token is P4 (M3) work.
-    eyebrow_.setColour (juce::Label::textColourId, Theme::textDim());
+    // P2.9 (M3 pulled forward): the stage eyebrow is the accent anchor (W2 .stage-eyebrow).
+    // accentText() is the 4.5:1-safe accent-as-text token in BOTH themes (5.16:1 dark / 4.55:1 light).
+    eyebrow_.setColour (juce::Label::textColourId, Theme::accentText());
     eyebrow_.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")).withExtraKerningFactor (0.07f));
     title_.setColour (juce::Label::textColourId, Theme::text());
     title_.setFont (juce::Font (juce::FontOptions (22.0f).withStyle ("Bold")));   // macOS 27 Title1 (22 w700, lh 26)

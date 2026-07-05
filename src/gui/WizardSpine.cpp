@@ -134,7 +134,8 @@ struct WizardSpine::StepRow : public juce::Component {
             case StepState::Done:
                 fill = Theme::okFill(); border = fill; glyphCol = Theme::okFill().darker (0.85f); break;
             case StepState::Active:
-                fill = Theme::accent(); border = fill; glyphCol = Theme::onAccentText(); break;
+                // W2 .step.active .node = --accent-fill (white glyph 4.81:1)
+                fill = Theme::primaryFill(); border = fill; glyphCol = Theme::onAccentText(); break;
             case StepState::Error:
                 fill = Theme::dangerFill(); border = fill; glyphCol = Theme::onAccentText(); break;
             case StepState::Blocked:
@@ -301,10 +302,9 @@ void WizardSpine::setState (const WizardState& ws, const juce::String viewMetas[
         labelChanged |= setLabelIfChanged (row->meta, metaText, metaCol);
 
         row->tag.setVisible (isActiveStep);
-        // accent() as small TEXT is only ~3.5:1 in light mode (the whole-app HIG gate flags it); use the
-        // repo's established accent-as-text token infoText() (~4.6:1) — same convention as the update link.
+        // P2.9: the tag is the accent anchor - accentText() is 4.5:1-safe in both themes (was infoText during the frozen-Theme era).
         labelChanged |= setLabelIfChanged (row->tag, isActiveStep ? juce::String ("You are here") : juce::String(),
-                                           Theme::infoText());
+                                           Theme::accentText());
 
         // A11y title: "Step N of 4, <name>, <state word>[, <click clause>]".
         juce::String t;
@@ -359,6 +359,11 @@ juce::String WizardSpine::rowMetaForTest (int step) const {
 }
 
 void WizardSpine::clickStepForTest (int step) { rowActivated (step); }
+
+juce::Colour WizardSpine::tagColourForTest() const {
+    for (auto* r : rows) if (r->isActive) return r->tag.findColour (juce::Label::textColourId);
+    return {};
+}
 
 // The number of repaints this row has issued through markDirty() (M-1). A second setState with the
 // SAME inputs must NOT increment it — the always-visible spine used to repaint unconditionally at 30 Hz.

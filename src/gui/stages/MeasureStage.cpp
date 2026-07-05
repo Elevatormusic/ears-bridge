@@ -6,7 +6,7 @@ namespace eb {
 namespace {
 void styleStageEyebrow (juce::Label& l, const juce::String& t) {
     l.setText (t, juce::dontSendNotification);
-    l.setColour (juce::Label::textColourId, Theme::textDim());
+    l.setColour (juce::Label::textColourId, Theme::accentText());   // P2.9: accent anchor (4.5:1-safe both themes)
     l.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")).withExtraKerningFactor (0.07f));
 }
 constexpr int kContentMaxW = 560;

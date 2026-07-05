@@ -33,6 +33,7 @@ juce::Colour Theme::accent()    { return pick (0xff0091FF, 0xff0088FF); }
 juce::Colour Theme::accentHover(){ return pick (0xff1F9DFF, 0xff0A7BEA); }
 juce::Colour Theme::primaryFill(){ return pick (0xff0A6FE0, 0xff0088FF); }  // W2 --accent-fill / macOS 27 System Blue
 juce::Colour Theme::accentText() { return pick (0xff0091FF, 0xff0067D6); }  // 5.16:1 on #1E1E1E / 4.55:1 on #ECECEE
+// LIGHT VALUE AT THE FLOOR: 4.551:1 vs 4.5 - do NOT lighten; darker is safe (any lightening flips the gate).
 // HIG audit (2026-06-23): ok/warn/danger are the TEXT colours (status/warning/error labels), tuned to pass
 // WCAG 4.5:1 on the ACTUAL label backgrounds in BOTH appearances (recomputed on barBg #F6F6F8 / bg #ECECEE /
 // surface #2A2A2A, not just pure white). The bright originals live on as okFill/warnFill/dangerFill for meter

@@ -168,6 +168,21 @@ TEST_CASE("WizardSpine: an identical re-render does not repaint any row (M-1)") 
     CHECK (spine.rowRepaintCountForTest ((int) WizardStep::Level)     > before[(int) WizardStep::Level]);
 }
 
+// P2.9: the active row's "You are here" tag is the accent anchor. Pins the accentText() token on the
+// active row's tag (was infoText() during the frozen-Theme era). Default WizardState -> Connect active,
+// Todo -> the active pill + tag render, so tagColourForTest() reads the active tag's colour.
+TEST_CASE("P2.9: the active-step tag is accentText (the accent anchor)") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::Theme theme;
+    WizardSpine spine;
+    spine.setSize (spine.preferredWidth(), 560);
+    WizardState ws;                                     // default: Connect active, all Todo
+    juce::String metas[eb::kWizardStepCount];           // empty -> machine reasons (none set) keep as-is
+    spine.setState (ws, metas, "not learned", "");
+    // The tag label is private; assert through the tag-colour seam.
+    CHECK (spine.tagColourForTest() == eb::Theme::accentText());
+}
+
 // Probe sanity: at the production width x 560 the given metas must not overflow any label.
 TEST_CASE("WizardSpine: probe reports no text overflow at 248x560") {
     juce::ScopedJuceInitialiser_GUI juceInit;

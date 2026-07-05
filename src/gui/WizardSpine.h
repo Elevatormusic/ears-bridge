@@ -45,6 +45,8 @@ public:
     // The Reference footer value's current text colour — tests pin the content-driven tone
     // (ok() for a positive status, textDim() for "not learned"/"n/a").
     juce::Colour refValueColourForTest() const { return refValue.findColour (juce::Label::textColourId); }
+    // P2.9: the active row's "You are here" tag colour (pins the accent-anchor token).
+    juce::Colour tagColourForTest() const;
     // Drive a row's click path programmatically (mirrors a Return/Space/mouse activation). A Blocked
     // row is inert, so this is a no-op there — exactly what a real click would do.
     void         clickStepForTest (int step);
