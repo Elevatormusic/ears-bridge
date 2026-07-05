@@ -20,6 +20,9 @@ void DisclosureRow::setOpen (bool open) {
 
 void DisclosureRow::clicked() {
     // Button already flipped the toggle. Enforce the lock (revert silently), then report.
+    // NOTE: on a real click of a LOCKED row, the toggle is momentarily false before this revert -
+    // a registered Button::Listener would observe that forbidden transient. Do not attach
+    // Button::Listeners to this component; onOpenChanged is the sanctioned change channel.
     if (locked_ && ! getToggleState()) {
         setToggleState (true, juce::dontSendNotification);
         return;

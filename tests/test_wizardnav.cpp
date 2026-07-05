@@ -460,7 +460,8 @@ TEST_CASE("Connect stage: SIGNAL PATH card rect stays fresh when the cable hint 
 // silently. RED reason: with the post-adopt connectStage_.syncOverrideDisclosure() removed, the row
 // constructs COLLAPSED at launch, so the three PRE-click CHECKs (row not open, toggle hidden, empty
 // bounds) fail - that is where the test goes red. The post-click CHECKs would still PASS in the
-// broken build (clickForTest merely OPENS the collapsed row), so the restore is what they guard.
+// broken build (clickForTest merely OPENS the collapsed row) - they guard the lock's
+// refuse-collapse behavior, NOT the restore; the PRE-click CHECKs are the restore guard.
 TEST_CASE("Connect stage: a persisted-ON override restores the disclosure locked open at launch") {
     juce::ScopedJuceInitialiser_GUI juceInit;
     auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
