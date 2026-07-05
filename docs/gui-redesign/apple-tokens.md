@@ -78,8 +78,8 @@ heavier border (why EB cards are fill-step, outline-free).
 
 - Sizes: DEFAULT 28x28pt, technical MINIMUM 20x20pt. mini/small/medium = rounded-rect;
   large/x-large = capsule (Liquid Glass) — EB: 28px combos/buttons, 34px capsule CTA.
-- Bordered button: #000 a0.08 idle / a0.16 clicked / a0.04 disabled (mirror alphas on white
-  in dark).
+- Bordered button: light #000 a0.08 idle / a0.16 clicked / a0.04 disabled; dark on #FFF —
+  idle a0.07 (NOT mirrored), clicked a0.16 / disabled a0.04 (mirrored).
 - Prominent (default) button: System Blue base (+ vibrant quaternary overlay in light);
   clicked adds #000/#FFF a0.1; destructive = same recipes on Red.
 - Input fields: fill #FFFFFF / #1E1E1E, 1px border #000 a0.05 / #FFF a0.04; focus = 3.5px +
