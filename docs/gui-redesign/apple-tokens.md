@@ -72,7 +72,9 @@ Window #FFFFFF -> #1E1E1E (with-sidebar dark -> #000000 behind the sidebar). Sid
 #FAFAFA a0.8 / #0C0C0C a0.85. Separator #3C3C43 a0.29 (light; dark via semantic color).
 Materials (Ultra Thin -> Ultra Thick): #ECECEC a0.38/0.5/0.63/0.76/0.88 light; #292929-#2C2C2C
 a0.4/0.49/0.61/0.71/0.82 dark. Elevation on opaque surfaces = a translucent fill step, not a
-heavier border (why EB cards are fill-step, outline-free).
+heavier border (why EB cards are fill-step, outline-free). P2.9 ruling: EB cards adopt the W2
+card recipe (surface fill + 1px sep hairline, radius 12) — the fill-step-only card read as
+bg-on-bg at the dark ladder's 1.19:1 surface/bg separation.
 
 ## Controls (from control-tokens-macos.md)
 

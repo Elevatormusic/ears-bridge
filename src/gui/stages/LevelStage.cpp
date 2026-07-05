@@ -46,10 +46,8 @@ void LevelStage::adopt (juce::Label& levelsEyebrow, juce::Label& levelsHint, juc
 
 void LevelStage::paint (juce::Graphics& g) {
     g.fillAll (Theme::bg());
-    if (! cardBounds_.isEmpty()) {
-        g.setColour (Theme::surface());
-        g.fillRoundedRectangle (cardBounds_.toFloat(), 10.0f);
-    }
+    if (! cardBounds_.isEmpty())
+        Theme::paintCardSurface (g, cardBounds_.toFloat());    // shared recipe flows through (content untouched)
 }
 
 void LevelStage::resized() {

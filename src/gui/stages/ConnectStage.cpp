@@ -34,10 +34,8 @@ ConnectStage::ConnectStage() {
 
 void ConnectStage::Content::paint (juce::Graphics& g) {
     if (owner == nullptr) return;
-    for (const auto& r : owner->groupRects_) {
-        g.setColour (Theme::surface());
-        g.fillRoundedRectangle (r.toFloat(), 12.0f);   // elevation fill-step, no outline
-    }
+    for (const auto& r : owner->groupRects_)
+        Theme::paintCardSurface (g, r.toFloat());          // W2 card: surface + 1px sep hairline, r12
 }
 
 void ConnectStage::applyTheme() {
@@ -182,8 +180,7 @@ int ConnectStage::layoutContent (int width) {
     }
     endCard();
 
-    beginCard();                                       // ---- WIRING CHECK (one 32px row: button + 2-line result)
-    {
+    {                                                  // ---- WIRING CHECK: a plain row, demoted off card (P2.9)
         auto b = rr.removeFromTop (32).reduced (kCardPadX, 0);
         if (verifyButton_ != nullptr) {
             auto cell = b.removeFromLeft (juce::jmin (200, b.getWidth()));
@@ -191,8 +188,8 @@ int ConnectStage::layoutContent (int width) {
         }
         b.removeFromLeft (12);
         if (verifyResultLabel_ != nullptr) verifyResultLabel_->setBounds (b);
+        rr.removeFromTop (kCardGap);
     }
-    endCard();
 
     // ---- "Not using Dirac?" escape hatch ----
     notUsingDirac_.setBounds (rr.removeFromTop (kDiscH));

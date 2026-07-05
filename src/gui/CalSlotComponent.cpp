@@ -406,9 +406,7 @@ void CalSlotComponent::resized() {
 }
 
 void CalSlotComponent::paint (juce::Graphics& g) {
-    auto full = getLocalBounds().toFloat();
-    g.setColour (Theme::surface());
-    g.fillRoundedRectangle (full, 10.0f);
+    Theme::paintCardSurface (g, getLocalBounds().toFloat());   // W2 card: surface + hairline, r12 (was bare r10)
 
     auto inner = getLocalBounds().reduced (kPadX, kPadY);
     auto header = inner.removeFromTop (kHeaderH);
