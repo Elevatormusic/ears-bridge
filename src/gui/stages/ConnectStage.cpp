@@ -98,6 +98,13 @@ void ConnectStage::paint (juce::Graphics& g) {
 }
 
 int ConnectStage::layoutContent (int width) {
+    // Content::paint draws the card fills straight from groupRects_, but content_ only auto-repaints
+    // when setSize CHANGES its size. On a tall window the jmax(contentH, viewport) clamp pins the size,
+    // so a relayout that grows a card (diracCableHint/fix appear, preflightInfo gains text) would leave
+    // a STALE fill painted behind the moved controls - a background stripe across the grown card. So we
+    // repaint content_ whenever the rects actually change. This mirrors the P1 WizardSpine markDirty
+    // discipline (repaint only on a real visual delta), not an unconditional per-resized repaint.
+    const auto prevRects = groupRects_;
     groupRects_.clear();
     const int colW = juce::jmin (kContentMaxW, juce::jmax (0, width - 2 * kGutter));
     const int x0   = (width - colW) / 2;
@@ -177,6 +184,12 @@ int ConnectStage::layoutContent (int width) {
             overrideToggle_->setBounds ({});
         }
     }
+
+    // Repaint the card fills iff the geometry the paint reads actually moved (delta-only, per the P1
+    // repaint-discipline). On a tall window setSize is a no-op, so this is the ONLY thing that refreshes
+    // the stale fill behind a grown/shrunk card.
+    if (groupRects_ != prevRects)
+        content_.repaint();
     return rr.getY() + kGutter;
 }
 

@@ -412,6 +412,82 @@ TEST_CASE("Connect stage: override discloses, and locks open while the override 
     tmp.deleteRecursively();
 }
 
+// P2 Task 7 review (Fix 1): on a TALL window the ConnectStage content is clamped to the viewport
+// height, so content_.setSize() is a no-op across a relayout that grows a card. Content::paint draws
+// the card fills from groupRects_, so a stale rect would render the old inter-card gap as a background
+// stripe across the grown SIGNAL PATH card. The stripe itself is paint-path (a headless test can't see
+// pixels - proven by render), but the HONEST proxy is that the geometry the paint READS is fresh: after
+// forcing diracCableHint visible + relayout on a tall stage, the SIGNAL PATH card rect must have GROWN.
+// (The delta-repaint in layoutContent then invalidates content_ so the paint reads THIS fresh rect.)
+TEST_CASE("Connect stage: SIGNAL PATH card rect stays fresh when the cable hint appears (tall window)") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 1400);                                   // TALL: viewport height > content height
+    mc.forceWizardStepForTest (eb::WizardStep::Connect);
+    auto& stage = mc.connectStageForTest();
+
+    // Deterministically drive the SIGNAL PATH card's hosted-hint state (do not rely on the ctor default -
+    // the adopted label's visibility is whatever updateDiracCableHint last set). HIDDEN baseline first.
+    auto* hint = stage.diracCableHintForTest();
+    REQUIRE (hint != nullptr);
+    hint->setVisible (false);
+    stage.resized();
+    REQUIRE (stage.groupRectsForTest().size() >= 1u);
+    const auto cardBefore = stage.groupRectsForTest().front();
+
+    // Now the standard VB-CABLE state: the hint appears, and the layout must grow card 0 to host it.
+    hint->setText ("The Hi-Fi Cable connects to Dirac but won't carry audio through it.",
+                   juce::dontSendNotification);
+    hint->setVisible (true);
+    stage.resized();
+
+    const auto cardAfter = stage.groupRectsForTest().front();
+    // The paint reads groupRects_; if it stayed stale the height would be unchanged. It must have grown by
+    // the hint row - proving the geometry the fill paints from is fresh (not the pre-hint rect).
+    CHECK (cardAfter.getHeight() > cardBefore.getHeight());
+    // Same top-left origin: the card grew DOWNWARD, it did not shift (a sanity that we compared the same card).
+    CHECK (cardAfter.getX() == cardBefore.getX());
+    CHECK (cardAfter.getY() == cardBefore.getY());
+    tmp.deleteRecursively();
+}
+
+// P2 Task 7 review (Fix 2): the honesty lock's PERSISTED-ON RESTORE path. The live onClick path is
+// covered above; this pins the OTHER entry - a settings file with advancedOverride pre-persisted ON,
+// so at construction MainComponent restores the toggle ON and syncOverrideDisclosure() opens the row
+// LOCKED. A ctor reordering (adopt/sync out of order, or the restore sync dropped) would break this
+// silently. RED reason: with the post-adopt connectStage_.syncOverrideDisclosure() removed, the row
+// constructs COLLAPSED (toggle hidden) and a collapse "succeeds" - both asserts below flip. Restored.
+TEST_CASE("Connect stage: a persisted-ON override restores the disclosure locked open at launch") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    // Pre-persist the override ON in the SAME backing file MainComponent's Settings will read (the
+    // test_settings.cpp idiom: construct Settings over the dir, set + flush, then re-open in the app).
+    {
+        eb::Settings seed (tmp);
+        seed.setAdvancedOverride (true);
+        REQUIRE (seed.flush());
+    }
+    eb::MainComponent mc (hermetic (tmp));                    // settingsDir == tmp -> reads the seeded ON state
+    mc.setSize (900, 780);
+    mc.forceWizardStepForTest (eb::WizardStep::Connect);
+    auto& row = mc.connectStageForTest().notUsingDiracForTest();
+    auto& toggle = mc.overrideToggleForTest();
+
+    // Restored ON at launch: the toggle is checked + visible, and the row opened LOCKED (no click needed).
+    CHECK (toggle.getToggleState());                         // persisted ON survived the reload
+    CHECK (row.isOpen());                                    // disclosure force-opened by the restore sync
+    CHECK (toggle.isVisible());                              // disclosed content is laid out (non-collapsed)
+    CHECK (! toggle.getBounds().isEmpty());
+
+    // The lock holds against a collapse attempt (the honesty invariant, exercised on the RESTORE path).
+    row.clickForTest();
+    CHECK (row.isOpen());                                    // REFUSED: an armed override is never hideable
+    CHECK (toggle.isVisible());
+    tmp.deleteRecursively();
+}
+
 // Map #9/#10 (Connect): the header run-note mirrors the machine's first-unmet reason and clears
 // on Done. Pin THE header's own run-note element by componentID ("connectRunNote"), not just "some
 // showing element whose label matches" - the spine's per-step meta Label has carried the same

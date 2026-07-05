@@ -36,6 +36,13 @@ public:
     void setRunNote (const juce::String& s) { header_.setRunNote (s); }
     void syncOverrideDisclosure();                     // lock-open + summary while the override is ON
     DisclosureRow& notUsingDiracForTest() { return notUsingDirac_; }
+    // Task-7 review seam: the group-card rects the paint reads (content-local). A test asserts the
+    // geometry stays FRESH after a relayout grows a card on a tall window (the stripe itself is
+    // paint-path, only verifiable by render). Returns a copy - do not mutate the live layout state.
+    std::vector<juce::Rectangle<int>> groupRectsForTest() const { return groupRects_; }
+    // Task-7 review seam: the adopted dirac-cable-hint label (owned by MainComponent) that the SIGNAL
+    // PATH card grows to host. A test forces it visible + relayouts to prove the card rect grows.
+    juce::Label* diracCableHintForTest() { return diracCableHint_; }
 
     // Re-apply theme-dependent colours to the stage's OWN header labels on a live light/dark flip
     // (MainComponent calls this from applyTextColours; adopted controls re-colour through their own applyTheme()).
