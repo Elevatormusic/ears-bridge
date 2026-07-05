@@ -94,7 +94,7 @@ public:
     // model truth (updateDiracCableHint re-derives; hermetic rateWarn is empty).
     void driveConnectWarningsForTest (bool stdCableHintWithFix, bool rateResampleWarn);
     juce::Label& outputHintForTest() { return outputHint; }
-    // T10: the Connect preflight warning label (danger-toned), for the no-scroll/displacement
+    // T10: the Connect preflight warning label (warn-toned), for the no-scroll/displacement
     // BOUNDARY case that forces the post-Start preflight stack in the safety-net state.
     juce::Label& preflightLabelForTest() { return preflightLabel; }
     CalSlotComponent& leftCalForTest()  { return leftCal; }

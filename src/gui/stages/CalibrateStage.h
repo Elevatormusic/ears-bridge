@@ -49,8 +49,10 @@ public:
     // layoutContent; the gate static_asserts the count).
     enum class WorkflowState { EmptyUnity, LoadedCleanPair, LoadedWorstPair,
                                EmptyUnityAdvancedOpen, LoadedWorstAdvancedOpen,
-                               EmptyErrorStripAdvancedOpen };
-    static constexpr int kWorkflowStateCount = 6;
+                               EmptyErrorStripAdvancedOpen, Count };
+    // Sentinel-derived: an enumerator added before Count bumps this automatically, so the gate's
+    // static_asserts fail-close on an enum edit ALONE (no second hand-maintained number to forget).
+    static constexpr int kWorkflowStateCount = (int) WorkflowState::Count;
     juce::Viewport& viewportForTest() { return viewport_; }
 
     // Pure copy rules (headlessly tested in test_calibratestage.cpp):

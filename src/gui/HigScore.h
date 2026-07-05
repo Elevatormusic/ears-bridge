@@ -9,7 +9,7 @@
 namespace eb::hig {
 
 struct Finding {
-    juce::String category;   // contrast | overlap | duplicate | target-size | clip
+    juce::String category;   // contrast | overlap | duplicate | target-size | clip | min-font
     juce::String severity;   // high | medium
     juce::String element;    // the offending element id
     juce::String message;

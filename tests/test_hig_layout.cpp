@@ -480,6 +480,70 @@ bool fullyVisibleIn (juce::Viewport& vp, juce::Component& c) {
 }
 } // namespace
 
+// ==================================================================================================
+// RULE2 walker BITE test. displacedWarnSurfaces is the primitive the two workflow gates above rely
+// on to catch a warn/danger surface pushed below the fold - but every COMMITTED call expects an
+// EMPTY result, so the walker's own RED path (it actually RETURNS a displaced surface) had zero
+// evidence. This drives a synthetic Viewport + tall content directly through the SAME function the
+// gates call (no copy of the logic) and asserts all four arms: warn below fold -> returned; the
+// same label lifted above the fold -> empty; a danger-toned variant below fold -> returned; a
+// NON-warn-toned label below the fold -> NOT returned (the overfire negative).
+// ==================================================================================================
+TEST_CASE("RULE2 walker bites: displacedWarnSurfaces returns a below-fold warn/danger surface [T10]") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    juce::Viewport vp;
+    vp.setScrollBarsShown (false, false);   // no scrollbar inset - the visible area is exactly the viewport
+    vp.setSize (300, 200);
+
+    juce::Component content;
+    content.setSize (300, 600);             // taller than the 200px viewport -> a real fold at y=200
+
+    juce::Label warnLbl;
+    warnLbl.setText ("input clipping detected", juce::dontSendNotification);
+    warnLbl.setColour (juce::Label::textColourId, eb::Theme::warn());
+    content.addAndMakeVisible (warnLbl);
+
+    juce::Label plainLbl;                   // NOT warn/danger toned - the overfire guard
+    plainLbl.setText ("passive guidance line", juce::dontSendNotification);
+    plainLbl.setColour (juce::Label::textColourId, eb::Theme::text());
+    content.addAndMakeVisible (plainLbl);
+
+    vp.setViewedComponent (&content, false);        // vp does not own it; both live to end of scope
+
+    // Arm 1: warn label BELOW the fold (y = 400, viewport shows 0..200) -> the walker RETURNS it.
+    warnLbl.setBounds (10, 400, 200, 20);
+    plainLbl.setBounds (10, 420, 200, 20);          // parked below the fold too (see Arm 4)
+    {
+        const auto hits = displacedWarnSurfaces (vp);
+        REQUIRE (hits.contains ("input clipping detected"));   // RED path proven
+    }
+
+    // Arm 4 (folded into Arm 1's geometry): the plain-toned label sits below the fold as well, yet
+    // the walker must NOT report it - it keys on the warn/danger tone, not mere displacement.
+    {
+        const auto hits = displacedWarnSurfaces (vp);
+        REQUIRE_FALSE (hits.contains ("passive guidance line"));   // overfire negative
+    }
+
+    // Arm 2: lift the SAME warn label fully above the fold (0..200) -> empty.
+    warnLbl.setBounds (10, 20, 200, 20);
+    {
+        const auto hits = displacedWarnSurfaces (vp);
+        REQUIRE (hits.isEmpty());               // no warn surface displaced now
+    }
+
+    // Arm 3: a danger-toned variant below the fold -> RETURNED (the second tone is covered too).
+    warnLbl.setColour (juce::Label::textColourId, eb::Theme::danger());
+    warnLbl.setText ("output device lost", juce::dontSendNotification);
+    warnLbl.setBounds (10, 450, 200, 20);
+    {
+        const auto hits = displacedWarnSurfaces (vp);
+        REQUIRE (hits.contains ("output device lost"));
+    }
+
+    vp.setViewedComponent (nullptr, false);     // detach before content/labels destruct (JUCE order)
+}
+
 TEST_CASE("No-scroll + displacement gate: Calibrate workflow states at 900x720 [T10]") {
     juce::ScopedJuceInitialiser_GUI juceInit;
     auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
@@ -515,6 +579,7 @@ TEST_CASE("No-scroll + displacement gate: Calibrate workflow states at 900x720 [
             case WS::EmptyErrorStripAdvancedOpen:
                 L.loadFromFile (data.getChildFile ("no-such-cal-file.txt"));   // #38 stale-path strip
                 break;
+            case WS::Count: jassertfalse; return;   // sentinel - never a real state (fail-closed, no silent fallthrough)
         }
         mc.calibrateStageForTest().setAdvancedOpen (s == WS::EmptyUnityAdvancedOpen
                                                     || s == WS::LoadedWorstAdvancedOpen

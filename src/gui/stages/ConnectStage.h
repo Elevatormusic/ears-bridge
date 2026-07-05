@@ -48,8 +48,10 @@ public:
     // branches - any new conditional row/state added there must appear here; the gate
     // static_asserts the count (fail-closed).
     enum class WorkflowState { Default, DiracHintFix, RateWarn, DiracHintFixRateWarn,
-                               OverrideOpen, OverrideOpenWorst };
-    static constexpr int kWorkflowStateCount = 6;
+                               OverrideOpen, OverrideOpenWorst, Count };
+    // Sentinel-derived: an enumerator added before Count bumps this automatically, so the gate's
+    // static_asserts fail-close on an enum edit ALONE (no second hand-maintained number to forget).
+    static constexpr int kWorkflowStateCount = (int) WorkflowState::Count;
     juce::Viewport& viewportForTest() { return viewport_; }
 
     // Re-apply theme-dependent colours to the stage's OWN header labels on a live light/dark flip
