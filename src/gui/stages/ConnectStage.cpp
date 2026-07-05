@@ -5,8 +5,11 @@ namespace eb {
 
 namespace {
 constexpr int kGutter = 16, kPadX = 30;
-constexpr int kContentMaxW = 560;     // the frames' single-column rhythm
-constexpr int kCardPad = 14, kCardGap = 12, kDiscH = 28, kDiscIndent = 24;
+constexpr int kContentMaxW = 560;              // the frames' single-column rhythm
+constexpr int kCardPadX = 16, kCardPadY = 12;  // T10: horizontal air kept, vertical on the 4-grid
+constexpr int kCardGap = 8, kDiscH = 24, kDiscIndent = 24;
+constexpr int kGapIntra = 4, kGapInter = 8;    // T10 spacing rhythm
+constexpr int kEyebrowH = 14, kComboH = 28, kHintH = 16, kHint2H = 32, kBtnH = 28;
 } // namespace
 
 ConnectStage::ConnectStage() {
@@ -109,85 +112,95 @@ int ConnectStage::layoutContent (int width) {
     const int colW = juce::jmin (kContentMaxW, juce::jmax (0, width - 2 * kGutter));
     const int x0   = (width - colW) / 2;
     auto rr = juce::Rectangle<int> (x0, 0, colW, 100000);
-    rr.removeFromTop (4);
-    // T10 Task-2 BRIDGE (superseded by Task 3's layoutContent rewrite): kHeight 124->96 freed 28px of
-    // viewport, which pulled the still-tall (pre-compaction) FORMAT card's RATE/BIT combos from fully
-    // scrolled-out to STRADDLING the 900x720 fold at 4px tall - a target-size finding in the 64-cell
-    // matrix. Task 2 owns only StageHeader and must not do Task 3's column compaction, and the ledgered
-    // kHeight=96 is fixed. This 8px top pad restores the pre-change "row sits below the fold, not scored"
-    // state (the brief's Step-4 assumption) until Task 3 compacts the column so everything fits above the
-    // fold. Task 3 replaces this whole function, erasing this line.
-    rr.removeFromTop (8);
+    // T10: no top pad - the fixed header supplies the whitespace; every px belongs to the fold budget.
 
     int cardTop = 0;
-    const auto beginCard = [&] { cardTop = rr.getY(); rr.removeFromTop (kCardPad); };
+    const auto beginCard = [&] { cardTop = rr.getY(); rr.removeFromTop (kCardPadY); };
     const auto endCard   = [&] {
-        rr.removeFromTop (kCardPad);
+        rr.removeFromTop (kCardPadY);
         groupRects_.push_back ({ x0, cardTop, colW, rr.getY() - cardTop });
         rr.removeFromTop (kCardGap);
     };
     const auto row = [&] (juce::Component* c, int h) {
-        auto b = rr.removeFromTop (h).reduced (kCardPad, 0);
+        auto b = rr.removeFromTop (h).reduced (kCardPadX, 0);
         if (c != nullptr) c->setBounds (b);
         return b;
     };
 
     beginCard();                                       // ---- SIGNAL PATH (5.1: input -> output)
-    row (inputPicker_, 62);            rr.removeFromTop (4);
-    row (inputGainHint_, 60);          rr.removeFromTop (12);
-    row (outputPicker_, 62);           rr.removeFromTop (4);
-    row (outputHint_, 30);
-    row (preflightLabel_, 14);
-    if (preflightInfo_ != nullptr) {
-        if (preflightInfo_->getText().isNotEmpty()) row (preflightInfo_, 14);
-        else                                        preflightInfo_->setBounds ({});
+    row (inputPicker_, 46);            rr.removeFromTop (kGapIntra);
+    row (inputGainHint_, kHint2H);     rr.removeFromTop (kGapInter);
+    row (outputPicker_, 46);           rr.removeFromTop (kGapIntra);
+    // Output MESSAGE SLOT (T10-D7): the passive Dirac-capture hint OR the cable warning
+    // (+ fix) - never both. Both guide the same control; the warning supersedes the guidance
+    // while active and the guidance returns the instant the hint clears.
+    const bool diracHintOn = diracCableHint_ != nullptr && diracCableHint_->isVisible();
+    if (outputHint_ != nullptr) {
+        outputHint_->setVisible (! diracHintOn);
+        if (! diracHintOn) row (outputHint_, kHintH);
+        else               outputHint_->setBounds ({});
     }
-    if (diracCableHint_ != nullptr && diracCableHint_->isVisible()) {
-        rr.removeFromTop (6);
-        row (diracCableHint_, 48);
+    if (diracHintOn) {
+        row (diracCableHint_, kHint2H);
         if (diracFixButton_ != nullptr && diracFixButton_->isVisible()) {
-            rr.removeFromTop (4);
-            auto b = rr.removeFromTop (30).reduced (kCardPad, 0);
+            rr.removeFromTop (kGapIntra);
+            auto b = rr.removeFromTop (kBtnH).reduced (kCardPadX, 0);
             diracFixButton_->setBounds (b.removeFromLeft (200));
         }
+    }
+    // Post-Start preflight lines claim rows only when non-empty. These are the ONLY Connect
+    // rows allowed to push past the min-window fold (post-failure states, not workflow states;
+    // the Task-5 boundary gate proves the warnings still sit above the fold then).
+    if (preflightLabel_ != nullptr) {
+        if (preflightLabel_->getText().isNotEmpty()) { rr.removeFromTop (kGapIntra); row (preflightLabel_, kHint2H); }
+        else preflightLabel_->setBounds ({});
+    }
+    if (preflightInfo_ != nullptr) {
+        if (preflightInfo_->getText().isNotEmpty()) { rr.removeFromTop (kGapIntra); row (preflightInfo_, kHintH); }
+        else preflightInfo_->setBounds ({});
     }
     endCard();
 
     beginCard();                                       // ---- FORMAT
-    row (combineLabel_, 16);  rr.removeFromTop (6);
-    row (combineBox_, 40);    rr.removeFromTop (6);
-    row (combineHint_, 80);   rr.removeFromTop (12);
+    row (combineLabel_, kEyebrowH);  rr.removeFromTop (kGapIntra);
+    row (combineBox_, kComboH);      rr.removeFromTop (kGapIntra);
+    row (combineHint_, kHint2H);     rr.removeFromTop (kGapInter);
     {
-        auto rb = rr.removeFromTop (62).reduced (kCardPad, 0);
+        auto rb = rr.removeFromTop (kEyebrowH + kGapIntra + kComboH).reduced (kCardPadX, 0);
         auto rcol = rb.removeFromLeft (rb.getWidth() / 2 - 8);
         rb.removeFromLeft (16);
-        if (rateLabel_ != nullptr) rateLabel_->setBounds (rcol.removeFromTop (16));
-        rcol.removeFromTop (6);
-        if (rateBox_ != nullptr)   rateBox_->setBounds (rcol.removeFromTop (40));
-        if (bitLabel_ != nullptr)  bitLabel_->setBounds (rb.removeFromTop (16));
-        rb.removeFromTop (6);
-        if (bitBox_ != nullptr)    bitBox_->setBounds (rb.removeFromTop (40));
+        if (rateLabel_ != nullptr) rateLabel_->setBounds (rcol.removeFromTop (kEyebrowH));
+        rcol.removeFromTop (kGapIntra);
+        if (rateBox_ != nullptr)   rateBox_->setBounds (rcol.removeFromTop (kComboH));
+        if (bitLabel_ != nullptr)  bitLabel_->setBounds (rb.removeFromTop (kEyebrowH));
+        rb.removeFromTop (kGapIntra);
+        if (bitBox_ != nullptr)    bitBox_->setBounds (rb.removeFromTop (kComboH));
     }
-    row (rateWarn_, 14);
+    if (rateWarn_ != nullptr) {   // warning row claims space only while live (home preserved: same card, same spot)
+        if (rateWarn_->getText().isNotEmpty()) { rr.removeFromTop (kGapIntra); row (rateWarn_, kHintH); }
+        else rateWarn_->setBounds ({});
+    }
     endCard();
 
-    beginCard();                                       // ---- WIRING CHECK (5.1: a connect concern)
+    beginCard();                                       // ---- WIRING CHECK (one 32px row: button + 2-line result)
     {
-        auto b = rr.removeFromTop (30).reduced (kCardPad, 0);
-        if (verifyButton_ != nullptr)
-            verifyButton_->setBounds (b.removeFromLeft (juce::jmin (220, b.getWidth())));
+        auto b = rr.removeFromTop (32).reduced (kCardPadX, 0);
+        if (verifyButton_ != nullptr) {
+            auto cell = b.removeFromLeft (juce::jmin (200, b.getWidth()));
+            verifyButton_->setBounds (cell.withSizeKeepingCentre (cell.getWidth(), kBtnH));
+        }
+        b.removeFromLeft (12);
+        if (verifyResultLabel_ != nullptr) verifyResultLabel_->setBounds (b);
     }
-    rr.removeFromTop (4);
-    row (verifyResultLabel_, 16);
     endCard();
 
-    // ---- "Not using Dirac?" escape hatch (flat row; contents only while open) ----
+    // ---- "Not using Dirac?" escape hatch ----
     notUsingDirac_.setBounds (rr.removeFromTop (kDiscH));
     if (overrideToggle_ != nullptr) {
         overrideToggle_->setVisible (notUsingDirac_.isOpen());
         if (notUsingDirac_.isOpen()) {
-            rr.removeFromTop (6);
-            overrideToggle_->setBounds (rr.removeFromTop (26).withTrimmedLeft (kDiscIndent));
+            rr.removeFromTop (kGapIntra);
+            overrideToggle_->setBounds (rr.removeFromTop (24).withTrimmedLeft (kDiscIndent));
         } else {
             overrideToggle_->setBounds ({});
         }
@@ -198,7 +211,7 @@ int ConnectStage::layoutContent (int width) {
     // the stale fill behind a grown/shrunk card.
     if (groupRects_ != prevRects)
         content_.repaint();
-    return rr.getY() + kGutter;
+    return rr.getY() + 4;                              // 4px bottom breathing (fold ledger)
 }
 
 void ConnectStage::resized() {

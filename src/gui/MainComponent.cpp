@@ -1,6 +1,7 @@
 #include "gui/MainComponent.h"
 #include "gui/ClipStatus.h"
 #include "gui/RawRailStatus.h"
+#include "gui/ConnectHints.h" // eb::hints:: production Connect warning copy (T10 - shared with tests + harness)
 #include "gui/StartGate.h"   // eb::startReady (Task 3 / #3 advanced override)
 #include "gui/StartNotes.h"  // eb::buildStartNotes (Task 4 / #8 calm bit-depth note)
 #include "gui/SystemA11y.h"  // eb::SystemA11y - Reduce Motion / Increase Contrast / Reduce Transparency (HIG)
@@ -355,6 +356,10 @@ MainComponent::MainComponent (const TestConfig& cfg)
     };
     verifyResultLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     verifyResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
+    // T10: the WIRING CHECK result shares one 32px row with the button - wrap to two lines rather than
+    // squish the text horizontally when the verdict string is long.
+    verifyResultLabel.setJustificationType (juce::Justification::centredLeft);
+    verifyResultLabel.setMinimumHorizontalScale (1.0f);
 
     // Reference-Based Measurement Monitor (Plan 5): learn the loopback reference. The capture itself is a
     // Windows WASAPI loopback (on-device) and must run with Dirac's Processor in Windows Audio (shared)
@@ -770,27 +775,21 @@ void MainComponent::updateDiracCableHint() {
 
     if (kind == VK::HiFiCable) {
         diracCableHint.setColour (juce::Label::textColourId, Theme::warn());
-        diracCableHint.setText ("The Hi-Fi Cable connects to Dirac but won't carry audio through it "
-                                "(no sample-rate converter). Use the standard CABLE Input instead.",
-                                juce::dontSendNotification);
+        diracCableHint.setText (eb::hints::kDiracHiFiCable, juce::dontSendNotification);
         diracFixButton.setVisible (false);
     } else if (kind == VK::StdVbCable) {
         if (eb::diracSharedModeEnabled()) {
             diracCableHint.setColour (juce::Label::textColourId, Theme::ok());
-            diracCableHint.setText ("Dirac is set to shared mode, so this cable works. If Dirac is open, "
-                                    "fully close and reopen it once.", juce::dontSendNotification);
+            diracCableHint.setText (eb::hints::kDiracStdCableShared, juce::dontSendNotification);
             diracFixButton.setVisible (false);
         } else {
             diracCableHint.setColour (juce::Label::textColourId, Theme::warn());
-            diracCableHint.setText ("Dirac records this standard cable in exclusive mode, which it can't do "
-                                    "(error 600007). Click below to set Dirac to shared mode:",
-                                    juce::dontSendNotification);
+            diracCableHint.setText (eb::hints::kDiracStdCableExclusive, juce::dontSendNotification);
             diracFixButton.setVisible (true);
         }
     } else if (kind == VK::OtherVirtual) {
         diracCableHint.setColour (juce::Label::textColourId, Theme::textDim());
-        diracCableHint.setText ("If Dirac can't open this cable (error 600007), set Dirac to shared mode "
-                                "or use the standard VB-CABLE.", juce::dontSendNotification);
+        diracCableHint.setText (eb::hints::kDiracOtherVirtual, juce::dontSendNotification);
         diracFixButton.setVisible (! eb::diracSharedModeEnabled());   // the one-click fix helps any cable
     } else {   // NotVirtual
         diracCableHint.setVisible (false);
@@ -818,7 +817,7 @@ void MainComponent::rebuildRateMenu() {
         if (it.selected) { selectId = (int) i + 1; warn = it.resampleWarning; }
     }
     if (selectId != 0) rateBox.setSelectedId (selectId, juce::dontSendNotification);
-    rateWarn.setText (warn ? "Not native - will be resampled." : juce::String(),
+    rateWarn.setText (warn ? juce::String (eb::hints::kRateResample) : juce::String(),
                       juce::dontSendNotification);
 }
 
@@ -851,7 +850,7 @@ void MainComponent::onRateChosen() {
     const double sr = rateModel[(size_t) idx].rate;
     settings.setSampleRate (sr);
     engine.setSampleRate (sr);
-    rateWarn.setText (rateModel[(size_t) idx].resampleWarning ? "Not native - will be resampled."
+    rateWarn.setText (rateModel[(size_t) idx].resampleWarning ? juce::String (eb::hints::kRateResample)
                                                               : juce::String(),
                       juce::dontSendNotification);
     rebuildFirsAsync();
@@ -1535,6 +1534,20 @@ void MainComponent::driveHeaderForTest (const juce::String& line1, const juce::S
     }
     gradeDotsL_.setVisible (showDots);
     gradeDotsR_.setVisible (showDots);
+    resized();
+}
+
+void MainComponent::driveConnectWarningsForTest (bool stdCableHintWithFix, bool rateResampleWarn) {
+    if (stdCableHintWithFix) {
+        diracCableHint.setColour (juce::Label::textColourId, Theme::warn());
+        diracCableHint.setText (eb::hints::kDiracStdCableExclusive, juce::dontSendNotification);
+        diracCableHint.setVisible (true);
+        diracFixButton.setVisible (true);
+    } else {
+        updateDiracCableHint();   // re-derive from the real output (hermetic env: NotVirtual -> hidden)
+    }
+    rateWarn.setText (rateResampleWarn ? juce::String (eb::hints::kRateResample) : juce::String(),
+                      juce::dontSendNotification);
     resized();
 }
 

@@ -89,6 +89,11 @@ public:
     juce::TextButton& startButtonForTest() { return startStop; }
     DevicePicker&    inputPickerForTest()  { return inputPicker; }
     DevicePicker&    outputPickerForTest() { return outputPicker; }
+    // T10: force the Connect warning surfaces with PRODUCTION copy (ConnectHints.h) so the
+    // no-scroll/displacement gates + harness measure real strings; (false,false) restores
+    // model truth (updateDiracCableHint re-derives; hermetic rateWarn is empty).
+    void driveConnectWarningsForTest (bool stdCableHintWithFix, bool rateResampleWarn);
+    juce::Label& outputHintForTest() { return outputHint; }
     CalSlotComponent& leftCalForTest()  { return leftCal; }
     CalSlotComponent& rightCalForTest() { return rightCal; }
     // M-2 seams: drive the Level green-band latch and route an input through the SAME apply path both the

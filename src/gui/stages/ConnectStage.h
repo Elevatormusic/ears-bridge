@@ -44,6 +44,14 @@ public:
     // PATH card grows to host. A test forces it visible + relayouts to prove the card rect grows.
     juce::Label* diracCableHintForTest() { return diracCableHint_; }
 
+    // T10: the gated no-scroll workflow states. KEEP THIS BESIDE layoutContent's conditional
+    // branches - any new conditional row/state added there must appear here; the gate
+    // static_asserts the count (fail-closed).
+    enum class WorkflowState { Default, DiracHintFix, RateWarn, DiracHintFixRateWarn,
+                               OverrideOpen, OverrideOpenWorst };
+    static constexpr int kWorkflowStateCount = 6;
+    juce::Viewport& viewportForTest() { return viewport_; }
+
     // Re-apply theme-dependent colours to the stage's OWN header labels on a live light/dark flip
     // (MainComponent calls this from applyTextColours; adopted controls re-colour through their own applyTheme()).
     void applyTheme();

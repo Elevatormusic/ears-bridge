@@ -91,9 +91,9 @@ void DevicePicker::applyTheme() {
 
 void DevicePicker::resized() {
     auto r = getLocalBounds();
-    label.setBounds (r.removeFromTop (16));
-    r.removeFromTop (6);
-    combo.setBounds (r.removeFromTop (40));
+    label.setBounds (r.removeFromTop (14));   // Subheadline eyebrow row (T10)
+    r.removeFromTop (4);
+    combo.setBounds (r.removeFromTop (28));   // macOS 27 default control height
 }
 
 } // namespace eb
