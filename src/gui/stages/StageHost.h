@@ -4,6 +4,7 @@
 #include <functional>
 #include "gui/WizardState.h"
 #include "gui/Theme.h"
+#include "gui/Glyphs.h"
 
 // StageHost — the single-child stage switcher (P1 Task 3 of the guided-wizard redesign).
 // Spec: docs/superpowers/specs/2026-07-04-wizard-redesign-design.md §4 (construct-once/reparent-once,
@@ -98,6 +99,8 @@ public:
         auto area = getLocalBounds();
         if (bannerLabel_.isVisible()) {
             auto strip = area.removeFromTop (kBannerH).reduced (16, 4);
+            bannerIconArea_ = strip.removeFromLeft (15).toFloat();   // warning-triangle gutter (P2.9)
+            strip.removeFromLeft (7);
             if (bannerFix_.isVisible())
                 bannerFix_.setBounds (strip.removeFromRight (110));
             bannerLabel_.setBounds (strip);
@@ -105,6 +108,11 @@ public:
         for (auto* st : stages_)
             if (st != nullptr)
                 st->setBounds (area);
+    }
+
+    void paint (juce::Graphics& g) override {
+        if (bannerLabel_.isVisible() && ! bannerIconArea_.isEmpty())
+            eb::glyph::drawWarning (g, bannerIconArea_.withSizeKeepingCentre (15.0f, 15.0f), Theme::warn());
     }
 
     static constexpr int kBannerH = 28;   // the regression-banner strip height (§ Task 4: stages shift 28px)
@@ -116,6 +124,7 @@ private:
     juce::TextButton bannerFix_;
     std::function<void()> onBannerFix_;
     juce::String     fixStepName_;   // the current jump target's name; onBannerFix_ is re-bound only on a change
+    juce::Rectangle<float> bannerIconArea_;   // P2.9: warning-triangle gutter reserved by resized()
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StageHost)
 };

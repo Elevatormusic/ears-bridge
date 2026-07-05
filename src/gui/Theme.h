@@ -63,6 +63,10 @@ public:
     juce::Font getComboBoxFont (juce::ComboBox&) override;
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
 
+    // P2.9: buttons opt into a leading 14px glyph via getProperties().set("glyph", "<id>")
+    // (ids: play stop tick info refresh folder export warning). Glyph + 7px gap + text centred as a group (W2 .btn .ico).
+    void drawButtonText (juce::Graphics&, juce::TextButton&, bool over, bool down) override;
+
     // P2.9 card recipe (W2 .ear/.meters/.fr): surface fill + 1px sep() inner hairline, radius 12.
     // The single source for every stage/component card - do not hand-roll surface fills any more.
     static void paintCardSurface (juce::Graphics& g, juce::Rectangle<float> r, float radius = 12.0f);

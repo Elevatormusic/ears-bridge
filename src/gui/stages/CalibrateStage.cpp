@@ -1,5 +1,6 @@
 #include "gui/stages/CalibrateStage.h"
 #include "gui/Theme.h"
+#include "gui/Glyphs.h"
 
 namespace eb {
 
@@ -227,11 +228,7 @@ void CalibrateStage::InfoCaption::resized() {
 void CalibrateStage::InfoCaption::paint (juce::Graphics& g) {
     g.setColour (Theme::infoBg());
     g.fillRoundedRectangle (getLocalBounds().toFloat(), 8.0f);
-    auto ic = juce::Rectangle<float> (12.0f, 10.0f, 15.0f, 15.0f);   // the (i) glyph
-    g.setColour (Theme::infoText());
-    g.drawEllipse (ic.reduced (1.0f), 1.3f);
-    g.fillEllipse (juce::Rectangle<float> (ic.getCentreX() - 1.0f, ic.getY() + 3.0f, 2.0f, 2.0f));
-    g.fillRoundedRectangle (juce::Rectangle<float> (ic.getCentreX() - 0.8f, ic.getY() + 6.5f, 1.6f, 5.5f), 0.8f);
+    eb::glyph::drawInfo (g, { 12.0f, 10.0f, 15.0f, 15.0f }, Theme::infoText());   // shared recipe (identical geometry)
 }
 
 } // namespace eb

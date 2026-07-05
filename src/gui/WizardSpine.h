@@ -61,6 +61,7 @@ private:
     // Reference footer (a hairline + two small label rows), fed by setState.
     juce::Label refLabel, refValue;     // row 1: "Reference" -> value
     juce::Label refLabel2, refValue2;   // row 2: "Learned from" -> value
+    bool refPositive_ = false;          // P2.9: footer "matched" tick shown only for a positive ref status
 
     void rowActivated (int step);       // the single click seam every row funnels through
 

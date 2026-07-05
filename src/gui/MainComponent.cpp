@@ -153,6 +153,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
 
     // --- Transport (gated Start + status note) ---
     startStop.getProperties().set ("primary", true);
+    startStop.getProperties().set ("glyph", "play");   // P2.9: CTA leads with the play glyph (Stop path swaps it)
     startStop.onClick = [this] { onStartStop(); };
     addAndMakeVisible (startStop);
     statusLine.setColour (juce::Label::textColourId, Theme::textDim());
@@ -366,6 +367,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
     // mode; we detect that read-only and inform. Only meaningful while Stopped (the loopback can't run
     // alongside the live ASIO measurement).
     learnRefButton.onClick = [this] { onLearnReference(); };
+    learnRefButton.getProperties().set ("glyph", "refresh");   // P2.9: re-run reference (W2 refresh)
     learnRefResultLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
 
@@ -378,6 +380,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
             log_->directory().revealToUser();
         }
     };
+    openLogButton.getProperties().set ("glyph", "folder");   // P2.9
     addAndMakeVisible (openLogButton);   // spine footer (§5.5): support channel <= 2 clicks from anywhere
     exportLogButton.onClick = [this] {
         if (log_ == nullptr) return;
@@ -410,6 +413,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
                 }
             });
     };
+    exportLogButton.getProperties().set ("glyph", "export");   // P2.9
     addAndMakeVisible (exportLogButton);   // spine footer (§5.5)
 
     // --- Right pane: cal cards + Levels ---
@@ -984,6 +988,7 @@ void MainComponent::onStartStop() {
         logLine (eb::DiagnosticLog::Level::Debug, "Button: Stop clicked");
         engine.stop();
         startStop.setButtonText ("Start");
+        startStop.getProperties().set ("glyph", "play");   // P2.9: text+glyph move together
         // Task 4: re-arm BOTH per-ear grade pollers on Stop so a stale match from this run can't carry into
         // the next (each ear again needs two consecutive matched polls before its first grade).
         gradePollTick_ = 0; gradePollerL_.reset(); gradePollerR_.reset();
@@ -1026,6 +1031,7 @@ void MainComponent::onStartStop() {
         juce::String err;
         if (engine.start (err)) {
             startStop.setButtonText ("Stop");
+            startStop.getProperties().set ("glyph", "stop");   // P2.9: running -> stop glyph
             // #10: record WHICH clock path this run took (macOS aggregate engaged vs the two-clock ASRC
             // fallback) so an on-device validation can't test the wrong path unknowingly. Empty on Windows.
             if (engine.aggregateNote().isNotEmpty())
@@ -2841,6 +2847,7 @@ void MainComponent::timerCallback() {
         gradePollerL_.reset(); gradePollerR_.reset();
         gradeDotsL_.clear();   gradeDotsR_.clear();
         startStop.setButtonText ("Start");
+        startStop.getProperties().set ("glyph", "play");   // P2.9: device-lost resets to the Start glyph
         // #3 heal (same strand as the Stop path): a mid-run FIR change whose build no-oped on the reconfig
         // gate must be re-posted now the engine is out of Running, or the Start gate stays closed forever.
         if (engine.requestedGeneration() != engine.builtGeneration())

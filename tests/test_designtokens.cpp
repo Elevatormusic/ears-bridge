@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "gui/Theme.h"
+#include "gui/Glyphs.h"
 #include "gui/juce_design_probe.h"
 #include "gui/HigScore.h"
 
@@ -59,4 +60,30 @@ TEST_CASE("P2.9 tokens: primaryFill values are the W2/M3 pins") {
     CHECK (eb::Theme::primaryFill()  == juce::Colour (0xff0088FF));   // macOS 27 System Blue light
     CHECK (eb::Theme::accentText()   == juce::Colour (0xff0067D6));   // 4.55:1 on #ECECEE
     theme.setDarkForTest (wasDark);
+}
+
+TEST_CASE("P2.9 glyphs: every glyph renders inside its box and never bleeds outside") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    using Fn = void (*) (juce::Graphics&, juce::Rectangle<float>, juce::Colour);
+    struct G { const char* name; Fn fn; };
+    const G glyphs[] = {
+        { "play",    eb::glyph::drawPlay },    { "stop",   eb::glyph::drawStop },
+        { "tick",    eb::glyph::drawTick },    { "info",   eb::glyph::drawInfo },
+        { "refresh", eb::glyph::drawRefresh }, { "folder", eb::glyph::drawFolder },
+        { "export",  eb::glyph::drawExport },  { "warning", eb::glyph::drawWarning },
+    };
+    for (const auto& g : glyphs) {
+        juce::Image img (juce::Image::ARGB, 24, 24, true);
+        { juce::Graphics gc (img); g.fn (gc, { 4.0f, 4.0f, 16.0f, 16.0f }, juce::Colours::white); }
+        int inside = 0, outside = 0;
+        for (int y = 0; y < 24; ++y)
+            for (int x = 0; x < 24; ++x) {
+                if (img.getPixelAt (x, y).getAlpha() == 0) continue;
+                const bool in = x >= 3 && x < 21 && y >= 3 && y < 21;   // box + 1px stroke tolerance
+                (in ? inside : outside)++;
+            }
+        INFO (g.name << " inside=" << inside << " outside=" << outside);
+        CHECK (inside > 12);      // it drew something substantive
+        CHECK (outside == 0);     // and stayed in its box
+    }
 }

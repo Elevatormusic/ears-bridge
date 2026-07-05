@@ -1,5 +1,6 @@
 #include "gui/WizardSpine.h"
 #include "gui/Theme.h"
+#include "gui/Glyphs.h"
 
 namespace eb {
 
@@ -150,14 +151,7 @@ struct WizardSpine::StepRow : public juce::Component {
 
         g.setColour (glyphCol);
         if (state == StepState::Done) {
-            // check mark
-            juce::Path p;
-            const float cx = node.getCentreX(), cy = node.getCentreY();
-            p.startNewSubPath (cx - 4.5f, cy + 0.3f);
-            p.lineTo          (cx - 1.5f, cy + 3.3f);
-            p.lineTo          (cx + 5.0f, cy - 3.5f);
-            g.strokePath (p, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved,
-                                                        juce::PathStrokeType::rounded));
+            eb::glyph::drawTick (g, node.reduced (5.5f), glyphCol);   // 13px tick in the 24px node (W2 node tick)
         } else if (state == StepState::Error) {
             g.setFont (juce::Font (juce::FontOptions (13.0f).withStyle ("Bold")));
             g.drawText ("!", node, juce::Justification::centred, false);
@@ -265,6 +259,14 @@ void WizardSpine::paint (juce::Graphics& g) {
         g.fillRect ((float) (kPadX + kRowPadX), hy,
                     (float) juce::jmax (0, getWidth() - 2 * (kPadX + kRowPadX)), 1.0f);
     }
+
+    // P2.9: a "matched" tick before the reference value, only when the ref status is positive (W2 .matched).
+    if (refPositive_ && refValue.isVisible() && refValue.getText().isNotEmpty()) {
+        const juce::Font f (juce::FontOptions (11.5f));
+        const float tw = juce::GlyphArrangement::getStringWidth (f, refValue.getText());
+        const auto  rb = refValue.getBounds().toFloat();
+        eb::glyph::drawTick (g, { rb.getRight() - tw - 17.0f, rb.getCentreY() - 6.0f, 12.0f, 12.0f }, Theme::ok());
+    }
 }
 
 void WizardSpine::setState (const WizardState& ws, const juce::String viewMetas[kWizardStepCount],
@@ -330,6 +332,7 @@ void WizardSpine::setState (const WizardState& ws, const juce::String viewMetas[
                           && (refLine1.containsIgnoreCase ("matched")
                               || refLine1.containsIgnoreCase ("learned")
                               || refLine1.containsIgnoreCase ("loaded"));
+    if (refPositive != refPositive_) { refPositive_ = refPositive; repaint(); }   // repaint-discipline: only on flip
     setLabelIfChanged (refValue,  refLine1, refPositive ? Theme::ok() : Theme::textDim());
     setLabelIfChanged (refValue2, refLine2, Theme::textFaint());
     setLabelIfChanged (refLabel2, refLine2.isNotEmpty() ? juce::String ("Learned from") : juce::String(),

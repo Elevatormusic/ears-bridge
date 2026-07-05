@@ -1,5 +1,6 @@
 #include "gui/Theme.h"
 #include "gui/SystemA11y.h"
+#include "gui/Glyphs.h"
 
 namespace eb {
 
@@ -162,6 +163,42 @@ void Theme::paintCardSurface (juce::Graphics& g, juce::Rectangle<float> r, float
     g.fillRoundedRectangle (r, radius);
     g.setColour (sep());                                   // W2: 1px rgba(255,255,255,.12) hairline
     g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.0f);
+}
+
+void Theme::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool /*over*/, bool /*down*/) {
+    const juce::Font font (getTextButtonFont (b, b.getHeight()));
+    const juce::Colour col = b.findColour (b.getToggleState() ? juce::TextButton::textColourOnId
+                                                              : juce::TextButton::textColourOffId)
+                                .withMultipliedAlpha (b.isEnabled() ? 1.0f : 0.5f);
+    const auto id = b.getProperties().getWithDefault ("glyph", juce::String()).toString();
+    if (id.isEmpty()) { LookAndFeel_V4::drawButtonText (g, b, false, false); return; }
+
+    using Fn = void (*) (juce::Graphics&, juce::Rectangle<float>, juce::Colour);
+    Fn fn = nullptr;
+    if      (id == "play")    fn = glyph::drawPlay;
+    else if (id == "stop")    fn = glyph::drawStop;
+    else if (id == "tick")    fn = glyph::drawTick;
+    else if (id == "info")    fn = glyph::drawInfo;
+    else if (id == "refresh") fn = glyph::drawRefresh;
+    else if (id == "folder")  fn = glyph::drawFolder;
+    else if (id == "export")  fn = glyph::drawExport;
+    else if (id == "warning") fn = glyph::drawWarning;
+    if (fn == nullptr) { LookAndFeel_V4::drawButtonText (g, b, false, false); return; }
+
+    constexpr float ico = 14.0f, gap = 7.0f;                       // W2 .btn .ico 14px + 7px gap
+    const float availW = (float) b.getWidth() - 16.0f;             // capsule side padding
+    const float textW  = juce::jmin (availW - ico - gap,
+                                     juce::GlyphArrangement::getStringWidth (font, b.getButtonText()));
+    const float total  = ico + gap + juce::jmax (0.0f, textW);
+    const float x0     = ((float) b.getWidth() - total) * 0.5f;
+    const float cy     = (float) b.getHeight() * 0.5f;
+    fn (g, { x0, cy - ico * 0.5f, ico, ico }, col);
+    g.setColour (col);
+    g.setFont (font);
+    g.drawFittedText (b.getButtonText(),
+                      juce::Rectangle<float> (x0 + ico + gap, 0.0f, juce::jmax (0.0f, textW),
+                                              (float) b.getHeight()).toNearestInt(),
+                      juce::Justification::centredLeft, 1);
 }
 
 } // namespace eb
