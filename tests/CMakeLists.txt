@@ -28,6 +28,7 @@ add_executable(eb_tests
     test_lrverify.cpp
     test_levelmeter.cpp
     test_calslot.cpp
+    test_curvethumbnail.cpp
     test_updatecheck.cpp
     test_clipstatus.cpp
     test_rawrailstatus.cpp

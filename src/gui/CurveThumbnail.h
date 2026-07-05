@@ -21,6 +21,9 @@ public:
 
     void paint (juce::Graphics&) override;
 
+    // M5/L1 (spec §10): the plot exposes the image a11y role + a live description.
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
+
 private:
     std::optional<eb::CalFile> curve;
     float topDb = 24.0f, botDb = -24.0f;   // auto-fit to the data on setCalFile

@@ -6,13 +6,28 @@
 
 namespace eb {
 
-CurveThumbnail::CurveThumbnail() { setOpaque (false); }
+CurveThumbnail::CurveThumbnail() {
+    setOpaque (false);
+    // M5/L1: name + describe the plot for assistive tech (the owner may re-title per ear).
+    setTitle ("Calibration frequency response");
+    setDescription ("No calibration loaded");
+}
 
-void CurveThumbnail::clear() { curve.reset(); repaint(); }
+std::unique_ptr<juce::AccessibilityHandler> CurveThumbnail::createAccessibilityHandler() {
+    return std::make_unique<juce::AccessibilityHandler> (*this, juce::AccessibilityRole::image);
+}
+
+void CurveThumbnail::clear() {
+    curve.reset();
+    setDescription ("No calibration loaded");
+    repaint();
+}
 
 void CurveThumbnail::setCalFile (const eb::CalFile& cal) {
     curve = cal;
     setRange (autoFitTopDb());
+    setDescription ("Calibration curve, range plus/minus " + juce::String ((int) topDb)
+                    + " dB, " + juce::String ((int) curve->points.size()) + " points");
 }
 
 float CurveThumbnail::autoFitTopDb() const {
@@ -69,11 +84,24 @@ void CurveThumbnail::paint (juce::Graphics& g) {
     g.setColour (Theme::accent());
     g.strokePath (path, juce::PathStrokeType (1.5f));
 
-    // dB axis label (top of the fitted range).
+    // L9: axis labels - dB extremes (stacked top-left, clear of the bottom Hz row) and the
+    // decade frequencies centred under their gridlines. 10px axis() text, painted (the probe
+    // does not score painted text; Task 8/9 verify the render).
     g.setColour (Theme::axis());
-    g.setFont (juce::Font (juce::FontOptions (11.0f)));
-    g.drawText (juce::String ((int) topDb) + " dB",
-                r.removeFromTop (13.0f), juce::Justification::topLeft);
+    g.setFont (juce::Font (juce::FontOptions (10.0f)));
+    auto lbl = r.withTrimmedLeft (4.0f);
+    g.drawText ("+" + juce::String ((int) topDb) + " dB",
+                lbl.removeFromTop (12.0f), juce::Justification::topLeft);
+    g.drawText (juce::String ((int) botDb) + " dB",
+                lbl.removeFromTop (12.0f), juce::Justification::topLeft);
+    if (W >= 120.0f) {
+        struct Fq { float hz; const char* tx; };
+        for (const auto& f : { Fq { 100.0f, "100" }, Fq { 1000.0f, "1k" }, Fq { 10000.0f, "10k" } }) {
+            const float x = r.getX() + freqToX (f.hz, W);
+            g.drawText (f.tx, juce::Rectangle<float> (x - 14.0f, r.getBottom() - 13.0f, 28.0f, 12.0f),
+                        juce::Justification::centred);
+        }
+    }
 }
 
 } // namespace eb
