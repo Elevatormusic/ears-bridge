@@ -11,6 +11,8 @@ StageHeader::StageHeader (const juce::String& eyebrow, const juce::String& title
     sub_.setJustificationType (juce::Justification::topLeft);
     sub_.setMinimumHorizontalScale (1.0f);                    // wrap, never squish
     runNote_.setJustificationType (juce::Justification::centredRight);
+    runNote_.setComponentID ("calRunNote");                    // findable in the layout probe / tests
+    runNote_.setMinimumHorizontalScale (1.0f);                 // never squash - let the probe catch true overflow
     cta_.setButtonText (ctaText);
     cta_.getProperties().set ("primary", true);
     cta_.setEnabled (false);                                  // owner wires enablement to Done-ness

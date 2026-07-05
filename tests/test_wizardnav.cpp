@@ -228,16 +228,23 @@ TEST_CASE("Calibrate stage: run-note carries the machine reason while not Done")
     const auto jf = tmp.getChildFile ("d.json");
     const auto pf = tmp.getChildFile ("d.png");
     hig::writeDesignProbe (mc, jf, pf);
-    bool sawReason = false;
+    // Pin THE header's own run-note element (componentID "calRunNote"), not just "some showing element
+    // whose label matches" - the spine's per-step meta Label has carried the same machine reason since
+    // P1, so a label-only match stays green even if the header wiring is deleted. Find the element by
+    // its id, then assert ITS label is the machine reason.
     // Bind the parsed tree to a named local before taking getArray() - the array pointer is owned by
     // the parsed var, so `JSON::parse(jf).getProperty(...).getArray()` would dangle at the end of the
     // full expression (the idiom every other probe test uses: hold `tree`, then iterate).
     const auto tree = juce::JSON::parse (jf);
+    bool foundRunNote = false, runNoteHasReason = false;
     if (const auto* els = tree.getProperty ("elements", {}).getArray())
         for (auto& e : *els)
-            if ((bool) e.getProperty ("showing", false)
-                && e.getProperty ("label", {}).toString() == eb::kReasonNoCals())
-                sawReason = true;
-    CHECK (sawReason);
+            if (e.getProperty ("id", {}).toString() == "calRunNote"
+                && (bool) e.getProperty ("showing", false)) {
+                foundRunNote = true;
+                runNoteHasReason = e.getProperty ("label", {}).toString() == eb::kReasonNoCals();
+            }
+    CHECK (foundRunNote);        // the header's run-note element is present + showing
+    CHECK (runNoteHasReason);    // and IT (not some sibling) carries the machine reason
     tmp.deleteRecursively();
 }
