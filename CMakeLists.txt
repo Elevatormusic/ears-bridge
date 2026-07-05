@@ -139,6 +139,7 @@ add_library(eb_gui STATIC
     src/gui/LevelMeter.cpp
     src/gui/CurveThumbnail.cpp
     src/gui/CalSlotComponent.cpp
+    src/gui/DisclosureRow.cpp
     src/gui/DevicePicker.cpp
     src/gui/HigScore.cpp
     src/gui/WizardSpine.cpp
