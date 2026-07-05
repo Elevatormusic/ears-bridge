@@ -28,7 +28,7 @@ void StageHeader::applyTheme() {
     eyebrow_.setColour (juce::Label::textColourId, Theme::textDim());
     eyebrow_.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")).withExtraKerningFactor (0.07f));
     title_.setColour (juce::Label::textColourId, Theme::text());
-    title_.setFont (juce::Font (juce::FontOptions (21.0f).withStyle ("Bold")));
+    title_.setFont (juce::Font (juce::FontOptions (22.0f).withStyle ("Bold")));   // macOS 27 Title1 (22 w700, lh 26)
     sub_.setColour (juce::Label::textColourId, Theme::textDim());
     sub_.setFont (juce::Font (juce::FontOptions (13.0f)));
     runNote_.setColour (juce::Label::textColourId, Theme::textDim());
@@ -42,7 +42,7 @@ void StageHeader::setRunNote (const juce::String& s) {
 
 void StageHeader::resized() {
     auto r = getLocalBounds();
-    r.removeFromTop (26);                                     // frames: 26px stage top padding
+    r.removeFromTop (12);                 // T10: frame's 26px yielded to the fold budget (ledgered deviation)
     auto cluster = r.removeFromRight (kCtaW);
     cta_.setBounds (cluster.removeFromTop (kCtaBtnH).removeFromRight (kCtaBtnW));
     cluster.removeFromTop (6);
@@ -50,9 +50,9 @@ void StageHeader::resized() {
     r.removeFromRight (16);
     eyebrow_.setBounds (r.removeFromTop (16));
     r.removeFromTop (4);
-    title_.setBounds (r.removeFromTop (26));
-    r.removeFromTop (5);
-    sub_.setBounds (r.removeFromTop (40));
+    title_.setBounds (r.removeFromTop (26));   // Title1 leading
+    r.removeFromTop (4);
+    sub_.setBounds (r.removeFromTop (34));     // 2 lines of Body 13 (lh 16) + border
 }
 
 } // namespace eb

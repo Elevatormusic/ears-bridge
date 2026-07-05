@@ -110,6 +110,14 @@ int ConnectStage::layoutContent (int width) {
     const int x0   = (width - colW) / 2;
     auto rr = juce::Rectangle<int> (x0, 0, colW, 100000);
     rr.removeFromTop (4);
+    // T10 Task-2 BRIDGE (superseded by Task 3's layoutContent rewrite): kHeight 124->96 freed 28px of
+    // viewport, which pulled the still-tall (pre-compaction) FORMAT card's RATE/BIT combos from fully
+    // scrolled-out to STRADDLING the 900x720 fold at 4px tall - a target-size finding in the 64-cell
+    // matrix. Task 2 owns only StageHeader and must not do Task 3's column compaction, and the ledgered
+    // kHeight=96 is fixed. This 8px top pad restores the pre-change "row sits below the fold, not scored"
+    // state (the brief's Step-4 assumption) until Task 3 compacts the column so everything fits above the
+    // fold. Task 3 replaces this whole function, erasing this line.
+    rr.removeFromTop (8);
 
     int cardTop = 0;
     const auto beginCard = [&] { cardTop = rr.getY(); rr.removeFromTop (kCardPad); };

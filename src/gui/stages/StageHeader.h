@@ -16,7 +16,7 @@ public:
     void setRunNoteComponentID (const juce::String& id) { runNote_.setComponentID (id); }
     void applyTheme();
     void resized() override;
-    static constexpr int kHeight = 124;
+    static constexpr int kHeight = 96;   // T10 ledger: 12+16+4+26+4+34
     static constexpr int kCtaW = 240, kCtaBtnW = 200, kCtaBtnH = 34, kRunNoteH = 14;
 private:
     juce::Label eyebrow_, title_, sub_, runNote_;
