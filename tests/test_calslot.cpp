@@ -174,3 +174,89 @@ TEST_CASE("CalSlotComponent empty state: probe-clean at the minimum cell width")
         if ((bool) e.getProperty ("showing", false))
             CHECK_FALSE ((bool) e.getProperty ("textOverflows", false));
 }
+
+// ---- P2 loaded-card redesign --------------------------------------------------------------------
+
+// Map #4/#5: HEQ/HPN per-TYPE guidance moved to the ONE stage caption (it rendered once per
+// card - twice for a pair). The card's calWarn stays free for real per-file cautions.
+TEST_CASE("CalSlotComponent loaded card: HEQ and HPN guidance no longer occupy the card") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    for (const char* marker : { "* HEQ", "* HPN curve" }) {
+        eb::CalSlotComponent slot ("Left ear");
+        slot.setSize (289, 300);
+        auto tmp = juce::File::createTempFile (".txt");
+        tmp.replaceWithText (juce::String (marker) + "\n20 0.0\n100 1.0\n1000 2.0\n10000 -1.0\n20000 -3.0\n");
+        REQUIRE (slot.loadFromFile (tmp));
+        tmp.deleteFile();
+        CHECK_FALSE (slot.findChildWithID ("calWarn")->isVisible());
+        CHECK (slot.findChildWithID ("calSerial")->isVisible());
+        CHECK (slot.findChildWithID ("calFile")->isVisible());
+    }
+}
+
+// Map #1/#2 + the NEGATIVE: the swap banner still renders on the redesigned card - and a clean
+// load shows NO banner (the problem surface cannot false-fire).
+TEST_CASE("CalSlotComponent: problem banner on the redesigned card, absent on a clean card") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::CalSlotComponent slot ("Left ear");
+    auto tmp = juce::File::createTempFile (".txt");
+    tmp.replaceWithText ("* HEQ\n20 0.0\n100 1.0\n1000 2.0\n10000 -1.0\n20000 -3.0\n");
+    REQUIRE (slot.loadFromFile (tmp));
+    tmp.deleteFile();
+    auto* problem = slot.findChildWithID ("calProblem");
+    REQUIRE (problem != nullptr);
+    CHECK_FALSE (problem->isVisible());                       // NEGATIVE half
+    slot.setProblem ("This looks like the RIGHT cal, but it's in the LEFT slot - swap the files.");
+    slot.setSize (289, slot.preferredHeight());
+    CHECK (problem->isVisible());
+    CHECK_FALSE (problem->getBounds().intersects (slot.findChildWithID ("calFile")->getBounds()));
+    slot.setProblem ({});
+    CHECK_FALSE (problem->isVisible());
+}
+
+// The stage re-layout hook: every height-changing state flip announces itself exactly once
+// (setProblem's set-if-changed guard also suppresses the no-op repeat).
+TEST_CASE("CalSlotComponent: onLayoutChanged fires on load, problem flips and clear - not on no-ops") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::CalSlotComponent slot ("Right ear");
+    slot.setSize (289, slot.preferredHeight());
+    int fired = 0;
+    slot.onLayoutChanged = [&] { ++fired; };
+    auto tmp = juce::File::createTempFile (".txt");
+    tmp.replaceWithText ("* HEQ\n20 0.0\n100 1.0\n1000 2.0\n10000 -1.0\n20000 -3.0\n");
+    REQUIRE (slot.loadFromFile (tmp));
+    tmp.deleteFile();
+    CHECK (fired == 1);
+    slot.setProblem ("swap");   CHECK (fired == 2);
+    slot.setProblem ("swap");   CHECK (fired == 2);           // no-op guard
+    slot.setProblem ({});       CHECK (fired == 3);
+    slot.clearCal();            CHECK (fired == 4);
+}
+
+// Worst-case loaded card (Unknown-type caution + swap banner) probe-clean at the minimum cell
+// width: nothing clips, and the four text rows occupy disjoint rectangles.
+TEST_CASE("CalSlotComponent loaded card: worst case probe-clean at the minimum cell width") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::CalSlotComponent slot ("Left ear");
+    auto tmp = juce::File::createTempFile (".txt");
+    tmp.replaceWithText ("* House Curve\n20 0.0\n100 1.0\n1000 2.0\n10000 -1.0\n20000 -3.0\n");
+    REQUIRE (slot.loadFromFile (tmp));                        // Unknown type -> on-card caution
+    tmp.deleteFile();
+    slot.setProblem ("This looks like the RIGHT cal, but it's in the LEFT slot - swap the files.");
+    slot.setSize (289, slot.preferredHeight());
+    const auto tree = juce::JSON::parse (hig::describeComponentTree (slot));
+    const auto* els = tree.getProperty ("elements", {}).getArray();
+    REQUIRE (els != nullptr);
+    for (auto& e : *els)
+        if ((bool) e.getProperty ("showing", false))
+            CHECK_FALSE ((bool) e.getProperty ("textOverflows", false));
+    const char* ids[] = { "calProblem", "calWarn", "calFile", "calSerial" };
+    for (int i = 0; i < 4; ++i)
+        for (int j = i + 1; j < 4; ++j) {
+            auto* a = slot.findChildWithID (ids[i]);
+            auto* b = slot.findChildWithID (ids[j]);
+            REQUIRE (a != nullptr); REQUIRE (b != nullptr);
+            if (a->isVisible() && b->isVisible())
+                CHECK_FALSE (a->getBounds().intersects (b->getBounds()));
+        }
+}

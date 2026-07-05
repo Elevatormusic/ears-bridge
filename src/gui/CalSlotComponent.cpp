@@ -43,12 +43,20 @@ constexpr int kBtnRowH = 28, kBtnGap = 8;
 CalSlotComponent::CalSlotComponent (juce::String name) : earName (std::move (name)) {
     setTitle (earName + " calibration");   // accessible name (VoiceOver)
     addAndMakeVisible (thumbnail);
+    thumbnail.setTitle (earName + " calibration curve");   // M5/L1: per-ear image name
     thumbnail.setVisible (false);
 
     fileLabel.setColour (juce::Label::textColourId, Theme::textDim());
     fileLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     fileLabel.setJustificationType (juce::Justification::centredLeft);
     addChildComponent (fileLabel);
+
+    replaceBtn.setButtonText ("Replace...");                  // opens a chooser -> ellipsis verb
+    serialLabel.setColour (juce::Label::textColourId, Theme::textDim());
+    serialLabel.setFont (juce::Font (juce::FontOptions (11.5f)));
+    serialLabel.setJustificationType (juce::Justification::centredLeft);
+    serialLabel.setComponentID ("calSerial");
+    addChildComponent (serialLabel);
 
     errorLabel.setColour (juce::Label::textColourId, Theme::danger());
     errorLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
@@ -195,23 +203,14 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
     cal = parsed;
     typeTag = typeName (parsed.type);
     rawCaution = (parsed.type == eb::CalType::Raw);
-    fileLabel.setText (file.getFileName()
-                       + "  -  serial " + (parsed.serial.isNotEmpty() ? parsed.serial : juce::String ("?")),
-                       juce::dontSendNotification);
-    // Per-type guidance. miniDSP recommends HEQ for Dirac headphone EQ ("We suggest using the HEQ
-    // calibration file"), so HEQ is a calm INFO note, not a warning. HPN = legacy info; RAW = caution
-    // (mic-only, miniDSP-unsupported); Unknown = caution (unidentified).
-    if (parsed.type == eb::CalType::Heq) {
-        errorLabel.setColour (juce::Label::textColourId, Theme::textDim());
-        errorLabel.setText ("Recommended for Dirac. HEQ has a mild bass boost built in - in Dirac, start "
-                            "with a flat target in the bass, then adjust to taste.", juce::dontSendNotification);
-        errorLabel.setVisible (true);
-    } else if (parsed.type == eb::CalType::Hpn) {
-        errorLabel.setColour (juce::Label::textColourId, Theme::textDim());
-        errorLabel.setText ("HPN is miniDSP's older curve (not offered on EARS Pro). It works, but HEQ is "
-                            "now recommended for headphone EQ.", juce::dontSendNotification);
-        errorLabel.setVisible (true);
-    } else if (parsed.type == eb::CalType::Raw) {
+    fileLabel.setText (file.getFileName(), juce::dontSendNotification);
+    serialLabel.setText ("Serial " + (parsed.serial.isNotEmpty() ? parsed.serial
+                                                                 : juce::String ("not found")),
+                         juce::dontSendNotification);
+    // Per-file CAUTIONS stay on the card (they are about THIS file). Per-TYPE guidance (HEQ /
+    // HPN) moved to the ONE stage-level caption - spec 5.2: it used to render once per card,
+    // twice for a pair (the "duplicated warning"). CalibrateStage::stageCaptionFor owns it now.
+    if (parsed.type == eb::CalType::Raw) {
         errorLabel.setColour (juce::Label::textColourId, Theme::warn());
         errorLabel.setText ("RAW is mic-capsule-only with no compensation (miniDSP marks it unsupported). "
                             "Use HEQ for Dirac unless you specifically need RAW.", juce::dontSendNotification);
@@ -221,7 +220,7 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
         errorLabel.setText ("Couldn't identify this calibration type - confirm it's an EARS HEQ file.",
                             juce::dontSendNotification);
         errorLabel.setVisible (true);
-    } else {   // Idf (in-ear) - no headphone guidance note
+    } else {   // Heq / Hpn / Idf - no on-card note (the stage caption carries the pair guidance)
         errorLabel.setText ({}, juce::dontSendNotification);
         errorLabel.setVisible (false);
     }
@@ -248,6 +247,7 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
     thumbnail.setCalFile (parsed);
     thumbnail.setVisible (true);
     fileLabel.setVisible (true);
+    serialLabel.setVisible (true);
     replaceBtn.setVisible (true);
     removeBtn.setVisible (true);
     refreshStateVisibility();
@@ -261,11 +261,13 @@ void CalSlotComponent::clearCal() {
     typeTag = {};
     rawCaution = false;
     fileLabel.setText ({}, juce::dontSendNotification);
+    serialLabel.setText ({}, juce::dontSendNotification);
     errorLabel.setText ({}, juce::dontSendNotification);
     problemLabel.setText ({}, juce::dontSendNotification);
     thumbnail.clear();
     thumbnail.setVisible (false);
     fileLabel.setVisible (false);
+    serialLabel.setVisible (false);
     errorLabel.setVisible (false);
     problemLabel.setVisible (false);   // an emptied slot has no swap to warn about
     replaceBtn.setVisible (false);
@@ -306,7 +308,14 @@ void CalSlotComponent::setSiblingLoaded (bool other) {
 }
 
 int CalSlotComponent::preferredHeight() const {
-    if (cal) return 206;   // P1 loaded layout height - Task 3 (loaded-card redesign) replaces this
+    if (cal) {
+        int h = kPadY + kHeaderH + kHeadGap;
+        if (problemLabel.isVisible()) h += kProblemH + kProblemGap;
+        h += kThumbH + 6 + kFileH + 2 + kSerialH;
+        if (errorLabel.isVisible()) h += kNoteGap + kNoteH;
+        h += 8 + kBtnRowH;
+        return h + kPadY;
+    }
     int h = kPadY + kHeaderH + kHeadGap;
     if (problemLabel.isVisible()) h += kProblemH + kProblemGap;
     int body = kDzGap + kDzIconH + kDzGapSm + kDzMainH + kDzGap + kDzBrowseH;
@@ -325,6 +334,7 @@ void CalSlotComponent::setPlotRange (float topDb) { thumbnail.setRange (topDb); 
 
 void CalSlotComponent::applyTheme() {
     fileLabel.setColour (juce::Label::textColourId, Theme::textDim());
+    serialLabel.setColour (juce::Label::textColourId, Theme::textDim());
     errorLabel.setColour (juce::Label::textColourId, Theme::danger());
     problemLabel.setColour (juce::Label::textColourId, Theme::danger());
     dzMain.setColour (juce::Label::textColourId, Theme::text());
@@ -346,22 +356,20 @@ void CalSlotComponent::resized() {
     }
 
     if (cal) {
-        auto meta = r.removeFromBottom (28);
-        replaceBtn.setBounds (meta.removeFromRight (96));
-        meta.removeFromRight (8);
-        removeBtn.setBounds (meta.removeFromRight (84));
-        meta.removeFromRight (10);
-        fileLabel.setBounds (meta);
-        // A type warning (HEQ / unidentified) gets its OWN line directly above the filename row, so it
-        // never lands on top of the filename label. It used to share `meta`'s bounds, so a HEQ or
-        // unknown-type file drew the warning and the filename in the same rectangle -> unreadable.
-        // The space is only carved out when a warning is actually visible (clean cards keep the room).
+        thumbnail.setBounds (r.removeFromTop (kThumbH));
+        r.removeFromTop (6);
+        fileLabel.setBounds (r.removeFromTop (kFileH));
+        r.removeFromTop (2);
+        serialLabel.setBounds (r.removeFromTop (kSerialH));
         if (errorLabel.isVisible()) {
-            r.removeFromBottom (8);
-            errorLabel.setBounds (r.removeFromBottom (34));
+            r.removeFromTop (kNoteGap);
+            errorLabel.setBounds (r.removeFromTop (kNoteH));
         }
-        r.removeFromBottom (10);
-        thumbnail.setBounds (r);
+        r.removeFromTop (8);
+        auto btns = r.removeFromTop (kBtnRowH);
+        replaceBtn.setBounds (btns.removeFromRight (100));
+        btns.removeFromRight (kBtnGap);
+        removeBtn.setBounds (btns.removeFromRight (88));
     } else {
         // EMPTY: #38 error strip first (bottom), then the centred drop-zone stack. dzIconArea is
         // recorded for paint() so the glyph and the labels can never drift apart.

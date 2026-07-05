@@ -64,6 +64,7 @@ private:
 
     juce::String earName;
     juce::Label  fileLabel;     // "L_HPN.txt - serial 000-0000"
+    juce::Label  serialLabel;   // "Serial 000-0000" (own line under the filename)
     juce::Label  errorLabel;    // parse error (red), hidden unless set
     juce::Label  problemLabel;  // loud red swap banner under the title (setProblem); hidden unless set
     juce::TextButton replaceBtn { "Replace" };
