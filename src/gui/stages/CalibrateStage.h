@@ -36,6 +36,12 @@ public:
     void setAdvancedOpen (bool open);              // also the gate/harness seam
     bool advancedOpenForTest() const { return advancedFir_.isOpen(); }
 
+    // Unity path (spec 5.2): visible only while BOTH slots are empty; `accepted` swaps the
+    // wording and retires the button (the header CTA takes over). MainComponent owns the flag.
+    void setUnityState (bool bothSlotsEmpty, bool accepted);
+    std::function<void()> onContinueWithoutCal;
+    juce::TextButton& unityButtonForTest() { return unityBtn_; }
+
     // Pure copy rules (headlessly tested in test_calibratestage.cpp):
     static juce::String stageCaptionFor (std::optional<CalType> left, std::optional<CalType> right);
     static juce::String advancedFirSummary (bool complexPhase, int firLength /*0=auto*/, double trimDb);
@@ -61,6 +67,8 @@ private:
     juce::Viewport viewport_;
     Content        content_;
     InfoCaption    caption_;
+    juce::Label    unityHint_;
+    juce::TextButton unityBtn_ { "Continue without calibration" };
     DisclosureRow  advancedFir_ { "Advanced FIR" };
 
     CalSlotComponent*   leftCal_ = nullptr;

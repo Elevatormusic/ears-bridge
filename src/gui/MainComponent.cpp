@@ -538,6 +538,17 @@ MainComponent::MainComponent (const TestConfig& cfg)
     // navigation); give them the same pin-and-refresh path the spine uses so the seam is already in place.
     connectStage_.onContinue   = [this] { pinnedStep_ = WizardStep::Calibrate; refreshWizardView(); };
     calibrateStage_.onContinue = [this] { pinnedStep_ = WizardStep::Level;     refreshWizardView(); };
+    // §5.2 unity path: an EXPLICIT choice to continue without calibration. It flips the SESSION-scoped
+    // flag (never persisted) so the WIZARD's Calibrate reads Done, then navigates like any continue. It
+    // deliberately does NOT touch the engine Start gate (startReady already allows noCalsLoaded), and is
+    // NOT frozen while Running (accepting unity changes wizard done-ness only, never the engine).
+    calibrateStage_.onContinueWithoutCal = [this] {
+        unityAcceptedSession_ = true;                        // explicit choice, this session only
+        logLine (eb::DiagnosticLog::Level::Info,
+                 "Calibrate: continue without calibration (unity passthrough)");
+        pinnedStep_ = WizardStep::Level;                     // user-invoked navigation (a continue)
+        refreshWizardView();
+    };
     levelStage_.onContinue     = [this] { pinnedStep_ = WizardStep::Measure;   refreshWizardView(); };
 
     updateStartGate();
@@ -886,6 +897,7 @@ void MainComponent::onCombineChosen() {
 }
 
 void MainComponent::onLeftCalLoaded (const juce::File& f) {
+    unityAcceptedSession_ = false;   // new evidence supersedes the unity choice (map #8)
     settings.setLeftCalPath (f.getFullPathName());
     // Track the serial so logLine() can scrub it everywhere (the backstop). NEVER log the value itself —
     // only that a serial is present and its length, per the brief.
@@ -897,6 +909,7 @@ void MainComponent::onLeftCalLoaded (const juce::File& f) {
     rebuildFirsAsync();
 }
 void MainComponent::onRightCalLoaded (const juce::File& f) {
+    unityAcceptedSession_ = false;   // new evidence supersedes the unity choice (map #8)
     settings.setRightCalPath (f.getFullPathName());
     juce::String serial;
     if (auto c = rightCal.calFile()) serial = c->serial;
@@ -1268,7 +1281,9 @@ eb::WizardInputs MainComponent::snapshotWizardInputs() const {
     // anyCalProblem() is the shared computation; its pair branch is already build-generation-guarded
     // (a stale diagnostic from the prior generation reads empty), matching the old calBuilding mask.
     in.calProblem     = anyCalProblem();
-    in.unityAccepted  = false;   // P1: no explicit continue-without-cal path yet (Task 4 / Phase 2)
+    // §5.2: the unity choice only ever applies while noCalsLoaded holds - a loaded cal masks
+    // it even before the reset in onXCalLoaded lands (belt + braces; done-ness stays computed).
+    in.unityAccepted  = unityAcceptedSession_ && gate.noCalsLoaded;
     in.engineRunning  = engine.status() == EngineStatus::Running;
     in.levelLatched   = levelLatched_;   // Task 4: set once L+R reached the green band this session (timerCallback)
     in.referenceLoaded = ! loadedReferenceL_.empty() && ! loadedReferenceR_.empty();
@@ -1302,6 +1317,10 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
     // Calibrate done-summary "HEQ pair · <serial>" (spec § view metas). Only when the step is Done (both
     // cals loaded + applied) — else the machine reason (Todo/Error/rebuilding) stays.
     if (ws.steps[(int) WizardStep::Calibrate].state == StepState::Done) {
+        // §5.2 unity: Calibrate can be Done with NO cals (explicit continue-without-cal). Stamp the
+        // honest meta - guarded on both-empty so it never collides with the pair summary below.
+        if (! leftCal.hasCal() && ! rightCal.hasCal())
+            viewMetas[(int) WizardStep::Calibrate] = "No calibration (unity)";
         if (auto lc = leftCal.calFile()) {
             const juce::String typeName = calTypeShortName (lc->type);
             const juce::String serial   = lc->serial.isNotEmpty() ? lc->serial
@@ -1364,6 +1383,11 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
                                                                       slotType (rightCal.calFile())));
     calibrateStage_.setAdvancedSummary (CalibrateStage::advancedFirSummary (
         settings.complexPhase(), settings.firLength(), settings.outputTrimDb()));
+    // §5.2 unity path: the hint + button live at stage level and show only while BOTH slots are empty;
+    // the accepted wording (button retired) rides `unityAcceptedSession_ && noCalsLoaded` (masked once a
+    // cal loads, exactly like the snapshot input above).
+    const bool noCalsLoaded = settings.leftCalPath().isEmpty() && settings.rightCalPath().isEmpty();
+    calibrateStage_.setUnityState (noCalsLoaded, unityAcceptedSession_ && noCalsLoaded);
     leftCal.setSiblingLoaded  (rightCal.hasCal());   // map #8b/#10: the honest Required line
     rightCal.setSiblingLoaded (leftCal.hasCal());
 

@@ -87,6 +87,8 @@ public:
     juce::TextButton& startButtonForTest() { return startStop; }
     DevicePicker&    inputPickerForTest()  { return inputPicker; }
     DevicePicker&    outputPickerForTest() { return outputPicker; }
+    CalSlotComponent& leftCalForTest()  { return leftCal; }
+    CalSlotComponent& rightCalForTest() { return rightCal; }
     // M-2 seams: drive the Level green-band latch and route an input through the SAME apply path both the
     // user pick (onInputChosen) and the hot-plug lambda use, so a test can prove a changed input key clears
     // the latch (the spine must not keep reading "In green band" on old-gain evidence after a replug).
@@ -174,6 +176,7 @@ private:
     // Level SOFT-gate latch (§3.2): set once L and R meter dB both reached the green band [-18,-12] this
     // session while Running; survives Stop (the knob didn't move); reset on an input-device change.
     bool levelLatched_ = false;
+    bool unityAcceptedSession_ = false;   // §5.2 explicit unity choice; session-scoped, never persisted
     // The first enabled, focusable leaf inside a stage's subtree (top-down), for explicit focus placement
     // on a stage switch. Returns the stage itself when it has no focusable child (never null once built).
     juce::Component* firstFocusTarget (WizardStep step);

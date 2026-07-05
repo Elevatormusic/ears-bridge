@@ -411,17 +411,13 @@ void CalSlotComponent::paint (juce::Graphics& g) {
     g.setFont (juce::Font (juce::FontOptions (12.0f).withStyle ("Bold")).withExtraKerningFactor (0.04f));
     g.drawText (earName.toUpperCase(), header, juce::Justification::centredLeft);
 
-    // Status badge (right).
+    // Status badge (right). The empty-card "Recommended" chip died in P2 Task 6 (map #8): the
+    // stage-level unity hint + the per-card Required line own the uncalibrated surface now.
     if (cal) {
         if (rawCaution) drawChip (g, header, juce::Justification::right, "RAW",
                                   Theme::warn().withAlpha (0.18f), Theme::warn());
         else            drawChip (g, header, juce::Justification::right, typeTag,
                                   Theme::infoBg(), Theme::infoText());
-    } else {
-        // Start is allowed with no cal (unity passthrough), so the cal is RECOMMENDED, not required. Keep the
-        // amber warn tint as a visible nudge: an uncalibrated measurement is not corrected for the EARS mic.
-        drawChip (g, header, juce::Justification::right, "Recommended",
-                  Theme::warn().withAlpha (0.16f), Theme::warn());
     }
 
     // Empty state: a dashed drop zone filling the body.

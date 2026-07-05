@@ -248,3 +248,43 @@ TEST_CASE("Calibrate stage: run-note carries the machine reason while not Done")
     CHECK (runNoteHasReason);    // and IT (not some sibling) carries the machine reason
     tmp.deleteRecursively();
 }
+
+// P2 Task 6 (spec 5.2 unity path + map #8): continue-without-calibration is an EXPLICIT,
+// session-scoped choice: it completes Calibrate, retires its own button, keeps the warning
+// visible as evidence - and ANY cal load revokes it (with the Required line lighting up on
+// the still-empty sibling).
+TEST_CASE("Unity path: explicit accept completes Calibrate; a cal load revokes it") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 780);
+    mc.pinStepForTest (eb::WizardStep::Calibrate);
+    auto& stage = mc.calibrateStageForTest();
+
+    // Fresh: both empty -> hint + button offered; CTA disabled (Calibrate Todo).
+    REQUIRE (stage.unityButtonForTest().isVisible());
+    CHECK_FALSE (stage.continueButton().isEnabled());
+
+    stage.unityButtonForTest().onClick();                     // the REAL wired path
+    // Accepted: Calibrate is Done (unity), the CTA enables, the button retires, the hint stays.
+    CHECK (stage.continueButton().isEnabled());
+    CHECK_FALSE (stage.unityButtonForTest().isVisible());
+
+    // Revocation: loading ONE cal resets the choice AND masks it (noCalsLoaded false).
+    auto cal = juce::File::createTempFile (".txt");
+    cal.replaceWithText ("* HEQ\n20 0.0\n100 1.0\n1000 2.0\n10000 -1.0\n20000 -3.0\n");
+    REQUIRE (mc.leftCalForTest().loadFromFile (cal));
+    cal.deleteFile();
+    CHECK_FALSE (stage.continueButton().isEnabled());         // one file != a valid applied pair
+    CHECK_FALSE (stage.unityButtonForTest().isVisible());     // not both-empty any more
+    // Map #8b/#10: the still-empty RIGHT card now claims Required (Start is truly blocked).
+    auto* req = mc.rightCalForTest().findChildWithID ("calDzReq");
+    REQUIRE (req != nullptr);
+    CHECK (req->isVisible());
+    // And clearing back to empty does NOT silently resurrect the old acceptance.
+    mc.leftCalForTest().clearCal();
+    CHECK (stage.unityButtonForTest().isVisible());           // offered again - not auto-applied
+    CHECK_FALSE (stage.continueButton().isEnabled());
+    tmp.deleteRecursively();
+}

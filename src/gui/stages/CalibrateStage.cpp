@@ -25,6 +25,15 @@ CalibrateStage::CalibrateStage() {
     content_.addChildComponent (caption_);             // shown while the caption text is nonempty
     content_.addAndMakeVisible (advancedFir_);
     advancedFir_.onOpenChanged = [this] (bool) { resized(); };
+
+    // Unity path (spec 5.2): a warn-toned hint + the secondary "Continue without calibration"
+    // button, both shown only while BOTH slots are empty (setUnityState drives visibility).
+    unityHint_.setJustificationType (juce::Justification::centredLeft);
+    unityHint_.setMinimumHorizontalScale (1.0f);
+    unityHint_.setComponentID ("calUnityHint");
+    content_.addChildComponent (unityHint_);
+    unityBtn_.onClick = [this] { if (onContinueWithoutCal) onContinueWithoutCal(); };
+    content_.addChildComponent (unityBtn_);
 }
 
 void CalibrateStage::setStageCaption (const juce::String& s) {
@@ -37,6 +46,21 @@ void CalibrateStage::setStageCaption (const juce::String& s) {
 
 void CalibrateStage::setAdvancedOpen (bool open) {
     advancedFir_.setOpen (open);                       // fires onOpenChanged -> resized()
+}
+
+void CalibrateStage::setUnityState (bool bothEmpty, bool accepted) {
+    const juce::String msg = ! bothEmpty ? juce::String()
+        : accepted ? "Continuing without calibration - the measurement won't be corrected for the EARS mic."
+                   : "Calibration is recommended - without it the measurement isn't corrected for the EARS mic.";
+    const bool showHint = bothEmpty;
+    const bool showBtn  = bothEmpty && ! accepted;
+    if (unityHint_.getText() == msg && unityHint_.isVisible() == showHint
+        && unityBtn_.isVisible() == showBtn)
+        return;                                               // per-tick no-op guard
+    unityHint_.setText (msg, juce::dontSendNotification);
+    unityHint_.setVisible (showHint);
+    unityBtn_.setVisible (showBtn);
+    resized();
 }
 
 juce::String CalibrateStage::stageCaptionFor (std::optional<CalType> l, std::optional<CalType> r) {
@@ -76,6 +100,7 @@ void CalibrateStage::adopt (CalSlotComponent& leftCal, CalSlotComponent& rightCa
     int fo = 1;
     leftCal.setExplicitFocusOrder            (fo++);
     rightCal.setExplicitFocusOrder           (fo++);
+    unityBtn_.setExplicitFocusOrder          (fo++);
     advancedFir_.setExplicitFocusOrder       (fo++);
     complexPhaseToggle.setExplicitFocusOrder (fo++);
     firLenBox.setExplicitFocusOrder          (fo++);
@@ -86,6 +111,8 @@ void CalibrateStage::adopt (CalSlotComponent& leftCal, CalSlotComponent& rightCa
 void CalibrateStage::applyTheme() {
     header_.applyTheme();
     caption_.applyTheme();
+    unityHint_.setColour (juce::Label::textColourId, Theme::warn());
+    unityHint_.setFont (juce::Font (juce::FontOptions (12.0f)));
 }
 
 void CalibrateStage::paint (juce::Graphics& g) {
@@ -114,7 +141,19 @@ int CalibrateStage::layoutContent (int width) {
         rr.removeFromTop (12);
     }
 
-    // (Task 6 inserts the unity row HERE, between the caption and the disclosure.)
+    // Unity row (Task 6): the warn-toned hint, then the secondary button while not yet accepted.
+    if (unityHint_.isVisible()) {
+        unityHint_.setBounds (rr.removeFromTop (18));
+        rr.removeFromTop (6);
+        if (unityBtn_.isVisible()) {
+            unityBtn_.setBounds (rr.removeFromTop (30).removeFromLeft (240));
+            rr.removeFromTop (12);
+        } else {
+            rr.removeFromTop (6);
+        }
+    } else {
+        unityBtn_.setBounds ({});
+    }
 
     advancedFir_.setBounds (rr.removeFromTop (kDiscH));
     const bool open = advancedFir_.isOpen();
