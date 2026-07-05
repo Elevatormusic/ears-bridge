@@ -4,7 +4,9 @@
 #include "gui/CalSlotComponent.h"   // P2: the loaded cal card is scored standalone (the hermetic env never has cals)
 #include "gui/juce_design_probe.h"
 #include "gui/HigScore.h"
+#include "gui/HigThresholds.h"  // T10: kMinFontPt (the min-font floor the min-font rule + its bite test read)
 #include "gui/SystemA11y.h"
+#include <functional>           // T10: std::function for the displacement-honesty colour walker
 #include "gui/Theme.h"          // P2: setDarkForTest for the standalone CalSlot loaded-card case
 #include "gui/StatusLadder.h"   // #68: worst-case captured wording generated FROM the pure ladder
 
@@ -69,6 +71,10 @@ TEST_CASE("HIG gate: the real editor has no blocking layout finding in any theme
                             bad.add (juce::String (stepName) + "/" + (dark ? "dark" : "light") + "/"
                                      + a.name + "/" + s.name
                                      + ": " + f.category + " on " + f.element + " - " + f.message);
+                    for (auto& f : eb::hig::scoreMinFont (juce::JSON::parse (jf)))
+                        bad.add (juce::String (stepName) + "/" + (dark ? "dark" : "light") + "/"
+                                 + a.name + "/" + s.name + ": " + f.category + " on " + f.element
+                                 + " - " + f.message);
                 }
             }
         }
@@ -306,6 +312,9 @@ TEST_CASE("HIG gate: Calibrate advanced-FIR disclosure open renders clean [P2]")
                 if (blocking (f))
                     bad.add (juce::String (dark ? "dark" : "light") + "/" + s.name + ": "
                              + f.category + " on " + f.element + " - " + f.message);
+            for (auto& f : eb::hig::scoreMinFont (juce::JSON::parse (jf)))
+                bad.add (juce::String (dark ? "dark" : "light") + "/" + s.name + ": "
+                         + f.category + " on " + f.element + " - " + f.message);
         }
     }
     mc.calibrateStageForTest().setAdvancedOpen (false);       // restore the default state
@@ -384,6 +393,220 @@ TEST_CASE("HIG gate: loaded cal card (caution + swap banner) scores clean standa
     }
     theme.setDarkForTest (wasDark);
     INFO ("blocking findings (" << bad.size() << "):\n" << bad.joinIntoString ("\n"));
+    CHECK (bad.isEmpty());
+    tmp.deleteRecursively();
+}
+
+// ==================================================================================================
+// T10 min-font rule (macOS ramp floor: 10pt body-legibility floor; adopted from the apple-hig
+// v1.10.0 review bar). kMinFontPt is in PROBE units (Font::getHeightInPoints), which run BELOW
+// the JUCE pixel height on Windows - the 11px ramp floor must clear the threshold with margin
+// on every CI platform, or the constant must be recalibrated (measured - 0.5), never the rule
+// dropped. This case asserts BOTH halves: bites on tiny text, quiet on the smallest ramp font.
+// ==================================================================================================
+TEST_CASE("HIG min-font rule: bites on 6px text, quiet on the 11px ramp floor [T10]") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    struct Rig : juce::Component {
+        juce::Label tiny, floor11;
+        Rig() {
+            tiny.setText ("too small", juce::dontSendNotification);
+            tiny.setFont (juce::Font (juce::FontOptions (6.0f)));
+            floor11.setText ("RATE", juce::dontSendNotification);
+            floor11.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+            addAndMakeVisible (tiny);   tiny.setBounds (0, 0, 120, 12);
+            addAndMakeVisible (floor11); floor11.setBounds (0, 20, 120, 14);
+        }
+    };
+    Rig rig; rig.setSize (200, 60);
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    auto jf = tmp.getChildFile ("f.json");
+    hig::writeDesignProbe (rig, jf, tmp.getChildFile ("f.png"));
+    const auto tree = juce::JSON::parse (jf);
+
+    // Measured probe-points for both labels (the calibration evidence this test exists to pin).
+    double tinyPt = -1.0, floorPt = -1.0;
+    if (const auto* els = tree.getProperty ("elements", {}).getArray())
+        for (auto& e : *els) {
+            const auto lbl = e.getProperty ("label", {}).toString();
+            if (lbl == "too small") tinyPt  = (double) e.getProperty ("fontPt", 0.0);
+            if (lbl == "RATE")      floorPt = (double) e.getProperty ("fontPt", 0.0);
+        }
+    INFO ("measured probe-points: tiny(6px)=" << tinyPt << " floor(11px)=" << floorPt
+          << "  kMinFontPt=" << eb::hig::kMinFontPt);
+    CHECK (tinyPt > 0.0);
+    CHECK (tinyPt < eb::hig::kMinFontPt);                       // the rule CAN bite
+    CHECK (floorPt >= eb::hig::kMinFontPt + 0.5);               // cross-platform margin guard
+
+    const auto findings = eb::hig::scoreMinFont (tree);
+    bool tinyFlagged = false;
+    for (auto& f : findings)
+        if (f.category == "min-font") tinyFlagged = true;
+    CHECK (tinyFlagged);                                        // positive half: 6px text is flagged
+    CHECK (findings.size() == 1);                               // negative half: the 11px floor label is NOT
+    tmp.deleteRecursively();
+}
+
+// ==================================================================================================
+// T10 PERMANENT RULES (user requirements, ledgered 2026-07-05; spec 4 amendment):
+//   RULE 1 - no scrolling in any gated workflow state at the 900x720 minimum (Viewport = safety
+//            net only). Fail-closed: static_assert on each stage's WorkflowState count.
+//   RULE 2 - displacement honesty: with a disclosure open, (a) the disclosed content fully fits,
+//            (b) the collapse affordance stays visible, (c) NO visible warn/danger-toned surface
+//            is displaced out of the viewport. The walker below enforces (c) by CONSTRUCTION
+//            (any Label whose text colour is Theme::warn()/danger() is covered automatically -
+//            there is no list to forget to extend).
+// ==================================================================================================
+namespace {
+juce::StringArray displacedWarnSurfaces (juce::Viewport& vp) {
+    juce::StringArray out;
+    std::function<void (juce::Component&)> walk = [&] (juce::Component& c) {
+        if (! c.isVisible()) return;
+        if (auto* l = dynamic_cast<juce::Label*> (&c)) {
+            const auto col = l->findColour (juce::Label::textColourId);
+            if (l->getText().isNotEmpty()
+                && (col == eb::Theme::warn() || col == eb::Theme::danger())) {
+                const auto inVp = vp.getLocalArea (l, l->getLocalBounds());
+                if (! vp.getLocalBounds().contains (inVp))
+                    out.add (l->getText().substring (0, 48));
+            }
+        }
+        for (auto* ch : c.getChildren()) walk (*ch);
+    };
+    if (auto* content = vp.getViewedComponent()) walk (*content);
+    return out;
+}
+bool fullyVisibleIn (juce::Viewport& vp, juce::Component& c) {
+    return c.isVisible() && vp.getLocalBounds().contains (vp.getLocalArea (&c, c.getLocalBounds()));
+}
+} // namespace
+
+TEST_CASE("No-scroll + displacement gate: Calibrate workflow states at 900x720 [T10]") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    static_assert (eb::CalibrateStage::kWorkflowStateCount == 6,
+                   "new Calibrate workflow state: extend this gate's driver + the T10 ledger");
+    using WS = eb::CalibrateStage::WorkflowState;
+    const juce::File data (EB_TEST_DATA_DIR);
+    mc.setSize (900, 720);
+
+    const auto apply = [&] (WS s) {
+        auto& L = mc.leftCalForTest(); auto& R = mc.rightCalForTest();
+        if (L.hasCal()) L.clearCal();
+        if (R.hasCal()) R.clearCal();
+        L.setProblem ({}); R.setProblem ({});
+        switch (s) {
+            case WS::EmptyUnity:
+            case WS::EmptyUnityAdvancedOpen: break;
+            case WS::LoadedCleanPair:
+                REQUIRE (L.loadFromFile (data.getChildFile ("L_HEQ_0000000.txt")));
+                REQUIRE (R.loadFromFile (data.getChildFile ("R_HEQ_0000000.txt")));
+                break;
+            case WS::LoadedWorstPair:
+            case WS::LoadedWorstAdvancedOpen:
+                // Worst legal card: RAW left (amber on-card caution note) + HEQ right, swap
+                // banners on BOTH -> problem row + note row + thumbnail stack all at once.
+                REQUIRE (L.loadFromFile (data.getChildFile ("L_RAW_0000000.txt")));
+                REQUIRE (R.loadFromFile (data.getChildFile ("R_HEQ_0000000.txt")));
+                L.setProblem ("This looks like the RIGHT cal, but it's in the LEFT slot - swap the files.");
+                R.setProblem ("This looks like the LEFT cal, but it's in the RIGHT slot - swap the files.");
+                break;
+            case WS::EmptyErrorStripAdvancedOpen:
+                L.loadFromFile (data.getChildFile ("no-such-cal-file.txt"));   // #38 stale-path strip
+                break;
+        }
+        mc.calibrateStageForTest().setAdvancedOpen (s == WS::EmptyUnityAdvancedOpen
+                                                    || s == WS::LoadedWorstAdvancedOpen
+                                                    || s == WS::EmptyErrorStripAdvancedOpen);
+        mc.forceWizardStepForTest (eb::WizardStep::Calibrate);   // re-render unity/caption + relayout
+    };
+
+    juce::StringArray bad;
+    for (int i = 0; i < eb::CalibrateStage::kWorkflowStateCount; ++i) {
+        apply ((WS) i);
+        auto& vp = mc.calibrateStageForTest().viewportForTest();
+        const int contentH = vp.getViewedComponent()->getHeight(), vpH = vp.getHeight();
+        if (contentH > vpH)
+            bad.add ("RULE1 state " + juce::String (i) + ": content " + juce::String (contentH)
+                     + " > viewport " + juce::String (vpH));
+        for (auto& s : displacedWarnSurfaces (vp))
+            bad.add ("RULE2 state " + juce::String (i) + ": warn surface displaced: " + s);
+    }
+    // RULE 2 (a)+(b) on the open worst state: disclosure row + every disclosed control visible.
+    apply (WS::LoadedWorstAdvancedOpen);
+    {
+        auto& stage = mc.calibrateStageForTest();
+        auto& vp = stage.viewportForTest();
+        if (! fullyVisibleIn (vp, stage.advancedFirForTest()))
+            bad.add ("RULE2a/b: the Advanced FIR collapse affordance left the visible area");
+    }
+    apply (WS::EmptyUnity);   // restore
+    INFO ("violations:\n" << bad.joinIntoString ("\n"));
+    CHECK (bad.isEmpty());
+    tmp.deleteRecursively();
+}
+
+TEST_CASE("No-scroll + displacement gate: Connect workflow states at 900x720 [T10]") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    static_assert (eb::ConnectStage::kWorkflowStateCount == 6,
+                   "new Connect workflow state: extend this gate's driver + the T10 ledger");
+    using WS = eb::ConnectStage::WorkflowState;
+    mc.setSize (900, 720);
+    mc.forceWizardStepForTest (eb::WizardStep::Connect);
+
+    const auto apply = [&] (WS s) {
+        auto& stage = mc.connectStageForTest();
+        stage.notUsingDiracForTest().setOpen (s == WS::OverrideOpen || s == WS::OverrideOpenWorst);
+        mc.driveConnectWarningsForTest (s == WS::DiracHintFix || s == WS::DiracHintFixRateWarn || s == WS::OverrideOpenWorst,
+                                        s == WS::RateWarn || s == WS::DiracHintFixRateWarn || s == WS::OverrideOpenWorst);
+    };
+
+    juce::StringArray bad;
+    for (int i = 0; i < eb::ConnectStage::kWorkflowStateCount; ++i) {
+        apply ((WS) i);
+        auto& vp = mc.connectStageForTest().viewportForTest();
+        const int contentH = vp.getViewedComponent()->getHeight(), vpH = vp.getHeight();
+        if (contentH > vpH)
+            bad.add ("RULE1 state " + juce::String (i) + ": content " + juce::String (contentH)
+                     + " > viewport " + juce::String (vpH));
+        for (auto& s2 : displacedWarnSurfaces (vp))
+            bad.add ("RULE2 state " + juce::String (i) + ": warn surface displaced: " + s2);
+    }
+    // RULE 2 (b) worst open state: the disclosure row + the disclosed override toggle visible.
+    apply (WS::OverrideOpenWorst);
+    {
+        auto& stage = mc.connectStageForTest();
+        auto& vp = stage.viewportForTest();
+        if (! fullyVisibleIn (vp, stage.notUsingDiracForTest()))
+            bad.add ("RULE2b: the Not-using-Dirac collapse affordance left the visible area");
+        if (! fullyVisibleIn (vp, mc.overrideToggleForTest()))
+            bad.add ("RULE2a: the disclosed override toggle left the visible area");
+    }
+
+    // BOUNDARY (the documented safety-net state, NOT a gated workflow state): force the
+    // post-Start preflight stack on top of the worst gated state. Scrolling is ALLOWED here -
+    // but every live warning must still sit ABOVE the fold (they all live in the upper cards).
+    // This is the negative test that RULE 1 does not over-claim and RULE 2 cannot false-pass.
+    mc.preflightLabelForTest().setText ("Start failed: could not open the output device in shared mode",
+                                        juce::dontSendNotification);
+    mc.resized();
+    for (auto& s2 : displacedWarnSurfaces (mc.connectStageForTest().viewportForTest()))
+        bad.add ("BOUNDARY: warn surface below the fold in the safety-net state: " + s2);
+    mc.preflightLabelForTest().setText ({}, juce::dontSendNotification);
+
+    // NEGATIVE (false-fire guard): at a tall window with everything forced, the walker must
+    // report nothing (all surfaces trivially visible) - proves it keys on geometry, not state.
+    mc.setSize (900, 1000);
+    apply (WS::OverrideOpenWorst);
+    for (auto& s2 : displacedWarnSurfaces (mc.connectStageForTest().viewportForTest()))
+        bad.add ("NEGATIVE(tall): walker false-fired on: " + s2);
+
+    apply (WS::Default);   // restore
+    INFO ("violations:\n" << bad.joinIntoString ("\n"));
     CHECK (bad.isEmpty());
     tmp.deleteRecursively();
 }

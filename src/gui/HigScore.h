@@ -19,4 +19,9 @@ struct Finding {
 // contrast + geometry categories. Hierarchy/coverage are advisory-only and intentionally NOT produced here.
 std::vector<Finding> scoreDescriptor (const juce::var& descriptorRoot);
 
+// T10 EB extension BEYOND the native-review parity set (kept OUT of scoreDescriptor so the
+// golden parity contract in test_hig_parity.cpp is untouched): visible text whose probe
+// fontPt sits under the macOS legibility floor. Category "min-font", severity medium.
+std::vector<Finding> scoreMinFont (const juce::var& descriptorRoot);
+
 } // namespace eb::hig

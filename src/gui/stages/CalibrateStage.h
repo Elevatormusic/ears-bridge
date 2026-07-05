@@ -35,6 +35,9 @@ public:
     void setAdvancedSummary (const juce::String& s) { advancedFir_.setSummary (s); }
     void setAdvancedOpen (bool open);              // also the gate/harness seam
     bool advancedOpenForTest() const { return advancedFir_.isOpen(); }
+    // T10: the Advanced-FIR disclosure row itself, for the displacement-honesty gate to assert
+    // the collapse affordance stays fully inside the viewport with the section disclosed.
+    DisclosureRow& advancedFirForTest() { return advancedFir_; }
 
     // Unity path (spec 5.2): visible only while BOTH slots are empty; `accepted` swaps the
     // wording and retires the button (the header CTA takes over). MainComponent owns the flag.

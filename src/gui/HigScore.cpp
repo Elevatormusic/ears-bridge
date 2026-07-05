@@ -135,4 +135,20 @@ std::vector<Finding> scoreDescriptor (const juce::var& root) {
     return out;
 }
 
+std::vector<Finding> scoreMinFont (const juce::var& root) {
+    std::vector<Finding> out;
+    auto* arr = root.getProperty ("elements", {}).getArray();
+    if (arr == nullptr) return out;
+    for (auto& v : *arr) {
+        const El e = parse (v);
+        if (! (e.visible && e.showing)) continue;
+        if (e.label.isEmpty() && e.value.isEmpty()) continue;
+        if (e.fontPt > 0.0 && e.fontPt < kMinFontPt)
+            out.push_back ({ "min-font", "medium", e.id,
+                "text at " + juce::String (e.fontPt, 2) + "pt (probe points) is below the "
+                + juce::String (kMinFontPt, 1) + "pt floor (macOS ramp legibility floor)" });
+    }
+    return out;
+}
+
 } // namespace eb::hig

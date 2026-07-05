@@ -13,4 +13,9 @@ inline constexpr double kHighSeverityDelta   = 1.0;   // ratio < floor - this ->
 inline constexpr int    kMinTargetPx         = 24;    // WCAG 2.5.8 pointer target floor
 inline constexpr int    kOverlapNoisePx      = 2;     // report overlap only when depth > this (anti-alias noise)
 
+inline constexpr double kMinFontPt = 7.5;   // T10 min-font floor, PROBE units (getHeightInPoints).
+                                            // Calibrated so the 11px ramp floor clears it with
+                                            // >=0.5 margin on both CI platforms (see the [T10]
+                                            // min-font test); recalibrate (measured-0.5), never drop.
+
 } // namespace eb::hig

@@ -1544,7 +1544,11 @@ void MainComponent::driveConnectWarningsForTest (bool stdCableHintWithFix, bool 
         diracCableHint.setVisible (true);
         diracFixButton.setVisible (true);
     } else {
-        updateDiracCableHint();   // re-derive from the real output (hermetic env: NotVirtual -> hidden)
+        updateDiracCableHint();   // re-derive from the real output. autoSelectDefaults picks a std VB-CABLE
+                                  // when one is enumerated, so on a machine WITH a virtual sink the derived
+                                  // state is the hint VISIBLE (the green shared-mode variant if Dirac shared
+                                  // mode is on, else the amber exclusive variant), NOT hidden. Only a machine
+                                  // with no virtual sink at all derives the hidden state.
     }
     rateWarn.setText (rateResampleWarn ? juce::String (eb::hints::kRateResample) : juce::String(),
                       juce::dontSendNotification);
@@ -2723,32 +2727,36 @@ void MainComponent::timerCallback() {
             // bottom pin Connect/Calibrate/Level (+ calibrate-advanced, Task 8) and drive NO labels - the
             // stage at its natural current state IS the scene. forceWizardStepForTest (below, per-scene)
             // settles the shown stage; calAdv forces the Calibrate Advanced-FIR disclosure open/closed.
-            // Frame count: 13 scenes x 4 appearances + 2 startready = 54 frames (the P1 count was 50).
-            struct St { const char* name; const char* l; const char* r; bool update; bool dots; WizardStep step; bool calAdv; };
+            // Frame count: 14 scenes x 4 appearances + 2 startready = 58 frames (T10 added connect-dirachint).
+            struct St { const char* name; const char* l; const char* r; bool update; bool dots; WizardStep step; bool calAdv; bool diracHint; };
             static const St states[] = {
-                { "idle",        "",                                                                                 "",                                         false, false, WizardStep::Measure, false },
-                { "running",     "Running - waiting for the Dirac sweep...",                                         "",                                         false, false, WizardStep::Measure, false },
-                { "capturing",   "Auto per-ear - capturing the LEFT earcup",                                         "",                                         false, true,  WizardStep::Measure, false },
-                { "clean",       "Sweep captured - safe to run the next sweep",                                      "R clean - SNR 30 dB, IR 56 dB",            false, true,  WizardStep::Measure, false },
-                { "imprecise",   "Noisy capture - Dirac will likely mark it imprecise; raise level or lower noise.", "R marginal SNR 18 dB - re-measure",        false, true,  WizardStep::Measure, false },
-                { "lowlevel",    "Running - level low: turn your amp up to the green band",                          "",                                         false, false, WizardStep::Measure, false },
-                { "error",       "EARS or audio cable disconnected - measurement stopped.",                          "",                                         false, false, WizardStep::Measure, false },
-                { "update+full", "Running - no input signal (check the EARS)",                                       "R weak impulse response - time-variance?", true,  true,  WizardStep::Measure, false },
+                { "idle",        "",                                                                                 "",                                         false, false, WizardStep::Measure, false, false },
+                { "running",     "Running - waiting for the Dirac sweep...",                                         "",                                         false, false, WizardStep::Measure, false, false },
+                { "capturing",   "Auto per-ear - capturing the LEFT earcup",                                         "",                                         false, true,  WizardStep::Measure, false, false },
+                { "clean",       "Sweep captured - safe to run the next sweep",                                      "R clean - SNR 30 dB, IR 56 dB",            false, true,  WizardStep::Measure, false, false },
+                { "imprecise",   "Noisy capture - Dirac will likely mark it imprecise; raise level or lower noise.", "R marginal SNR 18 dB - re-measure",        false, true,  WizardStep::Measure, false, false },
+                { "lowlevel",    "Running - level low: turn your amp up to the green band",                          "",                                         false, false, WizardStep::Measure, false, false },
+                { "error",       "EARS or audio cable disconnected - measurement stopped.",                          "",                                         false, false, WizardStep::Measure, false, false },
+                { "update+full", "Running - no input signal (check the EARS)",                                       "R weak impulse response - time-variance?", true,  true,  WizardStep::Measure, false, false },
                 // SP3 shape INFO note RENDERED on the per-ear line, worst case: a verified line + peak tail
                 // + the LONGEST note (the drift copy), already run through earStatusLine's #68 length budget
                 // (the note elides with ".." past 78 chars; the full text rides the tooltip). Proves the
                 // populated status line does not clip at the app's minimum width.
-                { "shapenote",   "L: verified - IR-SNR 56 dB, THD 0% (calibration pending) (peak -8 dBFS)  -  res..", "R: verified 54 dB", false, true,  WizardStep::Measure, false },
+                { "shapenote",   "L: verified - IR-SNR 56 dB, THD 0% (calibration pending) (peak -8 dBFS)  -  res..", "R: verified 54 dB", false, true,  WizardStep::Measure, false, false },
                 // STAGE SCENES (Task 5): one per non-Measure step at its current state. No driven labels —
                 // the gate MEASURES each hand-laid stage body, so the descriptor element counts differ per
                 // step (this is the "step axis actually probes 4 stages" honesty check). Naming: hig-<ap>-<step>.
-                { "connect",     "", "", false, false, WizardStep::Connect,   false },
-                { "calibrate",   "", "", false, false, WizardStep::Calibrate, false },
-                { "level",       "", "", false, false, WizardStep::Level,     false },
+                { "connect",     "", "", false, false, WizardStep::Connect,   false, false },
+                // T10: the Connect signal-path with the standard-cable/Dirac warning + one-click fix forced
+                // visible (the message slot's warning state). driveConnectWarningsForTest paints the amber
+                // hint + fix button so native-review can measure the warned SIGNAL PATH card.
+                { "connect-dirachint", "", "", false, false, WizardStep::Connect, false, true },
+                { "calibrate",   "", "", false, false, WizardStep::Calibrate, false, false },
+                { "level",       "", "", false, false, WizardStep::Level,     false, false },
                 // P2 (Task 8): the Calibrate stage with the Advanced-FIR disclosure OPEN. The "calibrate"
                 // scene above renders it COLLAPSED (the launch default in the hermetic env); this one forces
                 // the disclosed section so native-review can measure the four advanced controls' layout.
-                { "calibrate-advanced", "", "", false, false, WizardStep::Calibrate, true },
+                { "calibrate-advanced", "", "", false, false, WizardStep::Calibrate, true, false },
             };
             // APPEARANCE MATRIX (EARS-vendored extension, 2026-07-04): the base sweep only rendered the
             // OS launch mode at normal contrast, but the composited-pixel HIG checks are mode/contrast
@@ -2781,6 +2789,7 @@ void MainComponent::timerCallback() {
                         gradeDotsR_.setMetrics (eb::QualityBand::Orange, "18 dB", eb::QualityBand::Green, "52 dB", eb::QualityBand::Green,  "0.3%");
                     } else { gradeDotsL_.clear(); gradeDotsR_.clear(); }
                     calibrateStage_.setAdvancedOpen (s.calAdv);     // P2: force the Advanced-FIR disclosure per scene
+                    driveConnectWarningsForTest (s.diracHint, s.diracHint);   // T10: the cable-warning scene
                     forceWizardStepForTest (s.step);                // pin + render + show this scene's stage, then resize
                     const juce::String stem = juce::String ("hig-") + ap.tag + "-" + s.name;
                     hig::writeDesignProbe (*getTopLevelComponent(),
@@ -2811,6 +2820,7 @@ void MainComponent::timerCallback() {
             // (open iff any advanced FIR setting is non-default) so the live UI reflects the real settings.
             calibrateStage_.setAdvancedOpen (settings.complexPhase() || settings.firLength() > 0
                                              || settings.outputTrimDb() != 0.0);
+            driveConnectWarningsForTest (false, false);   // T10: clear the forced cable-warning scene
             pinnedStep_ = pinnedWas;                                // restore the pre-sweep navigation pin
             refreshWizardView();
             }   // if (outDir.isNotEmpty())
