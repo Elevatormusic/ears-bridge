@@ -25,6 +25,10 @@ public:
     std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
 private:
+    // Rebuild the a11y description from the loaded curve + current range (or the empty
+    // placeholder), so setCalFile() and setRange() share one wording and can't drift.
+    void updateDescription();
+
     std::optional<eb::CalFile> curve;
     float topDb = 24.0f, botDb = -24.0f;   // auto-fit to the data on setCalFile
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CurveThumbnail)

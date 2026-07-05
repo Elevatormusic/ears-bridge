@@ -29,6 +29,20 @@ TEST_CASE("CurveThumbnail: image a11y role, title, live range description") {
     th.removeFromDesktop();
 }
 
+// L1: the parent locks a shared scale across both ear plots via setRange(); the a11y
+// description must FOLLOW that new range, not keep announcing the auto-fit range the
+// axes no longer draw (assistive tech would otherwise read a stale range).
+TEST_CASE("CurveThumbnail: setRange updates the a11y description to the new range") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::CurveThumbnail th;
+    th.setSize (210, 84);
+    th.setCalFile (parseSmallCal());
+    CHECK (th.getDescription().contains ("12 dB"));      // auto-fit range
+    th.setRange (30.0f);                                 // parent locks a wider shared scale
+    CHECK (th.getDescription().contains ("30 dB"));      // description follows the new range
+    CHECK (! th.getDescription().contains ("12 dB"));    // and drops the old one
+}
+
 // L9: labelled axes paint (smoke: deterministic range + no crash empty/loaded; the pixel
 // truth is Task 9's real-render check + the loaded-card gate case in Task 8).
 TEST_CASE("CurveThumbnail: paints empty and loaded with the fitted range") {

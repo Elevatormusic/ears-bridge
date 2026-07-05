@@ -25,7 +25,13 @@ void CurveThumbnail::clear() {
 
 void CurveThumbnail::setCalFile (const eb::CalFile& cal) {
     curve = cal;
-    setRange (autoFitTopDb());
+    setRange (autoFitTopDb());   // also rebuilds the description for the new range
+}
+
+void CurveThumbnail::updateDescription() {
+    // Single source of truth for the a11y description so setCalFile() and setRange()
+    // can't drift: same wording, same ASCII "plus/minus" copy, current range + point count.
+    if (! curve) { setDescription ("No calibration loaded"); return; }
     setDescription ("Calibration curve, range plus/minus " + juce::String ((int) topDb)
                     + " dB, " + juce::String ((int) curve->points.size()) + " points");
 }
@@ -46,6 +52,7 @@ float CurveThumbnail::autoFitTopDb() const {
 void CurveThumbnail::setRange (float top) {
     topDb =  top;
     botDb = -top;
+    updateDescription();   // keep the a11y range in step with the drawn axes
     repaint();
 }
 
