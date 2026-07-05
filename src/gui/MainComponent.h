@@ -188,8 +188,7 @@ private:
     juce::Label brandLabel;
     // Subtle "vX.Y.Z" footnote in the bottom-right corner (current installed version).
     juce::Label versionLabel;
-    // Right-pane section eyebrows.
-    juce::Label calEyebrow;
+    // Right-pane section eyebrows. (calEyebrow died in P2 Task 5 - the CalibrateStage header replaced it.)
     juce::Label levelsEyebrow;
     juce::Label levelsHint;              // inline caption: aim Dirac's Master output at the meter target band
     juce::Label diracMicGainHint;        // "add ~+N dB on Dirac's Mic gain" - N = engine.headroomAttenuationDb()

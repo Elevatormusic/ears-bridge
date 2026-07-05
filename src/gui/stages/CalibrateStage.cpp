@@ -4,60 +4,88 @@
 namespace eb {
 
 namespace {
-void styleFirCaption (juce::Label& l, const juce::String& t) {
-    l.setText (t, juce::dontSendNotification);
-    l.setColour (juce::Label::textColourId, Theme::textDim());
-    l.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")).withExtraKerningFactor (0.07f));
-}
-constexpr int kGutter = 16;
+constexpr int kGutter = 16, kPadX = 30;
+constexpr int kContentMaxW = 760, kGridGap = 14;
+constexpr int kDiscH = 28, kDiscIndent = 24;
+constexpr int kCaptionH = 46;
 } // namespace
 
 CalibrateStage::CalibrateStage() {
     setFocusContainerType (juce::Component::FocusContainerType::keyboardFocusContainer);
     setTitle ("Calibrate");
 
-    styleFirCaption (advancedFirCaption_, "ADVANCED FIR");
+    addAndMakeVisible (header_);
+    header_.continueButton().onClick = [this] { if (onContinue) onContinue(); };
 
     viewport_.setViewedComponent (&content_, false);   // false: content_ is a member
-    viewport_.setScrollBarsShown (true, false);         // vertical only
+    viewport_.setScrollBarsShown (true, false);
     viewport_.setScrollBarThickness (10);
     addAndMakeVisible (viewport_);
 
-    content_.addAndMakeVisible (advancedFirCaption_);
-
-    continueButton_.getProperties().set ("primary", true);
-    continueButton_.setEnabled (false);   // Task 4 wires enablement + navigation
-    continueButton_.onClick = [this] { if (onContinue) onContinue(); };
-    addAndMakeVisible (continueButton_);
+    content_.addChildComponent (caption_);             // shown while the caption text is nonempty
+    content_.addAndMakeVisible (advancedFir_);
+    advancedFir_.onOpenChanged = [this] (bool) { resized(); };
 }
 
-void CalibrateStage::applyTheme() {
-    styleFirCaption (advancedFirCaption_, "ADVANCED FIR");
+void CalibrateStage::setStageCaption (const juce::String& s) {
+    if (caption_.text.getText() == s && caption_.isVisible() == s.isNotEmpty())
+        return;
+    caption_.text.setText (s, juce::dontSendNotification);
+    caption_.setVisible (s.isNotEmpty());
+    resized();
 }
 
-void CalibrateStage::adopt (juce::Label& calEyebrow,
-                            CalSlotComponent& leftCal, CalSlotComponent& rightCal,
+void CalibrateStage::setAdvancedOpen (bool open) {
+    advancedFir_.setOpen (open);                       // fires onOpenChanged -> resized()
+}
+
+juce::String CalibrateStage::stageCaptionFor (std::optional<CalType> l, std::optional<CalType> r) {
+    if (! l.has_value() || ! r.has_value())
+        return "Use HEQ files for headphones, IDF for IEMs - files are matched to left and right automatically.";
+    const bool heq = (*l == CalType::Heq) || (*r == CalType::Heq);
+    const bool hpn = (*l == CalType::Hpn) || (*r == CalType::Hpn);
+    if (heq) return "HEQ curves include a mild bass boost - in Dirac, start from a flat bass target.";
+    if (hpn) return "HPN is miniDSP's older curve - it works, but HEQ is now recommended for headphone EQ.";
+    return {};   // IDF/RAW/Unknown pairs: the cards carry their own cautions
+}
+
+juce::String CalibrateStage::advancedFirSummary (bool complexPhase, int firLength, double trimDb) {
+    juce::String s = complexPhase ? "Complex phase" : "Min phase";
+    s += (firLength > 0) ? (" - " + juce::String (firLength) + " taps") : juce::String (" - Auto length");
+    s += " - " + juce::String (trimDb, 1) + " dB trim";
+    return s;
+}
+
+void CalibrateStage::adopt (CalSlotComponent& leftCal, CalSlotComponent& rightCal,
                             juce::ToggleButton& complexPhaseToggle,
                             juce::Label& firLenLabel, juce::ComboBox& firLenBox,
                             juce::Label& trimLabel, juce::Slider& trimSlider) {
-    calEyebrow_ = &calEyebrow;               content_.addAndMakeVisible (calEyebrow);
-    leftCal_ = &leftCal;                     content_.addAndMakeVisible (leftCal);
-    rightCal_ = &rightCal;                   content_.addAndMakeVisible (rightCal);
-    complexPhaseToggle_ = &complexPhaseToggle; content_.addAndMakeVisible (complexPhaseToggle);
-    firLenLabel_ = &firLenLabel;             content_.addAndMakeVisible (firLenLabel);
-    firLenBox_ = &firLenBox;                 content_.addAndMakeVisible (firLenBox);
-    trimLabel_ = &trimLabel;                 content_.addAndMakeVisible (trimLabel);
-    trimSlider_ = &trimSlider;               content_.addAndMakeVisible (trimSlider);
+    leftCal_ = &leftCal;   content_.addAndMakeVisible (leftCal);
+    rightCal_ = &rightCal; content_.addAndMakeVisible (rightCal);
+    complexPhaseToggle_ = &complexPhaseToggle; content_.addChildComponent (complexPhaseToggle);
+    firLenLabel_ = &firLenLabel;               content_.addChildComponent (firLenLabel);
+    firLenBox_ = &firLenBox;                   content_.addChildComponent (firLenBox);
+    trimLabel_ = &trimLabel;                   content_.addChildComponent (trimLabel);
+    trimSlider_ = &trimSlider;                 content_.addChildComponent (trimSlider);
 
-    // Explicit top-down focus order within this stage (§4): cards first, then the Advanced-FIR controls,
-    // then the Continue CTA (the old rail-wide orders 6/7 spanned stages — re-scope them per stage).
+    // A card that grows (problem banner / caution / state flip) re-runs the grid so the two
+    // cells stay uniform and nothing below overlaps (the P1 fixed-206 rows die here).
+    leftCal.onLayoutChanged  = [this] { resized(); };
+    rightCal.onLayoutChanged = [this] { resized(); };
+
     int fo = 1;
-    leftCal.setExplicitFocusOrder           (fo++);
-    rightCal.setExplicitFocusOrder          (fo++);
+    leftCal.setExplicitFocusOrder            (fo++);
+    rightCal.setExplicitFocusOrder           (fo++);
+    advancedFir_.setExplicitFocusOrder       (fo++);
     complexPhaseToggle.setExplicitFocusOrder (fo++);
-    firLenBox.setExplicitFocusOrder         (fo++);
-    trimSlider.setExplicitFocusOrder        (fo++);
-    continueButton_.setExplicitFocusOrder   (fo++);
+    firLenBox.setExplicitFocusOrder          (fo++);
+    trimSlider.setExplicitFocusOrder         (fo++);
+    header_.continueButton().setExplicitFocusOrder (fo++);
+}
+
+void CalibrateStage::applyTheme() {
+    header_.applyTheme();
+    caption_.applyTheme();
 }
 
 void CalibrateStage::paint (juce::Graphics& g) {
@@ -65,53 +93,106 @@ void CalibrateStage::paint (juce::Graphics& g) {
 }
 
 int CalibrateStage::layoutContent (int width) {
-    // Top-down pass in content_'s local space. Cards want the full width (as today's right pane), so no
-    // 560 clamp here. Row heights mirror the former resized() right-pane block. Pure layout: no resized().
-    auto rr = juce::Rectangle<int> (0, 0, width, 100000).reduced (kGutter, 0);
-    rr.removeFromTop (kGutter);
-
-    if (calEyebrow_) calEyebrow_->setBounds (rr.removeFromTop (16));
-    rr.removeFromTop (10);
-
-    if (leftCal_)  leftCal_->setBounds (rr.removeFromTop (206));
-    rr.removeFromTop (16);
-    if (rightCal_) rightCal_->setBounds (rr.removeFromTop (206));
-    rr.removeFromTop (20);
-
-    // Advanced FIR: always visible in P1 (the collapse toggle is Phase 2 polish).
-    advancedFirCaption_.setBounds (rr.removeFromTop (16));
-    rr.removeFromTop (6);
-    if (complexPhaseToggle_) complexPhaseToggle_->setBounds (rr.removeFromTop (26));
-    rr.removeFromTop (6);
-    if (firLenLabel_) firLenLabel_->setBounds (rr.removeFromTop (16));
-    rr.removeFromTop (6);
-    if (firLenBox_)   firLenBox_->setBounds (rr.removeFromTop (40));
-    rr.removeFromTop (8);
-    if (trimLabel_)   trimLabel_->setBounds (rr.removeFromTop (16));
+    const int colW = juce::jmin (kContentMaxW, juce::jmax (0, width - 2 * kGutter));
+    const int x0   = (width - colW) / 2;
+    auto rr = juce::Rectangle<int> (x0, 0, colW, 100000);
     rr.removeFromTop (4);
-    if (trimSlider_)  trimSlider_->setBounds (rr.removeFromTop (28));
 
+    // Drop grid: one row, two equal cells, BOTH at the taller card's preferred height.
+    if (leftCal_ != nullptr && rightCal_ != nullptr) {
+        const int cellW = (colW - kGridGap) / 2;
+        const int rowH  = juce::jmax (leftCal_->preferredHeight(), rightCal_->preferredHeight());
+        auto row = rr.removeFromTop (rowH);
+        leftCal_->setBounds (row.removeFromLeft (cellW));
+        row.removeFromLeft (kGridGap);
+        rightCal_->setBounds (row);
+    }
+    rr.removeFromTop (16);
+
+    if (caption_.isVisible()) {
+        caption_.setBounds (rr.removeFromTop (kCaptionH));
+        rr.removeFromTop (12);
+    }
+
+    // (Task 6 inserts the unity row HERE, between the caption and the disclosure.)
+
+    advancedFir_.setBounds (rr.removeFromTop (kDiscH));
+    const bool open = advancedFir_.isOpen();
+    for (juce::Component* c : { (juce::Component*) complexPhaseToggle_, (juce::Component*) firLenLabel_,
+                                (juce::Component*) firLenBox_, (juce::Component*) trimLabel_,
+                                (juce::Component*) trimSlider_ })
+        if (c != nullptr) c->setVisible (open);
+    if (open) {
+        rr.removeFromTop (8);
+        if (complexPhaseToggle_ != nullptr) {
+            complexPhaseToggle_->setBounds (rr.removeFromTop (26).withTrimmedLeft (kDiscIndent));
+            rr.removeFromTop (6);
+        }
+        if (firLenLabel_ != nullptr) {
+            firLenLabel_->setBounds (rr.removeFromTop (16).withTrimmedLeft (kDiscIndent));
+            rr.removeFromTop (6);
+        }
+        if (firLenBox_ != nullptr) {
+            auto row = rr.removeFromTop (40).withTrimmedLeft (kDiscIndent);
+            firLenBox_->setBounds (row.removeFromLeft (juce::jmin (280, row.getWidth())));
+            rr.removeFromTop (8);
+        }
+        if (trimLabel_ != nullptr) {
+            trimLabel_->setBounds (rr.removeFromTop (16).withTrimmedLeft (kDiscIndent));
+            rr.removeFromTop (4);
+        }
+        if (trimSlider_ != nullptr)
+            trimSlider_->setBounds (rr.removeFromTop (28).withTrimmedLeft (kDiscIndent));
+    } else {
+        for (juce::Component* c : { (juce::Component*) complexPhaseToggle_, (juce::Component*) firLenLabel_,
+                                    (juce::Component*) firLenBox_, (juce::Component*) trimLabel_,
+                                    (juce::Component*) trimSlider_ })
+            if (c != nullptr) c->setBounds ({});
+    }
     return rr.getY() + kGutter;
 }
 
 void CalibrateStage::resized() {
     auto area = getLocalBounds();
-
-    // Continue button pinned bottom-right (outside the scrolled content, always reachable).
-    auto footer = area.removeFromBottom (34 + kGutter).reduced (kGutter, 0);
-    footer.removeFromBottom (kGutter);
-    continueButton_.setBounds (footer.removeFromRight (200));
-
+    header_.setBounds (area.removeFromTop (StageHeader::kHeight).reduced (kPadX, 0));
     viewport_.setBounds (area);
     const int contentW = viewport_.getMaximumVisibleWidth();
     const int contentH = layoutContent (contentW);
     content_.setSize (contentW, juce::jmax (contentH, viewport_.getHeight()));
-    // One convergence pass if adding content toggled the scrollbar (width changed).
-    const int finalW = viewport_.getMaximumVisibleWidth();
+    const int finalW = viewport_.getMaximumVisibleWidth();   // scrollbar may have toggled
     if (finalW != contentW) {
         const int h2 = layoutContent (finalW);
         content_.setSize (finalW, juce::jmax (h2, viewport_.getHeight()));
     }
+}
+
+// ---- InfoCaption --------------------------------------------------------------------------------
+
+CalibrateStage::InfoCaption::InfoCaption() {
+    text.setJustificationType (juce::Justification::topLeft);
+    text.setMinimumHorizontalScale (1.0f);                    // wrap to two lines, never squish
+    text.setComponentID ("calStageCaption");
+    addAndMakeVisible (text);
+    applyTheme();
+}
+
+void CalibrateStage::InfoCaption::applyTheme() {
+    text.setColour (juce::Label::textColourId, Theme::infoText());
+    text.setFont (juce::Font (juce::FontOptions (12.0f)));
+}
+
+void CalibrateStage::InfoCaption::resized() {
+    text.setBounds (getLocalBounds().reduced (12, 8).withTrimmedLeft (24));
+}
+
+void CalibrateStage::InfoCaption::paint (juce::Graphics& g) {
+    g.setColour (Theme::infoBg());
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), 8.0f);
+    auto ic = juce::Rectangle<float> (12.0f, 10.0f, 15.0f, 15.0f);   // the (i) glyph
+    g.setColour (Theme::infoText());
+    g.drawEllipse (ic.reduced (1.0f), 1.3f);
+    g.fillEllipse (juce::Rectangle<float> (ic.getCentreX() - 1.0f, ic.getY() + 3.0f, 2.0f, 2.0f));
+    g.fillRoundedRectangle (juce::Rectangle<float> (ic.getCentreX() - 0.8f, ic.getY() + 6.5f, 1.6f, 5.5f), 0.8f);
 }
 
 } // namespace eb

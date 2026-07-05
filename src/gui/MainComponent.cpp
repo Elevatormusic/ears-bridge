@@ -407,8 +407,6 @@ MainComponent::MainComponent (const TestConfig& cfg)
     addAndMakeVisible (exportLogButton);   // spine footer (§5.5)
 
     // --- Right pane: cal cards + Levels ---
-    styleEyebrow (calEyebrow, "CALIBRATION");
-    addAndMakeVisible (calEyebrow);
     leftCal.onCalLoaded  = [this] (const juce::File& f) { onLeftCalLoaded (f);  updateStartGate(); syncPlotScales(); };
     rightCal.onCalLoaded = [this] (const juce::File& f) { onRightCalLoaded (f); updateStartGate(); syncPlotScales(); };
     // Removing a slot resets that ear to unity AND bumps a fresh (now-incomplete) generation, so the
@@ -526,8 +524,12 @@ MainComponent::MainComponent (const TestConfig& cfg)
                          outputPicker, outputHint, preflightLabel, preflightInfo,
                          diracCableHint, diracFixButton, rateLabel, rateBox, rateWarn,
                          bitLabel, bitBox, verifyButton, verifyResultLabel, overrideToggle);
-    calibrateStage_.adopt (calEyebrow, leftCal, rightCal, complexPhaseToggle,
+    calibrateStage_.adopt (leftCal, rightCal, complexPhaseToggle,
                            firLenLabel, firLenBox, trimLabel, trimSlider);
+    // Advanced FIR: open at launch iff any setting is non-default (a hidden non-default would
+    // be a silent config surprise; the summary line states the values either way).
+    calibrateStage_.setAdvancedOpen (settings.complexPhase() || settings.firLength() > 0
+                                     || settings.outputTrimDb() != 0.0);
     levelStage_.adopt (levelsEyebrow, levelsHint, diracMicGainHint, meterL, meterR, meterOut, inputClipHint);
     measureStage_.adopt (statusLine, statusLineR, gradeDotsL_, gradeDotsR_,
                          learnRefButton, learnRefResultLabel, hwDiracToggle);
@@ -1347,6 +1349,24 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
     calibrateStage_.continueButton().setEnabled (ws.steps[(int) WizardStep::Calibrate].state == StepState::Done);
     levelStage_.continueButton().setEnabled    (ws.steps[(int) WizardStep::Level].state     == StepState::Done);
 
+    // ---- P2 stage view feed (Connect's line lands with Task 7) ---------------------------------
+    // Run-note = the machine's own reason (single wording source; empty once Done) - this is the
+    // third home of the "Rebuilding filters..." building state (map #9).
+    const auto runNoteFor = [&ws] (WizardStep s) {
+        const auto& st = ws.steps[(int) s];
+        return st.state == StepState::Done ? juce::String() : st.reason;
+    };
+    calibrateStage_.setRunNote (runNoteFor (WizardStep::Calibrate));
+    const auto slotType = [] (const std::optional<eb::CalFile>& c) {
+        return c.has_value() ? std::optional<eb::CalType> (c->type) : std::nullopt;
+    };
+    calibrateStage_.setStageCaption (CalibrateStage::stageCaptionFor (slotType (leftCal.calFile()),
+                                                                      slotType (rightCal.calFile())));
+    calibrateStage_.setAdvancedSummary (CalibrateStage::advancedFirSummary (
+        settings.complexPhase(), settings.firLength(), settings.outputTrimDb()));
+    leftCal.setSiblingLoaded  (rightCal.hasCal());   // map #8b/#10: the honest Required line
+    rightCal.setSiblingLoaded (leftCal.hasCal());
+
     // ---- Regression banner (§3.1): render + wire the "Fix in <step>" jump --------------------------------
     // Compose the banner against the SHOWN step (`toShow`), not ws.active (minor-1): during a held-pin
     // rebuild the shown stage can be EARLIER than active, and a deviceError there must still surface a
@@ -1494,7 +1514,6 @@ void MainComponent::applyTextColours() {
     styleEyebrow (bitLabel,      "BIT DEPTH");
     styleEyebrow (firLenLabel,   "FIR LENGTH");
     styleEyebrow (trimLabel,     "OUTPUT TRIM (dB)");
-    styleEyebrow (calEyebrow,    "CALIBRATION");
     styleEyebrow (levelsEyebrow, "LEVELS");
     // levelsHint colour/text is owned by the timer (updateActiveEarIndicator), so it is not set here.
     combineHint.setColour      (juce::Label::textColourId, Theme::textDim());

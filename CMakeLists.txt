@@ -147,6 +147,7 @@ add_library(eb_gui STATIC
     src/gui/stages/CalibrateStage.cpp
     src/gui/stages/LevelStage.cpp
     src/gui/stages/MeasureStage.cpp
+    src/gui/stages/StageHeader.cpp
     src/gui/MainComponent.cpp
     src/net/UpdateChecker.cpp
     src/platform/DiracCompat.cpp     # Windows: Dirac shared-mode env-var helper (no-op elsewhere)

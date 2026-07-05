@@ -30,6 +30,7 @@ add_executable(eb_tests
     test_calslot.cpp
     test_curvethumbnail.cpp
     test_disclosurerow.cpp
+    test_calibratestage.cpp
     test_updatecheck.cpp
     test_clipstatus.cpp
     test_rawrailstatus.cpp

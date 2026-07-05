@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "gui/MainComponent.h"
+#include "gui/juce_design_probe.h"   // P2 Task 5: probe the showing/label set of the Calibrate stage
 
 // Task 4: navigation, tick wiring, focus & a11y. Headless MainComponent (hermetic TestConfig — never
 // touches the real %APPDATA%/Settings/log dir, no network). A fresh temp profile has NO devices, so the
@@ -178,4 +179,65 @@ TEST_CASE("WizardNav resolveShownStage holds a pin blocked only by calBuilding")
     const auto maskedEmpty = eb::computeWizardState (empty, eb::WizardStep::Measure);
     CHECK (eb::MainComponent::resolveShownStage (wsEmpty, eb::WizardStep::Measure, maskedEmpty)
                == wsEmpty.active);
+}
+
+// P2 Task 5: exactly ONE guidance caption on the Calibrate stage (spec 5.2 - the HEQ note used
+// to render per card), and the Advanced-FIR section genuinely discloses (hidden controls are
+// out of the probe's showing set; open brings them back).
+TEST_CASE("Calibrate stage: one guidance caption; Advanced FIR discloses") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 780);
+    mc.forceWizardStepForTest (eb::WizardStep::Calibrate);
+    const auto jf = tmp.getChildFile ("d.json");
+    const auto pf = tmp.getChildFile ("d.png");
+
+    auto countShowing = [&] (const juce::String& needle) {
+        hig::writeDesignProbe (mc, jf, pf);
+        const auto tree = juce::JSON::parse (jf);
+        int n = 0;
+        if (const auto* els = tree.getProperty ("elements", {}).getArray())
+            for (auto& e : *els)
+                if ((bool) e.getProperty ("showing", false)
+                    && e.getProperty ("label", {}).toString().contains (needle))
+                    ++n;
+        return n;
+    };
+
+    CHECK (countShowing ("HEQ files for headphones") == 1);   // the ONE caption, exactly once
+    CHECK (countShowing ("FIR LENGTH") == 0);                 // collapsed by default (all-default settings)
+    mc.calibrateStageForTest().setAdvancedOpen (true);
+    mc.resized();
+    CHECK (countShowing ("FIR LENGTH") == 1);                 // disclosed
+    mc.calibrateStageForTest().setAdvancedOpen (false);
+    mc.resized();
+    CHECK (countShowing ("FIR LENGTH") == 0);                 // and collapses again
+    tmp.deleteRecursively();
+}
+
+// Map #9/#10: the header run-note mirrors the machine's first-unmet reason and clears on Done.
+TEST_CASE("Calibrate stage: run-note carries the machine reason while not Done") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 780);
+    mc.pinStepForTest (eb::WizardStep::Calibrate);
+    const auto jf = tmp.getChildFile ("d.json");
+    const auto pf = tmp.getChildFile ("d.png");
+    hig::writeDesignProbe (mc, jf, pf);
+    bool sawReason = false;
+    // Bind the parsed tree to a named local before taking getArray() - the array pointer is owned by
+    // the parsed var, so `JSON::parse(jf).getProperty(...).getArray()` would dangle at the end of the
+    // full expression (the idiom every other probe test uses: hold `tree`, then iterate).
+    const auto tree = juce::JSON::parse (jf);
+    if (const auto* els = tree.getProperty ("elements", {}).getArray())
+        for (auto& e : *els)
+            if ((bool) e.getProperty ("showing", false)
+                && e.getProperty ("label", {}).toString() == eb::kReasonNoCals())
+                sawReason = true;
+    CHECK (sawReason);
+    tmp.deleteRecursively();
 }
