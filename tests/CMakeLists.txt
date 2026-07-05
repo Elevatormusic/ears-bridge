@@ -29,6 +29,7 @@ add_executable(eb_tests
     test_levelmeter.cpp
     test_calslot.cpp
     test_curvethumbnail.cpp
+    test_designtokens.cpp
     test_disclosurerow.cpp
     test_calibratestage.cpp
     test_updatecheck.cpp

@@ -31,6 +31,8 @@ juce::Colour Theme::textFaint() { return pick (0x4dffffff, 0x59000000); }
 juce::Colour Theme::axis()      { return pick (0xff98989D, 0xff5C5C61); }
 juce::Colour Theme::accent()    { return pick (0xff0091FF, 0xff0088FF); }
 juce::Colour Theme::accentHover(){ return pick (0xff1F9DFF, 0xff0A7BEA); }
+juce::Colour Theme::primaryFill(){ return pick (0xff0A6FE0, 0xff0088FF); }  // W2 --accent-fill / macOS 27 System Blue
+juce::Colour Theme::accentText() { return pick (0xff0091FF, 0xff0067D6); }  // 5.16:1 on #1E1E1E / 4.55:1 on #ECECEE
 // HIG audit (2026-06-23): ok/warn/danger are the TEXT colours (status/warning/error labels), tuned to pass
 // WCAG 4.5:1 on the ACTUAL label backgrounds in BOTH appearances (recomputed on barBg #F6F6F8 / bg #ECECEE /
 // surface #2A2A2A, not just pure white). The bright originals live on as okFill/warnFill/dangerFill for meter
@@ -103,10 +105,11 @@ void Theme::drawButtonBackground (juce::Graphics& g, juce::Button& b,
     const bool primary = (bool) b.getProperties().getWithDefault ("primary", false);
 
     juce::Colour fill;
-    if (! b.isEnabled())   fill = primary ? ctrl() : ctrl();
-    else if (primary)      fill = over ? accentHover() : accent();
+    if (! b.isEnabled())   fill = ctrl();
+    else if (primary)      fill = over ? accentHover() : primaryFill();   // M3: idle #0A6FE0, hover #1F9DFF (W2 states)
     else                   fill = over ? ctrlHover()  : ctrl();
-    if (down && b.isEnabled()) fill = fill.darker (0.08f);
+    if (down && b.isEnabled())                                            // macOS 27 clicked recipe: + #000 a0.10
+        fill = fill.overlaidWith (juce::Colours::black.withAlpha (0.10f));
 
     g.setColour (fill);
     g.fillRoundedRectangle (r, radius);
@@ -151,6 +154,13 @@ juce::Font Theme::getComboBoxFont (juce::ComboBox&) {
 void Theme::positionComboBoxText (juce::ComboBox& box, juce::Label& label) {
     label.setBounds (12, 0, box.getWidth() - 34, box.getHeight());
     label.setFont (getComboBoxFont (box));
+}
+
+void Theme::paintCardSurface (juce::Graphics& g, juce::Rectangle<float> r, float radius) {
+    g.setColour (surface());
+    g.fillRoundedRectangle (r, radius);
+    g.setColour (sep());                                   // W2: 1px rgba(255,255,255,.12) hairline
+    g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.0f);
 }
 
 } // namespace eb

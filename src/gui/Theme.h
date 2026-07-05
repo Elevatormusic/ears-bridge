@@ -34,6 +34,8 @@ public:
     static juce::Colour axis();         // plot axis labels
     static juce::Colour accent();       // primary blue
     static juce::Colour accentHover();
+    static juce::Colour primaryFill();  // M3 (P2.9): primary-CTA FILL - W2 --accent-fill; accent() stays selection/focus
+    static juce::Colour accentText();   // accent AS TEXT - 4.5:1-safe in both themes (stage eyebrows, "You are here")
     static juce::Colour ok();           // CLEAN/running status TEXT (WCAG 4.5:1-safe; use okFill for fills)
     static juce::Colour warn();         // resample/amber status TEXT (4.5:1-safe)
     static juce::Colour danger();       // clip/error status TEXT (4.5:1-safe)
@@ -60,6 +62,10 @@ public:
                        int bx, int by, int bw, int bh, juce::ComboBox&) override;
     juce::Font getComboBoxFont (juce::ComboBox&) override;
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
+
+    // P2.9 card recipe (W2 .ear/.meters/.fr): surface fill + 1px sep() inner hairline, radius 12.
+    // The single source for every stage/component card - do not hand-roll surface fills any more.
+    static void paintCardSurface (juce::Graphics& g, juce::Rectangle<float> r, float radius = 12.0f);
 
 private:
     void applyColours();   // install LnF colours for the active mode
