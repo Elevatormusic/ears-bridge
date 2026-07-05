@@ -40,3 +40,22 @@ TEST_CASE("DisclosureRow: locked row force-opens and refuses to collapse") {
     row.setOpen (false);
     CHECK_FALSE (row.isOpen());                                // unlock restores normal behavior
 }
+
+// The always-visible summary exists to SHOW a non-default setting (e.g. the trim value) even
+// when the section is collapsed. A fixed title reservation starved it: at the Task-5 row width
+// the canonical summary's tail (the trim) was lost to the ellipsis. The title column must be
+// sized to the MEASURED title, not a fat fixed 200px, so the summary keeps its room.
+TEST_CASE("DisclosureRow: measured title column leaves the summary un-starved at 400px") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::DisclosureRow row ("Advanced FIR");
+    row.setSize (400, 28);
+    const juce::String summary = "Min phase - Auto length - 0.0 dB trim";
+    row.setSummary (summary);
+
+    // The summary is right-aligned inside r.reduced(8,0); paintButton draws it into that inset,
+    // so the honest fit test measures against the same inset (summaryAvailableWidth already
+    // accounts for it). The canonical summary must fit without truncation.
+    const juce::Font summaryFont (juce::FontOptions (11.5f));
+    const float summaryWidth = juce::GlyphArrangement::getStringWidth (summaryFont, summary);
+    CHECK ((float) row.summaryAvailableWidth() >= summaryWidth);
+}

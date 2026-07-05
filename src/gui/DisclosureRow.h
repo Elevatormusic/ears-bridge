@@ -19,9 +19,11 @@ public:
     std::function<void (bool nowOpen)> onOpenChanged;
     void clickForTest();                           // documented seam: flip + clicked(), sync
     void paintButton (juce::Graphics&, bool over, bool down) override;
+    int summaryAvailableWidth() const;             // width left for the summary after the measured title column (test seam)
 protected:
     void clicked() override;
 private:
+    juce::Rectangle<int> layoutTitleColumn (juce::Rectangle<int>& content) const; // single source: carves the title column off content, returns the summary remainder
     juce::String summary_;
     bool locked_ = false;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DisclosureRow)
