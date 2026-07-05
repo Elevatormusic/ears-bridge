@@ -296,6 +296,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
         settings.setAdvancedOverride (overrideToggle.getToggleState());
         flushSettings();
         updateStartGate();   // recompute Start enabled-ness + the status line for the new policy
+        connectStage_.syncOverrideDisclosure();   // lock/unlock the "Not using Dirac?" row to the new state
     };
     // Hardware-Dirac toggle: ON -> grading runs OFF the loopback (a hardware box generates its own sweep, so the
     // loopback captures no reference). Persist + tell the engine (publishes GradingOffHardware + suppresses the
@@ -531,6 +532,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
                          outputPicker, outputHint, preflightLabel, preflightInfo,
                          diracCableHint, diracFixButton, rateLabel, rateBox, rateWarn,
                          bitLabel, bitBox, verifyButton, verifyResultLabel, overrideToggle);
+    connectStage_.syncOverrideDisclosure();   // restore: a persisted ON override opens the disclosure locked
     calibrateStage_.adopt (leftCal, rightCal, complexPhaseToggle,
                            firLenLabel, firLenBox, trimLabel, trimSlider);
     // Advanced FIR: open at launch iff any setting is non-default (a hidden non-default would
@@ -1382,6 +1384,7 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
         const auto& st = ws.steps[(int) s];
         return st.state == StepState::Done ? juce::String() : st.reason;
     };
+    connectStage_.setRunNote   (runNoteFor (WizardStep::Connect));
     calibrateStage_.setRunNote (runNoteFor (WizardStep::Calibrate));
     const auto slotType = [] (const std::optional<eb::CalFile>& c) {
         return c.has_value() ? std::optional<eb::CalType> (c->type) : std::nullopt;

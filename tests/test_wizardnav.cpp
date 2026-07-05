@@ -377,3 +377,68 @@ TEST_CASE("Unity mask: a stale acceptance is inert once a cal is loaded") {
     CHECK_FALSE (sawUnityString);
     tmp.deleteRecursively();
 }
+
+// P2 Task 7: the non-Dirac override lives behind "Not using Dirac?" - hidden until disclosed,
+// but NEVER hideable while ON (the lock). Also: the Connect run-note mirrors the machine reason.
+TEST_CASE("Connect stage: override discloses, and locks open while the override is ON") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 780);
+    mc.forceWizardStepForTest (eb::WizardStep::Connect);
+    auto& row = mc.connectStageForTest().notUsingDiracForTest();
+    auto& toggle = mc.overrideToggleForTest();
+
+    // NOTE: Component::isShowing() is peer-dependent (always false headless) - assert on
+    // isVisible() + non-empty bounds, which is what layoutContent actually drives.
+    CHECK_FALSE (row.isOpen());                               // collapsed by default (override off)
+    CHECK_FALSE (toggle.isVisible());
+    row.clickForTest();
+    CHECK (toggle.isVisible());                               // disclosed
+    CHECK (! toggle.getBounds().isEmpty());
+    row.clickForTest();
+    CHECK_FALSE (toggle.isVisible());                         // collapsible while OFF
+
+    row.clickForTest();                                       // open again, then arm the override
+    toggle.setToggleState (true, juce::sendNotification);     // fires the real onClick wiring
+    CHECK (row.isOpen());
+    row.clickForTest();                                       // attempt to hide the armed override
+    CHECK (row.isOpen());                                     // REFUSED: locked while ON
+    CHECK (toggle.isVisible());
+    toggle.setToggleState (false, juce::sendNotification);
+    row.clickForTest();
+    CHECK_FALSE (row.isOpen());                               // unlocked once OFF
+    tmp.deleteRecursively();
+}
+
+// Map #9/#10 (Connect): the header run-note mirrors the machine's first-unmet reason and clears
+// on Done. Pin THE header's own run-note element by componentID ("connectRunNote"), not just "some
+// showing element whose label matches" - the spine's per-step meta Label has carried the same
+// machine reason since P1, so a label-only match would stay green even if the header wiring were
+// deleted (the exact Task-5-review lesson for the Calibrate run-note). Find the element by its id,
+// then assert ITS label is the machine reason.
+TEST_CASE("Connect stage: run-note carries the machine reason while not Done") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 780);
+    const auto jf = tmp.getChildFile ("d.json");
+    const auto pf = tmp.getChildFile ("d.png");
+    hig::writeDesignProbe (mc, jf, pf);                       // launch lands on Connect (first unmet)
+    // Bind the parsed tree to a named local before getArray() - the array pointer is owned by the
+    // parsed var, so parse(jf).getProperty(...).getArray() would dangle at the end of the expression.
+    const auto tree = juce::JSON::parse (jf);
+    bool foundRunNote = false, runNoteHasReason = false;
+    if (const auto* els = tree.getProperty ("elements", {}).getArray())
+        for (auto& e : *els)
+            if (e.getProperty ("id", {}).toString() == "connectRunNote"
+                && (bool) e.getProperty ("showing", false)) {
+                foundRunNote = true;
+                runNoteHasReason = e.getProperty ("label", {}).toString() == eb::kReasonNoDevices();
+            }
+    CHECK (foundRunNote);        // the header's run-note element is present + showing
+    CHECK (runNoteHasReason);    // and IT (not some sibling) carries the machine reason
+    tmp.deleteRecursively();
+}

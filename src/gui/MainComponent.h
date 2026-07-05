@@ -83,6 +83,8 @@ public:
     void           pinStepForTest (WizardStep s) { pinnedStep_ = s; refreshWizardView(); }
     juce::Component* firstFocusTargetForTest() { return firstFocusTarget (stageHost_.shown()); }
     CalibrateStage&  calibrateStageForTest() { return calibrateStage_; }
+    ConnectStage&    connectStageForTest()  { return connectStage_; }
+    juce::ToggleButton& overrideToggleForTest() { return overrideToggle; }
     juce::TextButton& connectContinueForTest() { return connectStage_.continueButton(); }
     juce::TextButton& startButtonForTest() { return startStop; }
     DevicePicker&    inputPickerForTest()  { return inputPicker; }

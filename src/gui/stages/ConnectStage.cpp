@@ -4,41 +4,49 @@
 namespace eb {
 
 namespace {
-// Local eyebrow styling (styleEyebrow is a file-static in MainComponent.cpp; the stages need their own).
-void styleStageEyebrow (juce::Label& l, const juce::String& t) {
-    l.setText (t, juce::dontSendNotification);
-    l.setColour (juce::Label::textColourId, Theme::textDim());
-    l.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")).withExtraKerningFactor (0.07f));
-}
-constexpr int kContentMaxW = 560;   // stage content column max width, centred (mirrors the frames' rhythm)
-constexpr int kGutter      = 16;
+constexpr int kGutter = 16, kPadX = 30;
+constexpr int kContentMaxW = 560;     // the frames' single-column rhythm
+constexpr int kCardPad = 14, kCardGap = 12, kDiscH = 28, kDiscIndent = 24;
 } // namespace
 
 ConnectStage::ConnectStage() {
     setFocusContainerType (juce::Component::FocusContainerType::keyboardFocusContainer);
     setTitle ("Connect");
-    styleStageEyebrow (eyebrow_, "CONNECT");
-    content_.addAndMakeVisible (eyebrow_);
 
-    overrideCaption_.setText ("Not using Dirac?", juce::dontSendNotification);
-    overrideCaption_.setColour (juce::Label::textColourId, Theme::textDim());
-    overrideCaption_.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")).withExtraKerningFactor (0.07f));
-    content_.addAndMakeVisible (overrideCaption_);
+    addAndMakeVisible (header_);
+    // SHARED StageHeader: name this stage's run-note element uniquely (StageHeader mandates a unique
+    // id per instance - a hard-coded id would collide with Calibrate's "calRunNote"). #T7 defuse.
+    header_.setRunNoteComponentID ("connectRunNote");
+    header_.continueButton().onClick = [this] { if (onContinue) onContinue(); };
 
+    content_.owner = this;
     viewport_.setViewedComponent (&content_, false);   // false: content_ is a member
     viewport_.setScrollBarsShown (true, false);         // vertical only
     viewport_.setScrollBarThickness (10);
     addAndMakeVisible (viewport_);
 
-    continueButton_.getProperties().set ("primary", true);
-    continueButton_.setEnabled (false);   // Task 4 wires enablement + navigation
-    continueButton_.onClick = [this] { if (onContinue) onContinue(); };
-    addAndMakeVisible (continueButton_);
+    content_.addAndMakeVisible (notUsingDirac_);
+    notUsingDirac_.onOpenChanged = [this] (bool) { resized(); };
+}
+
+void ConnectStage::Content::paint (juce::Graphics& g) {
+    if (owner == nullptr) return;
+    for (const auto& r : owner->groupRects_) {
+        g.setColour (Theme::surface());
+        g.fillRoundedRectangle (r.toFloat(), 12.0f);   // elevation fill-step, no outline
+    }
 }
 
 void ConnectStage::applyTheme() {
-    styleStageEyebrow (eyebrow_, "CONNECT");
-    overrideCaption_.setColour (juce::Label::textColourId, Theme::textDim());
+    header_.applyTheme();
+}
+
+void ConnectStage::syncOverrideDisclosure() {
+    // Honesty: an ENABLED override may never be collapsed out of sight. The status line's
+    // "Advanced override on - not the standard Dirac path." advisory remains the second surface.
+    const bool on = overrideToggle_ != nullptr && overrideToggle_->getToggleState();
+    notUsingDirac_.setLocked (on);                     // locking force-opens
+    notUsingDirac_.setSummary (on ? "Override on - non-Dirac use" : juce::String());
 }
 
 void ConnectStage::adopt (DevicePicker& inputPicker, juce::Label& inputGainHint,
@@ -66,23 +74,23 @@ void ConnectStage::adopt (DevicePicker& inputPicker, juce::Label& inputGainHint,
     rateWarn_ = &rateWarn;                   content_.addAndMakeVisible (rateWarn);
     bitLabel_ = &bitLabel;                   content_.addAndMakeVisible (bitLabel);
     bitBox_ = &bitBox;                       content_.addAndMakeVisible (bitBox);
-    verifyButton_ = &verifyButton;           content_.addAndMakeVisible (verifyButton);       // moved from Advanced — a connection concern
+    verifyButton_ = &verifyButton;           content_.addAndMakeVisible (verifyButton);       // a connection concern (spec 5.1)
     verifyResultLabel_ = &verifyResultLabel; content_.addAndMakeVisible (verifyResultLabel);
-    overrideToggle_ = &overrideToggle;       content_.addAndMakeVisible (overrideToggle);     // the disclosure dies; the toggle lives on
+    overrideToggle_ = &overrideToggle;       content_.addChildComponent (overrideToggle);     // disclosed content, hidden while collapsed
 
-    // Explicit top-down focus order within this stage (§4 / HIG M4). The old rail-wide orders (1..7 set in
-    // MainComponent) spanned two stages once re-homed; re-scope them here so Tab walks THIS stage's controls
-    // in visual order, then the Continue CTA last (set in the ctor).
+    // 5.1 visual order = focus order: input, output(+fix), combine, rate, bit, verify,
+    // disclosure, override, CTA last.
     int fo = 1;
-    inputPicker.setExplicitFocusOrder    (fo++);
-    combineBox.setExplicitFocusOrder     (fo++);
-    outputPicker.setExplicitFocusOrder   (fo++);
-    diracFixButton.setExplicitFocusOrder (fo++);
-    rateBox.setExplicitFocusOrder        (fo++);
-    bitBox.setExplicitFocusOrder         (fo++);
-    verifyButton.setExplicitFocusOrder   (fo++);
-    overrideToggle.setExplicitFocusOrder (fo++);
-    continueButton_.setExplicitFocusOrder (fo++);
+    inputPicker.setExplicitFocusOrder     (fo++);
+    outputPicker.setExplicitFocusOrder    (fo++);
+    diracFixButton.setExplicitFocusOrder  (fo++);
+    combineBox.setExplicitFocusOrder      (fo++);
+    rateBox.setExplicitFocusOrder         (fo++);
+    bitBox.setExplicitFocusOrder          (fo++);
+    verifyButton.setExplicitFocusOrder    (fo++);
+    notUsingDirac_.setExplicitFocusOrder  (fo++);
+    overrideToggle.setExplicitFocusOrder  (fo++);
+    header_.continueButton().setExplicitFocusOrder (fo++);
 }
 
 void ConnectStage::paint (juce::Graphics& g) {
@@ -90,87 +98,96 @@ void ConnectStage::paint (juce::Graphics& g) {
 }
 
 int ConnectStage::layoutContent (int width) {
-    // Centred content column (max 560), mirroring the frames' rhythm; row heights/gaps copied from the
-    // former layoutRail() so the re-homed controls keep their exact metrics. Pure layout: no resized().
+    groupRects_.clear();
     const int colW = juce::jmin (kContentMaxW, juce::jmax (0, width - 2 * kGutter));
     const int x0   = (width - colW) / 2;
     auto rr = juce::Rectangle<int> (x0, 0, colW, 100000);
-    rr.removeFromTop (kGutter);
-
-    eyebrow_.setBounds (rr.removeFromTop (24));
-    rr.removeFromTop (10);
-
-    if (inputPicker_)   inputPicker_->setBounds (rr.removeFromTop (62));
     rr.removeFromTop (4);
-    if (inputGainHint_) inputGainHint_->setBounds (rr.removeFromTop (60));
-    rr.removeFromTop (12);
 
-    if (combineLabel_) combineLabel_->setBounds (rr.removeFromTop (16));
-    rr.removeFromTop (6);
-    if (combineBox_)   combineBox_->setBounds (rr.removeFromTop (40));
-    rr.removeFromTop (6);
-    if (combineHint_)  combineHint_->setBounds (rr.removeFromTop (80));
-    rr.removeFromTop (16);
+    int cardTop = 0;
+    const auto beginCard = [&] { cardTop = rr.getY(); rr.removeFromTop (kCardPad); };
+    const auto endCard   = [&] {
+        rr.removeFromTop (kCardPad);
+        groupRects_.push_back ({ x0, cardTop, colW, rr.getY() - cardTop });
+        rr.removeFromTop (kCardGap);
+    };
+    const auto row = [&] (juce::Component* c, int h) {
+        auto b = rr.removeFromTop (h).reduced (kCardPad, 0);
+        if (c != nullptr) c->setBounds (b);
+        return b;
+    };
 
-    if (outputPicker_) outputPicker_->setBounds (rr.removeFromTop (62));
-    rr.removeFromTop (4);
-    if (outputHint_)   outputHint_->setBounds (rr.removeFromTop (30));
-    if (preflightLabel_) preflightLabel_->setBounds (rr.removeFromTop (14));
-    if (preflightInfo_) {
-        if (preflightInfo_->getText().isNotEmpty()) preflightInfo_->setBounds (rr.removeFromTop (14));
+    beginCard();                                       // ---- SIGNAL PATH (5.1: input -> output)
+    row (inputPicker_, 62);            rr.removeFromTop (4);
+    row (inputGainHint_, 60);          rr.removeFromTop (12);
+    row (outputPicker_, 62);           rr.removeFromTop (4);
+    row (outputHint_, 30);
+    row (preflightLabel_, 14);
+    if (preflightInfo_ != nullptr) {
+        if (preflightInfo_->getText().isNotEmpty()) row (preflightInfo_, 14);
         else                                        preflightInfo_->setBounds ({});
     }
-    if (diracCableHint_ && diracCableHint_->isVisible()) {
+    if (diracCableHint_ != nullptr && diracCableHint_->isVisible()) {
         rr.removeFromTop (6);
-        diracCableHint_->setBounds (rr.removeFromTop (48));
-        if (diracFixButton_ && diracFixButton_->isVisible()) {
+        row (diracCableHint_, 48);
+        if (diracFixButton_ != nullptr && diracFixButton_->isVisible()) {
             rr.removeFromTop (4);
-            diracFixButton_->setBounds (rr.removeFromTop (30).removeFromLeft (200));
+            auto b = rr.removeFromTop (30).reduced (kCardPad, 0);
+            diracFixButton_->setBounds (b.removeFromLeft (200));
         }
     }
-    rr.removeFromTop (12);
+    endCard();
 
+    beginCard();                                       // ---- FORMAT
+    row (combineLabel_, 16);  rr.removeFromTop (6);
+    row (combineBox_, 40);    rr.removeFromTop (6);
+    row (combineHint_, 80);   rr.removeFromTop (12);
     {
-        auto rb = rr.removeFromTop (62);
+        auto rb = rr.removeFromTop (62).reduced (kCardPad, 0);
         auto rcol = rb.removeFromLeft (rb.getWidth() / 2 - 8);
         rb.removeFromLeft (16);
-        if (rateLabel_) rateLabel_->setBounds (rcol.removeFromTop (16));
+        if (rateLabel_ != nullptr) rateLabel_->setBounds (rcol.removeFromTop (16));
         rcol.removeFromTop (6);
-        if (rateBox_)   rateBox_->setBounds (rcol.removeFromTop (40));
-        if (bitLabel_)  bitLabel_->setBounds (rb.removeFromTop (16));
+        if (rateBox_ != nullptr)   rateBox_->setBounds (rcol.removeFromTop (40));
+        if (bitLabel_ != nullptr)  bitLabel_->setBounds (rb.removeFromTop (16));
         rb.removeFromTop (6);
-        if (bitBox_)    bitBox_->setBounds (rb.removeFromTop (40));
+        if (bitBox_ != nullptr)    bitBox_->setBounds (rb.removeFromTop (40));
     }
-    if (rateWarn_) rateWarn_->setBounds (rr.removeFromTop (14));
-    rr.removeFromTop (12);
+    row (rateWarn_, 14);
+    endCard();
 
-    // L/R wiring check (moved here from Advanced — it is a connection concern, §5.1).
-    if (verifyButton_)      verifyButton_->setBounds (rr.removeFromTop (30).removeFromLeft (juce::jmin (220, colW)));
+    beginCard();                                       // ---- WIRING CHECK (5.1: a connect concern)
+    {
+        auto b = rr.removeFromTop (30).reduced (kCardPad, 0);
+        if (verifyButton_ != nullptr)
+            verifyButton_->setBounds (b.removeFromLeft (juce::jmin (220, b.getWidth())));
+    }
     rr.removeFromTop (4);
-    if (verifyResultLabel_) verifyResultLabel_->setBounds (rr.removeFromTop (16));
-    rr.removeFromTop (16);
+    row (verifyResultLabel_, 16);
+    endCard();
 
-    // "Not using Dirac?" escape hatch: caption + the override toggle beneath it.
-    overrideCaption_.setBounds (rr.removeFromTop (16));
-    rr.removeFromTop (4);
-    if (overrideToggle_) overrideToggle_->setBounds (rr.removeFromTop (26));
-
+    // ---- "Not using Dirac?" escape hatch (flat row; contents only while open) ----
+    notUsingDirac_.setBounds (rr.removeFromTop (kDiscH));
+    if (overrideToggle_ != nullptr) {
+        overrideToggle_->setVisible (notUsingDirac_.isOpen());
+        if (notUsingDirac_.isOpen()) {
+            rr.removeFromTop (6);
+            overrideToggle_->setBounds (rr.removeFromTop (26).withTrimmedLeft (kDiscIndent));
+        } else {
+            overrideToggle_->setBounds ({});
+        }
+    }
     return rr.getY() + kGutter;
 }
 
 void ConnectStage::resized() {
     auto area = getLocalBounds();
-
-    // Continue button pinned bottom-right (outside the scrolled content, always reachable).
-    auto footer = area.removeFromBottom (34 + kGutter).reduced (kGutter, 0);
-    footer.removeFromBottom (kGutter);
-    continueButton_.setBounds (footer.removeFromRight (200));
-
+    header_.setBounds (area.removeFromTop (StageHeader::kHeight).reduced (kPadX, 0));
     viewport_.setBounds (area);
     const int contentW = viewport_.getMaximumVisibleWidth();
     const int contentH = layoutContent (contentW);
     content_.setSize (contentW, juce::jmax (contentH, viewport_.getHeight()));
-    const int finalW = viewport_.getMaximumVisibleWidth();
+    const int finalW = viewport_.getMaximumVisibleWidth();   // scrollbar may have toggled
     if (finalW != contentW) {
         const int h2 = layoutContent (finalW);
         content_.setSize (finalW, juce::jmax (h2, viewport_.getHeight()));
