@@ -177,12 +177,12 @@ int CalibrateStage::layoutContent (int width) {
             firLenBox_->setBounds (row.removeFromLeft (juce::jmin (280, row.getWidth())));
             rr.removeFromTop (8);
         }
-        if (trimLabel_ != nullptr) {
-            trimLabel_->setBounds (rr.removeFromTop (kEyebrowH).withTrimmedLeft (kDiscIndent));
-            rr.removeFromTop (4);
+        {   // P2.9: parameter row - "Output trim" label left, compact slider + value chip right.
+            auto row = rr.removeFromTop (28).withTrimmedLeft (kDiscIndent);
+            if (trimLabel_ != nullptr)  trimLabel_->setBounds (row.removeFromLeft (100));
+            row.removeFromLeft (8);
+            if (trimSlider_ != nullptr) trimSlider_->setBounds (row.removeFromLeft (juce::jmin (220, row.getWidth())));
         }
-        if (trimSlider_ != nullptr)
-            trimSlider_->setBounds (rr.removeFromTop (26).withTrimmedLeft (kDiscIndent));
     } else {
         for (juce::Component* c : { (juce::Component*) complexPhaseToggle_, (juce::Component*) firLenLabel_,
                                     (juce::Component*) firLenBox_, (juce::Component*) trimLabel_,

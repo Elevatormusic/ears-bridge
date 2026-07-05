@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "gui/stages/CalibrateStage.h"
+#include "gui/MainComponent.h"
 
 // The ONE stage caption (spec 5.2, failure-surface map #4/#5). Pure wording rules:
 // any empty slot -> the load guidance; else HEQ wins; else HPN; else silent (IDF/RAW/Unknown
@@ -21,4 +22,27 @@ TEST_CASE("CalibrateStage advanced summary composes every field") {
            == "Min phase - Auto length - 0.0 dB trim");
     CHECK (eb::CalibrateStage::advancedFirSummary (true, 16384, -2.0)
            == "Complex phase - 16384 taps - -2.0 dB trim");
+}
+
+// P2.9 T6: the OUTPUT TRIM control is a parameter row (label left, compact slider + value chip),
+// not a full-width debug slider with an all-caps eyebrow stacked above it.
+TEST_CASE("P2.9 trim row: label left, compact slider, no full-width debug slider") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 720);
+    mc.forceWizardStepForTest (eb::WizardStep::Calibrate);
+    mc.calibrateStageForTest().setAdvancedOpen (true);
+    auto& sl = mc.trimSliderForTest();
+    auto& lb = mc.trimLabelForTest();
+    REQUIRE (sl.isVisible());
+    // One 28px row: label and slider vertically aligned, label LEFT of the slider, slider compact.
+    CHECK (lb.getBounds().getCentreY() == sl.getBounds().getCentreY());
+    CHECK (lb.getRight() <= sl.getX());
+    CHECK (sl.getWidth() <= 220);                        // the debug slider spanned the whole column
+    CHECK (sl.getHeight() == 28);
+    CHECK (lb.getText() == "Output trim");               // eyebrow shouting retired
+    mc.calibrateStageForTest().setAdvancedOpen (false);
+    tmp.deleteRecursively();
 }

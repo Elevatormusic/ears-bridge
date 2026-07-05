@@ -90,7 +90,7 @@ void Theme::applyColours() {
     setColour (juce::Slider::thumbColourId,                  accent());
     setColour (juce::Slider::trackColourId,                  accent());
     setColour (juce::Slider::backgroundColourId,             track());
-    setColour (juce::Slider::textBoxTextColourId,            textDim());
+    setColour (juce::Slider::textBoxTextColourId,            text());   // P2.9: chip value is primary info (W2 .meter-val --tx)
     setColour (juce::Slider::textBoxOutlineColourId,         juce::Colours::transparentBlack);
     setColour (juce::ToggleButton::textColourId,             text());
     setColour (juce::ToggleButton::tickColourId,             accent());
@@ -199,6 +199,27 @@ void Theme::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool /*over*
                       juce::Rectangle<float> (x0 + ico + gap, 0.0f, juce::jmax (0.0f, textW),
                                               (float) b.getHeight()).toNearestInt(),
                       juce::Justification::centredLeft, 1);
+}
+
+juce::Label* Theme::createSliderTextBox (juce::Slider& s) {
+    auto* l = LookAndFeel_V4::createSliderTextBox (s);
+    l->getProperties().set ("chip", true);                 // drawLabel keys the chip treatment off this
+    l->setJustificationType (juce::Justification::centred);
+    return l;
+}
+
+void Theme::drawLabel (juce::Graphics& g, juce::Label& l) {
+    if (! l.getProperties().contains ("chip")) { LookAndFeel_V4::drawLabel (g, l); return; }
+    auto r = l.getLocalBounds().toFloat();
+    g.setColour (ctrl());
+    g.fillRoundedRectangle (r, 6.0f);
+    g.setColour (sep());
+    g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
+    if (! l.isBeingEdited()) {
+        g.setColour (l.findColour (juce::Label::textColourId).withMultipliedAlpha (l.isEnabled() ? 1.0f : 0.5f));
+        g.setFont (juce::Font (juce::FontOptions (11.5f)));
+        g.drawText (l.getText(), l.getLocalBounds().reduced (6, 0), juce::Justification::centred, false);
+    }
 }
 
 } // namespace eb

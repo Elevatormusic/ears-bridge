@@ -319,10 +319,13 @@ MainComponent::MainComponent (const TestConfig& cfg)
         rebuildFirsAsync();
     };
     firLenBox.setTitle ("FIR length");   // HIG: accessible name (the eyebrow label is not auto-associated to the control)
-    styleEyebrow (trimLabel, "OUTPUT TRIM (dB)");
+    trimLabel.setText ("Output trim", juce::dontSendNotification);          // P2.9: parameter-row label, not an eyebrow
+    trimLabel.setColour (juce::Label::textColourId, Theme::textDim());
+    trimLabel.setFont (juce::Font (juce::FontOptions (12.5f)));
     trimSlider.setRange (-24.0, 0.0, 0.1);
     trimSlider.setSliderStyle (juce::Slider::LinearHorizontal);
-    trimSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 22);
+    trimSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 64, 22);
+    trimSlider.setTextValueSuffix (" dB");
     trimSlider.onValueChange = [this] {
         settings.setOutputTrimDb (trimSlider.getValue());
         engine.setOutputTrimDb (trimSlider.getValue());   // apply live (the graph reads it lock-free)
@@ -1569,7 +1572,9 @@ void MainComponent::applyTextColours() {
     styleEyebrow (rateLabel,     "RATE");
     styleEyebrow (bitLabel,      "BIT DEPTH");
     styleEyebrow (firLenLabel,   "FIR LENGTH");
-    styleEyebrow (trimLabel,     "OUTPUT TRIM (dB)");
+    trimLabel.setText ("Output trim", juce::dontSendNotification);          // P2.9: parameter-row label, not an eyebrow
+    trimLabel.setColour (juce::Label::textColourId, Theme::textDim());
+    trimLabel.setFont (juce::Font (juce::FontOptions (12.5f)));
     styleEyebrow (levelsEyebrow, "LEVELS");
     // levelsHint colour/text is owned by the timer (updateActiveEarIndicator), so it is not set here.
     combineHint.setColour      (juce::Label::textColourId, Theme::textDim());

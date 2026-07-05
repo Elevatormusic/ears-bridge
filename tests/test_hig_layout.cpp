@@ -284,8 +284,10 @@ TEST_CASE("HIG gate: the captured two-line header renders clean at the minimum w
 // T10: scored at the TRUE 900x720 minimum again. Task 8 temporarily scored at 760 because the
 // disclosed section straddled the viewport fold at 720 (the probe clips geometry through
 // Viewports, so the trim slider scored 6px tall). The T10 compaction makes the advanced-open
-// state fit entirely at 720 (ledger: worst case 518 <= 546), so the fold artifact is gone and
-// 720 is load-bearing: if this case ever needs raising again, the no-scroll contract is broken.
+// state fit entirely at 720; P2.9 T6 turned the OUTPUT TRIM eyebrow+slider stack into a single
+// 28px parameter row, shrinking every open state by 16px (ledger: worst-open natural height
+// 534 -> 518 <= 546 viewport), so the fold artifact is gone and 720 is load-bearing: if this
+// case ever needs raising again, the no-scroll contract is broken.
 // ==================================================================================================
 TEST_CASE("HIG gate: Calibrate advanced-FIR disclosure open renders clean [P2]") {
     juce::ScopedJuceInitialiser_GUI juceInit;

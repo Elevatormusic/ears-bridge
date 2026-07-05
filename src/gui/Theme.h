@@ -67,6 +67,10 @@ public:
     // (ids: play stop tick info refresh folder export warning). Glyph + 7px gap + text centred as a group (W2 .btn .ico).
     void drawButtonText (juce::Graphics&, juce::TextButton&, bool over, bool down) override;
 
+    // P2.9 value chip: the slider textbox paints as a rounded ctrl-filled chip ("-6.0 dB").
+    juce::Label* createSliderTextBox (juce::Slider&) override;
+    void drawLabel (juce::Graphics&, juce::Label&) override;
+
     // P2.9 card recipe (W2 .ear/.meters/.fr): surface fill + 1px sep() inner hairline, radius 12.
     // The single source for every stage/component card - do not hand-roll surface fills any more.
     static void paintCardSurface (juce::Graphics& g, juce::Rectangle<float> r, float radius = 12.0f);

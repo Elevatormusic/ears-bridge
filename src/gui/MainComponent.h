@@ -99,6 +99,9 @@ public:
     // T10: the Connect preflight warning label (warn-toned), for the no-scroll/displacement
     // BOUNDARY case that forces the post-Start preflight stack in the safety-net state.
     juce::Label& preflightLabelForTest() { return preflightLabel; }
+    // P2.9 T6: the Advanced-FIR OUTPUT TRIM control, now a parameter row (label left, compact slider).
+    juce::Slider& trimSliderForTest() { return trimSlider; }
+    juce::Label&  trimLabelForTest()  { return trimLabel; }
     CalSlotComponent& leftCalForTest()  { return leftCal; }
     CalSlotComponent& rightCalForTest() { return rightCal; }
     // M-2 seams: drive the Level green-band latch and route an input through the SAME apply path both the
