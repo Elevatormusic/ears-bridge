@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "gui/CalSlotComponent.h"
+#include "gui/juce_design_probe.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
 // Regression: a HEQ / unidentified-type cal file used to draw its warning label in the SAME bounds as
@@ -87,4 +88,70 @@ TEST_CASE("CalSlotComponent: filename/content side conflict keeps the content si
     for (const auto& w : loaded->parseWarnings)
         if (w.containsIgnoreCase ("filename")) sawConflict = true;
     CHECK (sawConflict);                                      // the disagreement is recorded
+}
+
+// ---- P2 empty-state redesign (spec 5.2 + the firstrun frame) ------------------------------------
+
+// H1: the empty slot must be operable WITHOUT drag-and-drop or a pointer - a real, visible,
+// focusable Browse button (the old empty card was click-to-browse only: invisible to keyboard).
+TEST_CASE("CalSlotComponent empty state: visible, focusable, per-ear Browse button [H1]") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::CalSlotComponent slot ("Left ear");
+    slot.setSize (289, slot.preferredHeight());
+    juce::TextButton* browse = nullptr;
+    for (int i = 0; i < slot.getNumChildComponents(); ++i)
+        if (auto* b = dynamic_cast<juce::TextButton*> (slot.getChildComponent (i)))
+            if (b->getButtonText().startsWith ("Browse")) browse = b;
+    REQUIRE (browse != nullptr);
+    CHECK (browse->isVisible());
+    CHECK (! browse->getBounds().isEmpty());
+    CHECK (browse->getWantsKeyboardFocus());
+    // Per-ear text: distinct labels are honest a11y (a screen reader hears WHICH ear) and the
+    // design gate's duplicate rule would rightly flag two identical "Browse..." twins.
+    CHECK (browse->getButtonText() == "Browse left ear...");
+}
+
+// Map #8b: the Required line exists ONLY in the honest asymmetric case (the OTHER ear loaded ->
+// Start is truly blocked until this one loads). Both-empty shows no per-card nudge (the
+// stage-level unity hint owns that, Task 6) - and the line cannot stick.
+TEST_CASE("CalSlotComponent empty state: Required line tracks the sibling, with a negative") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::CalSlotComponent slot ("Right ear");
+    slot.setSize (289, slot.preferredHeight());
+    auto* req = slot.findChildWithID ("calDzReq");
+    REQUIRE (req != nullptr);
+    CHECK_FALSE (req->isVisible());                 // both empty: no per-card requirement claim
+    slot.setSiblingLoaded (true);
+    CHECK (req->isVisible());
+    slot.setSiblingLoaded (false);
+    CHECK_FALSE (req->isVisible());                 // NEGATIVE: it does not false-fire/stick
+}
+
+// The drop-zone affordances are EMPTY-state only; Remove returns the card to the drop zone.
+TEST_CASE("CalSlotComponent: loading hides the drop-zone affordances; clearing restores them") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::CalSlotComponent slot ("Left ear");
+    slot.setSize (289, slot.preferredHeight());
+    auto tmp = juce::File::createTempFile (".txt");
+    tmp.replaceWithText ("* HEQ\n20 0.0\n100 1.0\n1000 2.0\n10000 -1.0\n20000 -3.0\n");
+    REQUIRE (slot.loadFromFile (tmp));
+    tmp.deleteFile();
+    CHECK_FALSE (slot.findChildWithID ("calDzMain")->isVisible());
+    slot.clearCal();
+    CHECK (slot.findChildWithID ("calDzMain")->isVisible());
+}
+
+// The redesigned empty card at the MINIMUM grid cell width (289px at the 900px window):
+// no label may clip (probe-verified).
+TEST_CASE("CalSlotComponent empty state: probe-clean at the minimum cell width") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::CalSlotComponent slot ("Right ear");
+    slot.setSiblingLoaded (true);                    // worst case: Required line present
+    slot.setSize (289, slot.preferredHeight());
+    const auto tree = juce::JSON::parse (hig::describeComponentTree (slot));
+    const auto* els = tree.getProperty ("elements", {}).getArray();
+    REQUIRE (els != nullptr);
+    for (auto& e : *els)
+        if ((bool) e.getProperty ("showing", false))
+            CHECK_FALSE ((bool) e.getProperty ("textOverflows", false));
 }

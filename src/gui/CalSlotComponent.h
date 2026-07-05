@@ -29,6 +29,19 @@ public:
     // string clears it. Independent of the parse warning/error label so a swap can't be buried.
     void setProblem (const juce::String& message);
 
+    // P2 (spec 5.2): the empty-state "Required" honesty line. With the OTHER ear loaded, Start
+    // is genuinely blocked until this ear loads too - only then does the card claim "Required".
+    void setSiblingLoaded (bool otherEarHasCal);
+    // State-dependent card height (empty drop zone vs loaded card, plus problem/caution/error
+    // rows). CalibrateStage sizes both grid cells to the taller card so the row stays uniform.
+    int preferredHeight() const;
+    // Fired when the card's height inputs change (load/clear/problem/caution/error) so the host
+    // stage re-runs its grid. Distinct from onCalLoaded/onCalCleared (MainComponent's wiring).
+    std::function<void()> onLayoutChanged;
+
+    void mouseEnter (const juce::MouseEvent&) override;
+    void mouseExit  (const juce::MouseEvent&) override;
+
     std::function<void (const juce::File&)> onCalLoaded;
     std::function<void ()> onCalCleared;   // fired when the slot is emptied via Remove
     // Fired with a loaded file's parse warnings (side-conflict, skipped/non-monotonic rows) so the owner can
@@ -47,6 +60,7 @@ public:
 private:
     void applyParsed (const eb::CalFile&, const juce::File&);
     void browseForCal();
+    void refreshStateVisibility();       // empty-state children visible iff no cal is loaded
 
     juce::String earName;
     juce::Label  fileLabel;     // "L_HPN.txt - serial 000-0000"
@@ -55,6 +69,12 @@ private:
     juce::TextButton replaceBtn { "Replace" };
     juce::TextButton removeBtn  { "Remove" };
     CurveThumbnail thumbnail;
+    juce::Label      dzMain;             // "Drop the left ear file here"
+    juce::TextButton browseBtn;          // visible Browse CTA (H1)
+    juce::Label      dzReq;              // "Required - load both ears to measure"
+    juce::Rectangle<int> dzIconArea;     // where paint() draws the drop glyph (set by resized)
+    bool siblingLoaded = false;
+    bool mouseHover = false;
     std::optional<eb::CalFile> cal;
     juce::String typeTag;       // "HPN" / "HEQ" / ...
     bool rawCaution = false;

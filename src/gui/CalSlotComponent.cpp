@@ -29,6 +29,17 @@ static void drawChip (juce::Graphics& g, juce::Rectangle<int> area, juce::Justif
     g.drawText (text, chip, juce::Justification::centred);
 }
 
+namespace {
+// One source of truth for BOTH resized() and preferredHeight() - they must never disagree.
+constexpr int kPadX = 16, kPadY = 12, kHeaderH = 26, kHeadGap = 10;
+constexpr int kProblemH = 32, kProblemGap = 8;
+constexpr int kDzIconH = 36, kDzMainH = 18, kDzBrowseH = 28, kDzBrowseW = 150, kDzReqH = 16;
+constexpr int kDzGap = 10, kDzGapSm = 8, kDzMinBodyH = 150;
+constexpr int kErrStripH = 44, kErrStripGap = 8;
+constexpr int kThumbH = 84, kFileH = 18, kSerialH = 16, kNoteH = 34, kNoteGap = 6;
+constexpr int kBtnRowH = 28, kBtnGap = 8;
+} // namespace
+
 CalSlotComponent::CalSlotComponent (juce::String name) : earName (std::move (name)) {
     setTitle (earName + " calibration");   // accessible name (VoiceOver)
     addAndMakeVisible (thumbnail);
@@ -61,6 +72,30 @@ CalSlotComponent::CalSlotComponent (juce::String name) : earName (std::move (nam
 
     removeBtn.onClick = [this] { clearCal(); };
     addChildComponent (removeBtn);
+
+    // P2 empty state (spec 5.2 / firstrun frame): real child controls, not painted text, so the
+    // design gate can measure them. Clicks fall through the labels to the whole-body browse.
+    dzMain.setText ("Drop the " + earName.toLowerCase() + " file here", juce::dontSendNotification);
+    dzMain.setColour (juce::Label::textColourId, Theme::text());
+    dzMain.setFont (juce::Font (juce::FontOptions (13.0f)));
+    dzMain.setJustificationType (juce::Justification::centred);
+    dzMain.setComponentID ("calDzMain");
+    dzMain.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (dzMain);
+
+    browseBtn.setButtonText ("Browse " + earName.toLowerCase() + "...");   // per-ear: a11y + dup gate
+    browseBtn.onClick = [this] { browseForCal(); };
+    addAndMakeVisible (browseBtn);
+
+    dzReq.setText ("Required - load both ears to measure", juce::dontSendNotification);
+    dzReq.setColour (juce::Label::textColourId, Theme::warn());
+    dzReq.setFont (juce::Font (juce::FontOptions (11.5f)));
+    dzReq.setJustificationType (juce::Justification::centred);
+    dzReq.setComponentID ("calDzReq");
+    dzReq.setInterceptsMouseClicks (false, false);
+    addChildComponent (dzReq);
+
+    refreshStateVisibility();
 }
 
 bool CalSlotComponent::isInterestedInFileDrag (const juce::StringArray& files) {
@@ -106,7 +141,9 @@ bool CalSlotComponent::loadFromFile (const juce::File& file) {
         // #38: a PERSISTED path can go stale (file moved/deleted). Without a visible Remove the user had no
         // way to clear it from the UI - the error card re-appeared every launch with Start locked closed.
         removeBtn.setVisible (true);
+        refreshStateVisibility();
         resized(); repaint();
+        if (onLayoutChanged) onLayoutChanged();
         return false;
     }
     // #9: cap the accepted size BEFORE reading. Real EARS/FRD cals are a few KB; a multi-hundred-MB file at a
@@ -119,7 +156,9 @@ bool CalSlotComponent::loadFromFile (const juce::File& file) {
                             + ") - not an EARS calibration file.", juce::dontSendNotification);
         errorLabel.setVisible (true);
         removeBtn.setVisible (true);
+        refreshStateVisibility();
         resized(); repaint();
+        if (onLayoutChanged) onLayoutChanged();
         return false;
     }
     try {
@@ -145,7 +184,9 @@ bool CalSlotComponent::loadFromFile (const juce::File& file) {
         errorLabel.setText (juce::String ("Parse error: ") + e.what(), juce::dontSendNotification);
         errorLabel.setVisible (true);
         removeBtn.setVisible (true);   // #38: same clear affordance for a corrupt persisted file
+        refreshStateVisibility();
         resized(); repaint();
+        if (onLayoutChanged) onLayoutChanged();
         return false;
     }
 }
@@ -209,8 +250,10 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
     fileLabel.setVisible (true);
     replaceBtn.setVisible (true);
     removeBtn.setVisible (true);
+    refreshStateVisibility();
     resized();
     repaint();
+    if (onLayoutChanged) onLayoutChanged();
 }
 
 void CalSlotComponent::clearCal() {
@@ -227,9 +270,11 @@ void CalSlotComponent::clearCal() {
     problemLabel.setVisible (false);   // an emptied slot has no swap to warn about
     replaceBtn.setVisible (false);
     removeBtn.setVisible (false);
+    refreshStateVisibility();
     resized();
     repaint();
     if (onCalCleared) onCalCleared();
+    if (onLayoutChanged) onLayoutChanged();
 }
 
 void CalSlotComponent::setProblem (const juce::String& message) {
@@ -243,26 +288,60 @@ void CalSlotComponent::setProblem (const juce::String& message) {
     repaint();
 }
 
+void CalSlotComponent::refreshStateVisibility() {
+    const bool empty = ! cal.has_value();
+    dzMain.setVisible (empty);
+    browseBtn.setVisible (empty);
+    dzReq.setVisible (empty && siblingLoaded);
+    setMouseCursor (empty ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void CalSlotComponent::setSiblingLoaded (bool other) {
+    if (siblingLoaded == other) return;
+    siblingLoaded = other;
+    refreshStateVisibility();
+    resized(); repaint();
+    if (onLayoutChanged) onLayoutChanged();
+}
+
+int CalSlotComponent::preferredHeight() const {
+    if (cal) return 206;   // P1 loaded layout height - Task 3 (loaded-card redesign) replaces this
+    int h = kPadY + kHeaderH + kHeadGap;
+    if (problemLabel.isVisible()) h += kProblemH + kProblemGap;
+    int body = kDzGap + kDzIconH + kDzGapSm + kDzMainH + kDzGap + kDzBrowseH;
+    if (dzReq.isVisible()) body += kDzGapSm + kDzReqH;
+    h += juce::jmax (kDzMinBodyH, body);
+    if (errorLabel.isVisible()) h += kErrStripGap + kErrStripH;   // #38 stale-path error strip
+    return h + kPadY;
+}
+
+// L6: the drop zone answers HOVER like it answers a file-drag (accent dashes). Keyboard focus
+// rides the Browse button (a TextButton paints the LnF focus treatment).
+void CalSlotComponent::mouseEnter (const juce::MouseEvent&) { if (! cal) { mouseHover = true; repaint(); } }
+void CalSlotComponent::mouseExit  (const juce::MouseEvent&) { mouseHover = false; repaint(); }
+
 void CalSlotComponent::setPlotRange (float topDb) { thumbnail.setRange (topDb); }
 
 void CalSlotComponent::applyTheme() {
     fileLabel.setColour (juce::Label::textColourId, Theme::textDim());
     errorLabel.setColour (juce::Label::textColourId, Theme::danger());
     problemLabel.setColour (juce::Label::textColourId, Theme::danger());
+    dzMain.setColour (juce::Label::textColourId, Theme::text());
+    dzReq.setColour  (juce::Label::textColourId, Theme::warn());
     thumbnail.repaint();
     repaint();
 }
 
 void CalSlotComponent::resized() {
-    auto r = getLocalBounds().reduced (16, 12);
-    r.removeFromTop (26);   // header strip (painted)
-    r.removeFromTop (10);
+    auto r = getLocalBounds().reduced (kPadX, kPadY);
+    r.removeFromTop (kHeaderH);   // header strip (painted)
+    r.removeFromTop (kHeadGap);
 
     // The swap banner (setProblem) sits directly under the title, ABOVE the thumbnail/empty-state,
     // so it's the first thing read on the card and never overlaps the filename or type warning.
     if (problemLabel.isVisible()) {
-        problemLabel.setBounds (r.removeFromTop (32));
-        r.removeFromTop (8);
+        problemLabel.setBounds (r.removeFromTop (kProblemH));
+        r.removeFromTop (kProblemGap);
     }
 
     if (cal) {
@@ -282,16 +361,30 @@ void CalSlotComponent::resized() {
         }
         r.removeFromBottom (10);
         thumbnail.setBounds (r);
-    } else if (errorLabel.isVisible()) {
-        // Empty slot with a load/parse error (no thumbnail): the error along the bottom of the body, with the
-        // Remove button beside it (#38) so a stale persisted path can be CLEARED from the card - the button
-        // was only ever laid out on a loaded card before, leaving no affordance to unstick the error state.
-        auto meta = r.removeFromBottom (34);
-        if (removeBtn.isVisible()) {
-            removeBtn.setBounds (meta.removeFromRight (84).withSizeKeepingCentre (84, 28));
-            meta.removeFromRight (10);
+    } else {
+        // EMPTY: #38 error strip first (bottom), then the centred drop-zone stack. dzIconArea is
+        // recorded for paint() so the glyph and the labels can never drift apart.
+        if (errorLabel.isVisible()) {
+            auto strip = r.removeFromBottom (kErrStripH);
+            if (removeBtn.isVisible()) {
+                removeBtn.setBounds (strip.removeFromRight (84).withSizeKeepingCentre (84, 28));
+                strip.removeFromRight (10);
+            }
+            errorLabel.setBounds (strip);
+            r.removeFromBottom (kErrStripGap);
         }
-        errorLabel.setBounds (meta);
+        int stackH = kDzIconH + kDzGapSm + kDzMainH + kDzGap + kDzBrowseH;
+        if (dzReq.isVisible()) stackH += kDzGapSm + kDzReqH;
+        auto stack = r.withSizeKeepingCentre (r.getWidth(), stackH);
+        dzIconArea = stack.removeFromTop (kDzIconH);
+        stack.removeFromTop (kDzGapSm);
+        dzMain.setBounds (stack.removeFromTop (kDzMainH));
+        stack.removeFromTop (kDzGap);
+        browseBtn.setBounds (stack.removeFromTop (kDzBrowseH).withSizeKeepingCentre (kDzBrowseW, kDzBrowseH));
+        if (dzReq.isVisible()) {
+            stack.removeFromTop (kDzGapSm);
+            dzReq.setBounds (stack.removeFromTop (kDzReqH));
+        }
     }
 }
 
@@ -300,13 +393,14 @@ void CalSlotComponent::paint (juce::Graphics& g) {
     g.setColour (Theme::surface());
     g.fillRoundedRectangle (full, 10.0f);
 
-    auto inner = getLocalBounds().reduced (16, 12);
-    auto header = inner.removeFromTop (26);
+    auto inner = getLocalBounds().reduced (kPadX, kPadY);
+    auto header = inner.removeFromTop (kHeaderH);
 
-    // Ear name.
+    // Ear name: the frame's 12px tracked uppercase ear label (the old 15px bold read as a second
+    // stage title at card scale).
     g.setColour (Theme::text());
-    g.setFont (juce::Font (juce::FontOptions (15.0f).withStyle ("Bold")));
-    g.drawText (earName, header, juce::Justification::centredLeft);
+    g.setFont (juce::Font (juce::FontOptions (12.0f).withStyle ("Bold")).withExtraKerningFactor (0.04f));
+    g.drawText (earName.toUpperCase(), header, juce::Justification::centredLeft);
 
     // Status badge (right).
     if (cal) {
@@ -323,28 +417,42 @@ void CalSlotComponent::paint (juce::Graphics& g) {
 
     // Empty state: a dashed drop zone filling the body.
     if (! cal) {
-        inner.removeFromTop (10);
+        inner.removeFromTop (kHeadGap);
         auto body = inner.toFloat();
         // Error state (#38 follow-up): the bottom strip holds the error text + the Remove button - carve it
         // out of the drop zone so the dashes/hint never paint underneath them (verifier MINOR).
         if (errorLabel.isVisible())
-            body.removeFromBottom (44.0f);
+            body.removeFromBottom ((float) kErrStripH);
+        if (dragHover) {   // a file is over the zone: tint the fill before stroking the accent dashes
+            g.setColour (Theme::accent().withAlpha (0.06f));
+            g.fillRoundedRectangle (body.reduced (0.5f), 8.0f);
+        }
         juce::Path dash;
         dash.addRoundedRectangle (body.reduced (0.5f), 8.0f);
-        g.setColour (dragHover ? Theme::accent() : Theme::sep2());
+        g.setColour ((dragHover || mouseHover) ? Theme::accent() : Theme::sep2());   // L6: hover == drag
         const float dashes[] = { 6.0f, 5.0f };
         juce::Path stroked;
         juce::PathStrokeType (1.5f).createDashedStroke (stroked, dash, dashes, 2);
         g.fillPath (stroked);
 
-        g.setColour (Theme::text());
-        g.setFont (juce::Font (juce::FontOptions (13.0f)));
-        auto t = body.removeFromTop (body.getHeight() * 0.5f + 8.0f);
-        g.drawText ("Drop a calibration file", t.toNearestInt(), juce::Justification::centredBottom);
-        g.setColour (Theme::textDim());
-        g.setFont (juce::Font (juce::FontOptions (12.0f)));
-        g.drawText ("FRD text file, or click to browse",
-                    body.toNearestInt(), juce::Justification::centredTop);
+        // The drop glyph (a down-arrow into a tray) - centred in dzIconArea, which resized() records
+        // so the glyph and the child labels below it can never drift apart.
+        if (! dzIconArea.isEmpty()) {
+            auto ib = dzIconArea.toFloat().withSizeKeepingCentre (36.0f, 36.0f);
+            juce::Path p;                                            // down-arrow into a tray
+            p.startNewSubPath (ib.getCentreX(), ib.getY() + 4.0f);
+            p.lineTo          (ib.getCentreX(), ib.getY() + 22.0f);
+            p.startNewSubPath (ib.getCentreX() - 7.0f, ib.getY() + 15.0f);
+            p.lineTo          (ib.getCentreX(),        ib.getY() + 22.0f);
+            p.lineTo          (ib.getCentreX() + 7.0f, ib.getY() + 15.0f);
+            p.startNewSubPath (ib.getX() + 5.0f,  ib.getY() + 26.0f);
+            p.lineTo          (ib.getX() + 5.0f,  ib.getY() + 30.0f);
+            p.lineTo          (ib.getRight() - 5.0f, ib.getY() + 30.0f);
+            p.lineTo          (ib.getRight() - 5.0f, ib.getY() + 26.0f);
+            g.setColour (Theme::textDim());                          // promoted off tertiary (HIG)
+            g.strokePath (p, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+        }
     }
 }
 
