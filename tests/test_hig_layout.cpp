@@ -275,15 +275,11 @@ TEST_CASE("HIG gate: the captured two-line header renders clean at the minimum w
 // P2: the Advanced-FIR disclosure OPEN state. The 64-cell matrix scores Calibrate COLLAPSED
 // (the default); the disclosed section is a distinct hand-laid layout that must also be clean.
 //
-// NB (Task 8 deviation from the brief-verbatim "min" height 720 -> 760): the Calibrate stage body
-// is a scrollable Viewport. With Advanced open, the four disclosed controls add ~190px, so at the
-// app's hard-minimum 720px window the LAST control (the Output-trim Slider) straddles the viewport's
-// bottom fold and the probe - which correctly CLIPS geometry to the enclosing Viewport - reports it
-// at 6px tall (a false target-size finding for a control that is fully 28px and reachable by
-// scrolling). This is a scroll-fold scoring artifact, NOT a Task 2-7 layout defect: the slider is
-// laid out at its full 28px and the scrollbar is present. Scoring at 760px lets the disclosed
-// section materialise UNCLIPPED so the gate measures the real hand-laid geometry, not the fold.
-// (The launch default is collapsed; the 64-cell matrix already covers Calibrate collapsed at 720.)
+// T10: scored at the TRUE 900x720 minimum again. Task 8 temporarily scored at 760 because the
+// disclosed section straddled the viewport fold at 720 (the probe clips geometry through
+// Viewports, so the trim slider scored 6px tall). The T10 compaction makes the advanced-open
+// state fit entirely at 720 (ledger: worst case 518 <= 546), so the fold artifact is gone and
+// 720 is load-bearing: if this case ever needs raising again, the no-scroll contract is broken.
 // ==================================================================================================
 TEST_CASE("HIG gate: Calibrate advanced-FIR disclosure open renders clean [P2]") {
     juce::ScopedJuceInitialiser_GUI juceInit;
@@ -300,7 +296,7 @@ TEST_CASE("HIG gate: Calibrate advanced-FIR disclosure open renders clean [P2]")
     mc.forceWizardStepForTest (eb::WizardStep::Calibrate);
     mc.calibrateStageForTest().setAdvancedOpen (true);
     struct Sz { const char* name; int w, h; };
-    const Sz sizes[] = { { "min", 900, 760 }, { "large", 1200, 1000 } };
+    const Sz sizes[] = { { "min", 900, 720 }, { "large", 1200, 1000 } };
     for (bool dark : { true, false }) {
         mc.forceThemeForTest (dark);
         for (auto& s : sizes) {

@@ -42,6 +42,14 @@ public:
     std::function<void()> onContinueWithoutCal;
     juce::TextButton& unityButtonForTest() { return unityBtn_; }
 
+    // T10: the gated no-scroll workflow states (see ConnectStage's twin note - keep beside
+    // layoutContent; the gate static_asserts the count).
+    enum class WorkflowState { EmptyUnity, LoadedCleanPair, LoadedWorstPair,
+                               EmptyUnityAdvancedOpen, LoadedWorstAdvancedOpen,
+                               EmptyErrorStripAdvancedOpen };
+    static constexpr int kWorkflowStateCount = 6;
+    juce::Viewport& viewportForTest() { return viewport_; }
+
     // Pure copy rules (headlessly tested in test_calibratestage.cpp):
     static juce::String stageCaptionFor (std::optional<CalType> left, std::optional<CalType> right);
     static juce::String advancedFirSummary (bool complexPhase, int firLength /*0=auto*/, double trimDb);

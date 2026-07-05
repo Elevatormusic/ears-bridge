@@ -31,12 +31,14 @@ static void drawChip (juce::Graphics& g, juce::Rectangle<int> area, juce::Justif
 
 namespace {
 // One source of truth for BOTH resized() and preferredHeight() - they must never disagree.
-constexpr int kPadX = 16, kPadY = 12, kHeaderH = 26, kHeadGap = 10;
+// T10 compaction ledger: header 26->24, head gap 10->8, file row 18->16, empty min body
+// 150->136. Everything warning-bearing (problem/note/error strip) is UNTOUCHED.
+constexpr int kPadX = 16, kPadY = 12, kHeaderH = 24, kHeadGap = 8;
 constexpr int kProblemH = 32, kProblemGap = 8;
 constexpr int kDzIconH = 36, kDzMainH = 18, kDzBrowseH = 28, kDzBrowseW = 150, kDzReqH = 16;
-constexpr int kDzGap = 10, kDzGapSm = 8, kDzMinBodyH = 150;
+constexpr int kDzGap = 10, kDzGapSm = 8, kDzMinBodyH = 136;
 constexpr int kErrStripH = 44, kErrStripGap = 8;
-constexpr int kThumbH = 84, kFileH = 18, kSerialH = 16, kNoteH = 34, kNoteGap = 6;
+constexpr int kThumbH = 84, kFileH = 16, kSerialH = 16, kNoteH = 34, kNoteGap = 6;
 constexpr int kBtnRowH = 28, kBtnGap = 8;
 } // namespace
 

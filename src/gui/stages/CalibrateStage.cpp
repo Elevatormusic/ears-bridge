@@ -6,8 +6,9 @@ namespace eb {
 namespace {
 constexpr int kGutter = 16, kPadX = 30;
 constexpr int kContentMaxW = 760, kGridGap = 14;
-constexpr int kDiscH = 28, kDiscIndent = 24;
-constexpr int kCaptionH = 46;
+constexpr int kDiscH = 24, kDiscIndent = 24;
+constexpr int kCaptionH = 44;
+constexpr int kEyebrowH = 14, kComboH = 28;
 } // namespace
 
 CalibrateStage::CalibrateStage() {
@@ -124,9 +125,8 @@ int CalibrateStage::layoutContent (int width) {
     const int colW = juce::jmin (kContentMaxW, juce::jmax (0, width - 2 * kGutter));
     const int x0   = (width - colW) / 2;
     auto rr = juce::Rectangle<int> (x0, 0, colW, 100000);
-    rr.removeFromTop (4);
+    // T10: no top pad (fold budget; the fixed header supplies the whitespace).
 
-    // Drop grid: one row, two equal cells, BOTH at the taller card's preferred height.
     if (leftCal_ != nullptr && rightCal_ != nullptr) {
         const int cellW = (colW - kGridGap) / 2;
         const int rowH  = juce::jmax (leftCal_->preferredHeight(), rightCal_->preferredHeight());
@@ -135,22 +135,21 @@ int CalibrateStage::layoutContent (int width) {
         row.removeFromLeft (kGridGap);
         rightCal_->setBounds (row);
     }
-    rr.removeFromTop (16);
+    rr.removeFromTop (12);
 
     if (caption_.isVisible()) {
         caption_.setBounds (rr.removeFromTop (kCaptionH));
-        rr.removeFromTop (12);
+        rr.removeFromTop (8);
     }
 
-    // Unity row (Task 6): the warn-toned hint, then the secondary button while not yet accepted.
     if (unityHint_.isVisible()) {
-        unityHint_.setBounds (rr.removeFromTop (18));
-        rr.removeFromTop (6);
+        unityHint_.setBounds (rr.removeFromTop (16));
+        rr.removeFromTop (4);
         if (unityBtn_.isVisible()) {
-            unityBtn_.setBounds (rr.removeFromTop (30).removeFromLeft (240));
-            rr.removeFromTop (12);
+            unityBtn_.setBounds (rr.removeFromTop (28).removeFromLeft (240));
+            rr.removeFromTop (8);
         } else {
-            rr.removeFromTop (6);
+            rr.removeFromTop (4);
         }
     } else {
         unityBtn_.setBounds ({});
@@ -163,33 +162,33 @@ int CalibrateStage::layoutContent (int width) {
                                 (juce::Component*) trimSlider_ })
         if (c != nullptr) c->setVisible (open);
     if (open) {
-        rr.removeFromTop (8);
+        rr.removeFromTop (4);
         if (complexPhaseToggle_ != nullptr) {
-            complexPhaseToggle_->setBounds (rr.removeFromTop (26).withTrimmedLeft (kDiscIndent));
-            rr.removeFromTop (6);
+            complexPhaseToggle_->setBounds (rr.removeFromTop (24).withTrimmedLeft (kDiscIndent));
+            rr.removeFromTop (4);
         }
         if (firLenLabel_ != nullptr) {
-            firLenLabel_->setBounds (rr.removeFromTop (16).withTrimmedLeft (kDiscIndent));
-            rr.removeFromTop (6);
+            firLenLabel_->setBounds (rr.removeFromTop (kEyebrowH).withTrimmedLeft (kDiscIndent));
+            rr.removeFromTop (4);
         }
         if (firLenBox_ != nullptr) {
-            auto row = rr.removeFromTop (40).withTrimmedLeft (kDiscIndent);
+            auto row = rr.removeFromTop (kComboH).withTrimmedLeft (kDiscIndent);
             firLenBox_->setBounds (row.removeFromLeft (juce::jmin (280, row.getWidth())));
             rr.removeFromTop (8);
         }
         if (trimLabel_ != nullptr) {
-            trimLabel_->setBounds (rr.removeFromTop (16).withTrimmedLeft (kDiscIndent));
+            trimLabel_->setBounds (rr.removeFromTop (kEyebrowH).withTrimmedLeft (kDiscIndent));
             rr.removeFromTop (4);
         }
         if (trimSlider_ != nullptr)
-            trimSlider_->setBounds (rr.removeFromTop (28).withTrimmedLeft (kDiscIndent));
+            trimSlider_->setBounds (rr.removeFromTop (26).withTrimmedLeft (kDiscIndent));
     } else {
         for (juce::Component* c : { (juce::Component*) complexPhaseToggle_, (juce::Component*) firLenLabel_,
                                     (juce::Component*) firLenBox_, (juce::Component*) trimLabel_,
                                     (juce::Component*) trimSlider_ })
             if (c != nullptr) c->setBounds ({});
     }
-    return rr.getY() + kGutter;
+    return rr.getY() + 4;
 }
 
 void CalibrateStage::resized() {
@@ -222,7 +221,7 @@ void CalibrateStage::InfoCaption::applyTheme() {
 }
 
 void CalibrateStage::InfoCaption::resized() {
-    text.setBounds (getLocalBounds().reduced (12, 8).withTrimmedLeft (24));
+    text.setBounds (getLocalBounds().reduced (12, 6).withTrimmedLeft (24));   // 32px text = 2 Callout lines
 }
 
 void CalibrateStage::InfoCaption::paint (juce::Graphics& g) {
