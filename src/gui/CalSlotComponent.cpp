@@ -286,6 +286,7 @@ void CalSlotComponent::setProblem (const juce::String& message) {
     problemLabel.setVisible (show);
     resized();
     repaint();
+    if (onLayoutChanged) onLayoutChanged();   // problemLabel is a preferredHeight() input - the guard above already suppressed no-op repeats
 }
 
 void CalSlotComponent::refreshStateVisibility() {

@@ -141,6 +141,25 @@ TEST_CASE("CalSlotComponent: loading hides the drop-zone affordances; clearing r
     CHECK (slot.findChildWithID ("calDzMain")->isVisible());
 }
 
+// setProblem changes the card's height inputs (preferredHeight() counts problemLabel), so it must
+// fire the onLayoutChanged seam the host stage grid listens on - or a swap banner appearing via the
+// per-tick gate refresh would silently desync the layout. The no-op guard must still hold: the same
+// text must NOT re-fire. clearing (empty string) fires once more (the banner row goes away).
+TEST_CASE("CalSlotComponent: setProblem fires onLayoutChanged on a real change, not on a repeat") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::CalSlotComponent slot ("Left ear");
+    slot.setSize (289, slot.preferredHeight());
+    int fires = 0;
+    slot.onLayoutChanged = [&fires] { ++fires; };
+
+    slot.setProblem ("swap suspected");     // clean -> problem: a real height-input change
+    CHECK (fires == 1);
+    slot.setProblem ("swap suspected");     // same text: the no-op guard must suppress a re-fire
+    CHECK (fires == 1);
+    slot.setProblem (juce::String());       // clear: the banner row goes away -> another real change
+    CHECK (fires == 2);
+}
+
 // The redesigned empty card at the MINIMUM grid cell width (289px at the 900px window):
 // no label may clip (probe-verified).
 TEST_CASE("CalSlotComponent empty state: probe-clean at the minimum cell width") {
