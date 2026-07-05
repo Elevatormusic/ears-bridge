@@ -138,11 +138,8 @@ MainComponent::MainComponent (const TestConfig& cfg)
            + " build=" + buildFlavour
            + " os=" + juce::SystemStats::getOperatingSystemName());
 
-    // --- Title bar brand ---
-    brandLabel.setText ("EARS Bridge", juce::dontSendNotification);
-    brandLabel.setColour (juce::Label::textColourId, Theme::text());
-    brandLabel.setFont (juce::Font (juce::FontOptions (15.0f).withStyle ("Bold")));
-    addAndMakeVisible (brandLabel);
+    // --- Title bar: brand glyph is painted; the live format cluster (W2 .fmt) rides the bar's right side ---
+    addAndMakeVisible (fmtCluster_);
 
     // Current-version footnote, pinned bottom-right. Reads the single version source of truth.
     versionLabel.setText ("v" EB_VERSION_STRING, juce::dontSendNotification);
@@ -1318,6 +1315,8 @@ eb::WizardInputs MainComponent::snapshotWizardInputs() const {
 }
 
 void MainComponent::refreshWizardView() {
+    fmtCluster_.setParts (formatClusterParts (settings.sampleRate(), settings.outputBitDepth(),
+                                              settings.combineMode()));
     renderWizardView (computeWizardState (snapshotWizardInputs(), pinnedStep_));
 }
 
@@ -1564,7 +1563,7 @@ void MainComponent::driveConnectWarningsForTest (bool stdCableHintWithFix, bool 
 void MainComponent::applyTextColours() {
     // Re-set every theme-dependent label colour (the Theme statics return the active mode);
     // paint-based components (meters, cards, plots) pick the mode up on repaint.
-    brandLabel.setColour (juce::Label::textColourId, Theme::text());
+    // (The format cluster is paint-based - it reads Theme::textDim/textFaint at paint time, nothing to re-apply.)
     versionLabel.setColour (juce::Label::textColourId, Theme::textDim());   // HIG: textFaint was 2.4:1; textDim ~5.3:1
     styleEyebrow (combineLabel,  "COMBINE MODE");
     styleEyebrow (rateLabel,     "RATE");
@@ -3059,13 +3058,16 @@ void MainComponent::resized() {
     auto bar = area.removeFromTop (kBarH);   // shared with paint() (#25); 56 now the stack left the bar
     {
         auto x = bar.reduced (16, 0);
-        brandLabel.setBounds (x.removeFromLeft (200).withTrimmedLeft (24));
+        x.removeFromLeft (44);                                   // the painted brand glyph's gutter
         startStop.setBounds (x.removeFromRight (120).withSizeKeepingCentre (120, 34));
         x.removeFromRight (14);
         if (updateLink.isVisible()) {
             const int w = juce::jmin (230, x.getWidth());
             updateLink.setBounds (x.removeFromRight (w).withSizeKeepingCentre (w, 22));
+            x.removeFromRight (14);
         }
+        const int fw = juce::jmin (240, juce::jmax (0, x.getWidth()));
+        fmtCluster_.setBounds (x.removeFromRight (fw).withSizeKeepingCentre (fw, 20));
     }
 
     // --- Version footnote (pinned bottom-right, below both columns) ---

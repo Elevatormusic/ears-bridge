@@ -4,6 +4,8 @@
 #include "gui/Glyphs.h"
 #include "gui/juce_design_probe.h"
 #include "gui/HigScore.h"
+#include "gui/FormatCluster.h"
+#include "audio/CombineMode.h"
 
 // P2.9 Task 1: the two unfrozen tokens, proven through the REAL gate path (probe -> scoreDescriptor),
 // not a private re-implementation of WCAG. A Label carrying accentText on the window bg must score
@@ -86,4 +88,13 @@ TEST_CASE("P2.9 glyphs: every glyph renders inside its box and never bleeds outs
         CHECK (inside > 12);      // it drew something substantive
         CHECK (outside == 0);     // and stayed in its box
     }
+}
+
+TEST_CASE("P2.9 format cluster: parts render W2's wording from live setting values") {
+    auto p = eb::formatClusterParts (48000.0, 24, eb::CombineMode::AutoPerEar);
+    CHECK (p[0] == "48 kHz"); CHECK (p[1] == "24-bit"); CHECK (p[2] == "Auto per-ear");
+    p = eb::formatClusterParts (44100.0, 16, eb::CombineMode::Sum);
+    CHECK (p[0] == "44.1 kHz"); CHECK (p[1] == "16-bit"); CHECK (p[2] == "Sum");
+    p = eb::formatClusterParts (96000.0, 32, eb::CombineMode::LeftOnly);
+    CHECK (p[0] == "96 kHz"); CHECK (p[2] == "Left ear");
 }

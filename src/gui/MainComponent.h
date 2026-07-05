@@ -7,6 +7,7 @@
 #include "gui/Theme.h"
 #include "gui/DevicePicker.h"
 #include "gui/CalSlotComponent.h"
+#include "gui/FormatCluster.h"
 #include "gui/LevelMeter.h"
 #include "gui/RateMenu.h"
 #include "gui/GradeMetricDotsView.h"   // eb::GradeMetricDotsView (3-color per-metric quality dots)
@@ -87,6 +88,7 @@ public:
     juce::ToggleButton& overrideToggleForTest() { return overrideToggle; }
     juce::TextButton& connectContinueForTest() { return connectStage_.continueButton(); }
     juce::TextButton& startButtonForTest() { return startStop; }
+    FormatCluster&   fmtClusterForTest() { return fmtCluster_; }
     DevicePicker&    inputPickerForTest()  { return inputPicker; }
     DevicePicker&    outputPickerForTest() { return outputPicker; }
     // T10: force the Connect warning surfaces with PRODUCTION copy (ConnectHints.h) so the
@@ -205,8 +207,10 @@ private:
     AudioEngine engine;
     Settings settings;
 
-    // Title bar brand.
-    juce::Label brandLabel;
+    // P2.9 chrome ruling: the NATIVE title bar owns the app name (taskbar/snap identity); the in-app
+    // bar keeps only the brand GLYPH + this live format cluster (W2 .fmt). The word-mark label died -
+    // "EARS Bridge" twice in vertical adjacency was the double-branding tell.
+    FormatCluster fmtCluster_;
     // Subtle "vX.Y.Z" footnote in the bottom-right corner (current installed version).
     juce::Label versionLabel;
     // Right-pane section eyebrows. (calEyebrow died in P2 Task 5 - the CalibrateStage header replaced it.)
