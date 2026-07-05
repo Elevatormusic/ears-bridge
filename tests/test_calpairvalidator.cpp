@@ -127,6 +127,22 @@ TEST_CASE("CalFile #8: side reads the channel phrase, not the sensitive-side wor
     CHECK (eb::CalFile::parse (txt.replace ("is LEFT", "is RIGHT")).side == eb::CalSide::Right);
 }
 
+// T10 (T9 observation 1): the RAW fixture used to carry only 6 points, so the RAW-caution UI
+// state was never pure - the pair ALSO tripped "too few points" and Calibrate went Error. The
+// fixture is now >= 8 monotonic points spanning 10..20000 Hz, so a RAW+HEQ pair passes the
+// validator and the amber RAW caution renders on an otherwise-clean card. The too-few-points
+// REJECT keeps its own case above ("CalPairValidator: too few points is rejected").
+TEST_CASE("CalPairValidator: the RAW test fixture passes validation (pure caution state)") {
+    const juce::File data (EB_TEST_DATA_DIR);
+    auto rawL = eb::CalFile::parse (data.getChildFile ("L_RAW_0000000.txt").loadFileAsString());
+    auto heqR = eb::CalFile::parse (data.getChildFile ("R_HEQ_0000000.txt").loadFileAsString());
+    REQUIRE (rawL.type == eb::CalType::Raw);
+    REQUIRE ((int) rawL.points.size() >= 8);
+    auto r = eb::validateCalibrationPair (rawL, heqR, eb::FirMode::MinPhaseMagnitude);
+    INFO ("reason: " << r.reason);
+    CHECK (r.valid);
+}
+
 // #7: coverage is PER FILE. A band-limited file for one ear must fail (each ear's FIR is designed from its own
 // file, so a truncated one gets a flat wrong correction); the reason names the failing side.
 TEST_CASE("CalPairValidator #7: a band-limited single file fails per-file coverage") {
