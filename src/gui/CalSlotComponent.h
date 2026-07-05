@@ -10,9 +10,9 @@ namespace eb {
 
 // One per-ear calibration card ("Left ear" / "Right ear"). Empty, it shows a dashed
 // drop zone (drag a .txt/.frd file or click to browse) and a "Required" badge; loaded,
-// it shows the parsed FR thumbnail, the filename + serial, a type badge (HPN/HEQ), and a
-// "Replace" button. HEQ is miniDSP's recommended Dirac cal (calm note); RAW surfaces as an amber
-// badge (mic-only, miniDSP-unsupported).
+// it shows the parsed FR thumbnail, the filename and the serial (each on its own line), a
+// type badge (HPN/HEQ), and a "Replace" button. Per-type HEQ/HPN guidance lives off-card now
+// (the stage caption hosts it); RAW surfaces as an amber badge (mic-only, miniDSP-unsupported).
 // Fires onCalLoaded with the absolute path when a valid cal is parsed.
 class CalSlotComponent : public juce::Component,
                          public juce::FileDragAndDropTarget {
@@ -63,7 +63,7 @@ private:
     void refreshStateVisibility();       // empty-state children visible iff no cal is loaded
 
     juce::String earName;
-    juce::Label  fileLabel;     // "L_HPN.txt - serial 000-0000"
+    juce::Label  fileLabel;     // filename only, e.g. "L_HPN.txt" (serial is on serialLabel)
     juce::Label  serialLabel;   // "Serial 000-0000" (own line under the filename)
     juce::Label  errorLabel;    // parse error (red), hidden unless set
     juce::Label  problemLabel;  // loud red swap banner under the title (setProblem); hidden unless set

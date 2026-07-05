@@ -9,13 +9,13 @@
 TEST_CASE("CalSlotComponent: type-warning label never overlaps the filename label") {
     juce::ScopedJuceInitialiser_GUI juceInit;
     eb::CalSlotComponent slot ("Right ear");
-    slot.setSize (420, 206);
 
     // A "house curve": valid data rows but no HPN/HEQ/RAW/IDF marker -> CalType::Unknown -> warning.
     auto tmp = juce::File::createTempFile (".txt");
     tmp.replaceWithText ("* House Curve\n20 0.0\n100 1.0\n1000 2.0\n10000 -1.0\n20000 -3.0\n");
     REQUIRE (slot.loadFromFile (tmp));
     tmp.deleteFile();
+    slot.setSize (420, slot.preferredHeight());   // real loaded-card height (the button row needs room)
 
     auto* file = slot.findChildWithID ("calFile");
     auto* warn = slot.findChildWithID ("calWarn");
@@ -32,10 +32,10 @@ TEST_CASE("CalSlotComponent: type-warning label never overlaps the filename labe
 TEST_CASE("CalSlotComponent: a failed load from a stale path shows the Remove (clear) button") {
     juce::ScopedJuceInitialiser_GUI juceInit;
     eb::CalSlotComponent slot ("Left ear");
-    slot.setSize (420, 206);
 
     const juce::File gone ("Z:/definitely/not/here/L_HEQ_000-0000.txt");
     REQUIRE_FALSE (slot.loadFromFile (gone));
+    slot.setSize (420, slot.preferredHeight());   // real error-card height (the Remove strip needs room)
 
     auto* warn = slot.findChildWithID ("calWarn");
     REQUIRE (warn != nullptr);
@@ -54,13 +54,13 @@ TEST_CASE("CalSlotComponent: a failed load from a stale path shows the Remove (c
 TEST_CASE("CalSlotComponent: a side-silent file's side is filled from the filename") {
     juce::ScopedJuceInitialiser_GUI juceInit;
     eb::CalSlotComponent slot ("Right ear");
-    slot.setSize (420, 206);
 
     auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory);
     auto f = dir.getChildFile ("R_HPN_000-0000.txt");        // filename marks RIGHT; content is silent on side
     f.replaceWithText ("* HPN curve\n20 0.0\n100 1.0\n1000 2.0\n10000 -1.0\n20000 -3.0\n");
     REQUIRE (slot.loadFromFile (f));
     f.deleteFile();
+    slot.setSize (420, slot.preferredHeight());   // real loaded-card height
 
     REQUIRE (slot.calFile().has_value());
     CHECK (slot.calFile()->side == eb::CalSide::Right);       // filename filled the Unknown content side
@@ -71,7 +71,6 @@ TEST_CASE("CalSlotComponent: a side-silent file's side is filled from the filena
 TEST_CASE("CalSlotComponent: filename/content side conflict keeps the content side") {
     juce::ScopedJuceInitialiser_GUI juceInit;
     eb::CalSlotComponent slot ("Left ear");
-    slot.setSize (420, 206);
 
     auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory);
     auto f = dir.getChildFile ("R_HPN_conflict_000-0000.txt");   // filename says RIGHT...
@@ -80,6 +79,7 @@ TEST_CASE("CalSlotComponent: filename/content side conflict keeps the content si
                        "20 0.0\n100 1.0\n1000 2.0\n10000 -1.0\n20000 -3.0\n");
     REQUIRE (slot.loadFromFile (f));
     f.deleteFile();
+    slot.setSize (420, slot.preferredHeight());   // real loaded-card height
 
     const auto loaded = slot.calFile();                      // one copy; don't dangle a temporary in the loop
     REQUIRE (loaded.has_value());
@@ -136,9 +136,11 @@ TEST_CASE("CalSlotComponent: loading hides the drop-zone affordances; clearing r
     tmp.replaceWithText ("* HEQ\n20 0.0\n100 1.0\n1000 2.0\n10000 -1.0\n20000 -3.0\n");
     REQUIRE (slot.loadFromFile (tmp));
     tmp.deleteFile();
-    CHECK_FALSE (slot.findChildWithID ("calDzMain")->isVisible());
+    auto* dzMain = slot.findChildWithID ("calDzMain");
+    REQUIRE (dzMain != nullptr);
+    CHECK_FALSE (dzMain->isVisible());
     slot.clearCal();
-    CHECK (slot.findChildWithID ("calDzMain")->isVisible());
+    CHECK (dzMain->isVisible());
 }
 
 // setProblem changes the card's height inputs (preferredHeight() counts problemLabel), so it must
@@ -188,9 +190,13 @@ TEST_CASE("CalSlotComponent loaded card: HEQ and HPN guidance no longer occupy t
         tmp.replaceWithText (juce::String (marker) + "\n20 0.0\n100 1.0\n1000 2.0\n10000 -1.0\n20000 -3.0\n");
         REQUIRE (slot.loadFromFile (tmp));
         tmp.deleteFile();
-        CHECK_FALSE (slot.findChildWithID ("calWarn")->isVisible());
-        CHECK (slot.findChildWithID ("calSerial")->isVisible());
-        CHECK (slot.findChildWithID ("calFile")->isVisible());
+        auto* warn   = slot.findChildWithID ("calWarn");
+        auto* serial = slot.findChildWithID ("calSerial");
+        auto* file   = slot.findChildWithID ("calFile");
+        REQUIRE (warn != nullptr); REQUIRE (serial != nullptr); REQUIRE (file != nullptr);
+        CHECK_FALSE (warn->isVisible());
+        CHECK (serial->isVisible());
+        CHECK (file->isVisible());
     }
 }
 
@@ -209,7 +215,9 @@ TEST_CASE("CalSlotComponent: problem banner on the redesigned card, absent on a 
     slot.setProblem ("This looks like the RIGHT cal, but it's in the LEFT slot - swap the files.");
     slot.setSize (289, slot.preferredHeight());
     CHECK (problem->isVisible());
-    CHECK_FALSE (problem->getBounds().intersects (slot.findChildWithID ("calFile")->getBounds()));
+    auto* file = slot.findChildWithID ("calFile");
+    REQUIRE (file != nullptr);
+    CHECK_FALSE (problem->getBounds().intersects (file->getBounds()));
     slot.setProblem ({});
     CHECK_FALSE (problem->isVisible());
 }
