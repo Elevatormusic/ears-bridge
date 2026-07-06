@@ -24,6 +24,23 @@ TEST_CASE("CalibrateStage advanced summary composes every field") {
            == "Complex phase - 16384 taps - -2.0 dB trim");
 }
 
+// P2.9 T7: the frozen open-iff-non-default contract's ONE testable home. The launch seed and the
+// harness restore both route through advancedFirNonDefault, so this pure test guards the decision
+// both call sites now share - INCLUDING the negative half (all-default -> CLOSED) the disclosure's
+// component tests never covered, and the near-zero-trim rows an XML round-trip can produce.
+TEST_CASE("P2.9 disclosure seed: open iff any advanced-FIR setting is non-default") {
+    // All-default -> CLOSED (the frozen rule's negative half - previously untested).
+    CHECK_FALSE (eb::CalibrateStage::advancedFirNonDefault (false, 0, 0.0));
+    // Near-zero trim noise (XML round-trip / sub-step values) must still read DEFAULT.
+    CHECK_FALSE (eb::CalibrateStage::advancedFirNonDefault (false, 0, -0.0));
+    CHECK_FALSE (eb::CalibrateStage::advancedFirNonDefault (false, 0, 1.0e-9));
+    // Each knob alone -> OPEN.
+    CHECK (eb::CalibrateStage::advancedFirNonDefault (true,  0,     0.0));
+    CHECK (eb::CalibrateStage::advancedFirNonDefault (false, 8192,  0.0));
+    CHECK (eb::CalibrateStage::advancedFirNonDefault (false, 0,    -6.0));
+    CHECK (eb::CalibrateStage::advancedFirNonDefault (false, 0,    -0.1));   // one slider step IS non-default
+}
+
 // P2.9 T6: the OUTPUT TRIM control is a parameter row (label left, compact slider + value chip),
 // not a full-width debug slider with an all-caps eyebrow stacked above it.
 TEST_CASE("P2.9 trim row: label left, compact slider, no full-width debug slider") {

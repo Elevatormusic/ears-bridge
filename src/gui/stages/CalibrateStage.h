@@ -59,6 +59,12 @@ public:
     static juce::String stageCaptionFor (std::optional<CalType> left, std::optional<CalType> right);
     static juce::String advancedFirSummary (bool complexPhase, int firLength /*0=auto*/, double trimDb);
 
+    // P2.9 frozen contract: the Advanced-FIR disclosure launches OPEN iff any setting is non-default.
+    // ONE home for the rule (the launch seed AND the harness restore both call this - they were
+    // duplicated expressions that could drift). Trim compares against half the slider's 0.1 step so
+    // an XML-roundtripped near-zero never reads non-default.
+    static bool advancedFirNonDefault (bool complexPhase, int firLength /*0=auto*/, double trimDb);
+
     void applyTheme();
     void resized() override;
     void paint (juce::Graphics&) override;

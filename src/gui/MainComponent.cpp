@@ -545,9 +545,10 @@ MainComponent::MainComponent (const TestConfig& cfg)
     calibrateStage_.adopt (leftCal, rightCal, complexPhaseToggle,
                            firLenLabel, firLenBox, trimLabel, trimSlider);
     // Advanced FIR: open at launch iff any setting is non-default (a hidden non-default would
-    // be a silent config surprise; the summary line states the values either way).
-    calibrateStage_.setAdvancedOpen (settings.complexPhase() || settings.firLength() > 0
-                                     || settings.outputTrimDb() != 0.0);
+    // be a silent config surprise; the summary line states the values either way). ONE home for
+    // the rule (P2.9 T7) - shared with the harness restore below so they can never drift.
+    calibrateStage_.setAdvancedOpen (CalibrateStage::advancedFirNonDefault (
+        settings.complexPhase(), settings.firLength(), settings.outputTrimDb()));
     levelStage_.adopt (levelsEyebrow, levelsHint, diracMicGainHint, meterL, meterR, meterOut, inputClipHint);
     measureStage_.adopt (statusLine, statusLineR, gradeDotsL_, gradeDotsR_,
                          learnRefButton, learnRefResultLabel, hwDiracToggle);
@@ -2828,8 +2829,9 @@ void MainComponent::timerCallback() {
             forceThemeForTest (wasDark);
             // P2 (Task 8): the calibrate-advanced scene forced the disclosure open; restore the launch policy
             // (open iff any advanced FIR setting is non-default) so the live UI reflects the real settings.
-            calibrateStage_.setAdvancedOpen (settings.complexPhase() || settings.firLength() > 0
-                                             || settings.outputTrimDb() != 0.0);
+            // Same pure helper as the launch seed (P2.9 T7) - one rule, no duplicated expression to drift.
+            calibrateStage_.setAdvancedOpen (CalibrateStage::advancedFirNonDefault (
+                settings.complexPhase(), settings.firLength(), settings.outputTrimDb()));
             driveConnectWarningsForTest (false, false);   // T10: clear the forced cable-warning scene
             pinnedStep_ = pinnedWas;                                // restore the pre-sweep navigation pin
             refreshWizardView();

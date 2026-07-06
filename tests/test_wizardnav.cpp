@@ -3,6 +3,7 @@
 #include "gui/MainComponent.h"
 #include "gui/FormatCluster.h"       // P2.9 Task 5: the title-bar format cluster (pure builder + seam)
 #include "gui/juce_design_probe.h"   // P2 Task 5: probe the showing/label set of the Calibrate stage
+#include "state/Settings.h"          // P2.9 Task 7: seed the settings FILE through the real writer
 
 // Task 4: navigation, tick wiring, focus & a11y. Headless MainComponent (hermetic TestConfig — never
 // touches the real %APPDATA%/Settings/log dir, no network). A fresh temp profile has NO devices, so the
@@ -534,5 +535,46 @@ TEST_CASE("P2.9 chrome: the format cluster tracks live settings and the brand wo
     CHECK (p[0] == "48 kHz");
     CHECK (mc.fmtClusterForTest().getTitle() == "Session format");
     CHECK (! mc.fmtClusterForTest().getBounds().isEmpty());   // laid out in the bar (headless-safe assertion)
+    tmp.deleteRecursively();
+}
+
+// P2.9 T7: the launch-path negatives the hermetic scenes never had. The disclosure open/closed
+// decision is seeded at construction AFTER the persisted cals load (MainComponent.cpp:522-525 then
+// :549) - a path the header/component tests never drove. These two lock the frozen contract on the
+// REAL construction ordering: cals restoring must NOT open the disclosure (all knobs default), and a
+// stored non-default knob MUST. If the first ever fails (disclosure opens with all-default settings),
+// the walkthrough bug has reproduced under test and its mechanism must be root-caused here first.
+TEST_CASE("P2.9 disclosure seed: launches CLOSED with all-default settings even when cals load at startup") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    // Pre-seed the settings FILE the way the live app finds it - through the REAL Settings writer
+    // (never hand-written XML): cal paths present, every advanced knob left at its default.
+    const juce::File data (EB_TEST_DATA_DIR);
+    {
+        eb::Settings seed (tmp);
+        seed.setLeftCalPath  (data.getChildFile ("L_HEQ_0000000.txt").getFullPathName());
+        seed.setRightCalPath (data.getChildFile ("R_HEQ_0000000.txt").getFullPathName());
+        REQUIRE (seed.flush());   // through the real writer; props().save() is private (test_settings idiom)
+    }
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 720);
+    CHECK (mc.leftCalForTest().hasCal());                      // the cals really loaded (live-app delta present)
+    CHECK_FALSE (mc.calibrateStageForTest().advancedOpenForTest());   // and the disclosure stayed CLOSED
+    tmp.deleteRecursively();
+}
+
+TEST_CASE("P2.9 disclosure seed: launches OPEN when a stored advanced setting is non-default") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    {
+        eb::Settings seed (tmp);
+        seed.setOutputTrimDb (-6.0);
+        REQUIRE (seed.flush());   // through the real writer; props().save() is private (test_settings idiom)
+    }
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 720);
+    CHECK (mc.calibrateStageForTest().advancedOpenForTest());
     tmp.deleteRecursively();
 }

@@ -1,6 +1,7 @@
 #include "gui/stages/CalibrateStage.h"
 #include "gui/Theme.h"
 #include "gui/Glyphs.h"
+#include <cmath>   // P2.9 Task 7: std::abs (double) for the trim near-zero compare
 
 namespace eb {
 
@@ -81,6 +82,10 @@ juce::String CalibrateStage::advancedFirSummary (bool complexPhase, int firLengt
     s += (firLength > 0) ? (" - " + juce::String (firLength) + " taps") : juce::String (" - Auto length");
     s += " - " + juce::String (trimDb, 1) + " dB trim";
     return s;
+}
+
+bool CalibrateStage::advancedFirNonDefault (bool complexPhase, int firLength, double trimDb) {
+    return complexPhase || firLength > 0 || std::abs (trimDb) >= 0.05;
 }
 
 void CalibrateStage::adopt (CalSlotComponent& leftCal, CalSlotComponent& rightCal,
