@@ -6,6 +6,9 @@
 #include "gui/HigScore.h"
 #include "gui/FormatCluster.h"
 #include "audio/CombineMode.h"
+#include "gui/MainComponent.h"       // P2.9 T11: evidence rig drives the real MainComponent offscreen
+#include "gui/stages/CalibrateStage.h"
+#include "gui/WizardState.h"         // WizardStep
 
 // P2.9 Task 1: the two unfrozen tokens, proven through the REAL gate path (probe -> scoreDescriptor),
 // not a private re-implementation of WCAG. A Label carrying accentText on the window bg must score
@@ -97,4 +100,44 @@ TEST_CASE("P2.9 format cluster: parts render W2's wording from live setting valu
     CHECK (p[0] == "44.1 kHz"); CHECK (p[1] == "16-bit"); CHECK (p[2] == "Sum");
     p = eb::formatClusterParts (96000.0, 32, eb::CombineMode::LeftOnly);
     CHECK (p[0] == "96 kHz"); CHECK (p[2] == "Left ear");
+}
+
+// P2.9 Task 11 (Rule-2 evidence): offscreen snapshots of every changed surface in BOTH themes.
+// HIDDEN — tag [.evidence] never runs in CI; run explicitly: eb_tests "[.evidence]".
+// createComponentSnapshot is a peer-free top-down paint, so this needs no window/DPI and is hermetic
+// (temp-dir Settings, network suppressed, placeholder 000-0000 fixtures only). 12 PNGs out.
+TEST_CASE("P2.9 evidence: offscreen captures of every changed surface, both themes", "[.evidence]") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    const juce::File out = juce::File::getCurrentWorkingDirectory().getChildFile ("build/design-evidence");
+    out.createDirectory();
+    const juce::File data (EB_TEST_DATA_DIR);
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 720);
+    const auto shoot = [&] (const juce::String& name) {
+        auto img = mc.createComponentSnapshot (mc.getLocalBounds());
+        juce::PNGImageFormat png;
+        juce::FileOutputStream os (out.getChildFile (name + ".png"));
+        REQUIRE (os.openedOk());
+        png.writeImageToStream (img, os);
+    };
+    for (bool dark : { true, false }) {
+        mc.forceThemeForTest (dark);
+        const juce::String t = dark ? "dark-" : "light-";
+        mc.forceWizardStepForTest (eb::WizardStep::Connect);   shoot (t + "connect");
+        mc.driveConnectWarningsForTest (true, true);
+        mc.forceWizardStepForTest (eb::WizardStep::Connect);   shoot (t + "connect-warned");
+        mc.driveConnectWarningsForTest (false, false);
+        REQUIRE (mc.leftCalForTest().loadFromFile (data.getChildFile ("L_HEQ_0000000.txt")));
+        REQUIRE (mc.rightCalForTest().loadFromFile (data.getChildFile ("R_HEQ_0000000.txt")));
+        mc.forceWizardStepForTest (eb::WizardStep::Calibrate); shoot (t + "calibrate-loaded");
+        mc.calibrateStageForTest().setAdvancedOpen (true);
+        mc.forceWizardStepForTest (eb::WizardStep::Calibrate); shoot (t + "calibrate-advanced-trimrow");
+        mc.calibrateStageForTest().setAdvancedOpen (false);
+        mc.leftCalForTest().clearCal(); mc.rightCalForTest().clearCal();
+        mc.forceWizardStepForTest (eb::WizardStep::Level);     shoot (t + "level");
+        mc.forceWizardStepForTest (eb::WizardStep::Measure);   shoot (t + "measure");
+    }
+    tmp.deleteRecursively();
 }
