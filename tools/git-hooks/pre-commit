@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# EARS Bridge pre-commit serial guard.
+#
+# Repo hard rule: the real EARS serial never enters a commit - tests/docs use
+# the 000-0000 / 0000000 placeholders.
+#
+# Two modes:
+#   1. If .git/eb-serial-local exists (ONE line: your real serial, dashed form,
+#      e.g. 123-4567 - the file is inside .git/, never tracked, never pushed),
+#      the hook AUTO-REPLACES every staged occurrence (dashed + undashed forms)
+#      with the placeholder, re-stages the files, and prints exactly what it
+#      changed. The commit then proceeds with clean content.
+#   2. Without that file, the hook falls back to a generic serial-shaped scan
+#      of the staged diff (same pattern as the CI serial-guard workflow) and
+#      BLOCKS the commit if anything suspicious is staged.
+#
+# Install once:  git config core.hooksPath tools/git-hooks
+set -uo pipefail
+
+serial_file="$(git rev-parse --git-dir)/eb-serial-local"
+
+staged_files() { git diff --cached --name-only --diff-filter=ACM; }
+
+if [ -f "$serial_file" ]; then
+    real="$(head -1 "$serial_file" | tr -d '[:space:]')"
+    if [ -n "$real" ]; then
+        undashed="${real//-/}"
+        changed=0
+        while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            case "$f" in *.png|*.jpg|*.exe|*.bundle) continue ;; esac
+            if git show ":$f" | grep -qE "$real|$undashed"; then
+                # Replace in the working copy, then re-stage. LOUD by design.
+                n_before=$(grep -cE "$real|$undashed" "$f" 2>/dev/null || echo 0)
+                sed -i -E "s/$real/000-0000/g; s/$undashed/0000000/g" "$f"
+                git add -- "$f"
+                echo "serial-guard: REPLACED $n_before occurrence(s) of the real serial in $f (now placeholder)"
+                changed=1
+            fi
+        done < <(staged_files)
+        [ "$changed" -eq 1 ] && echo "serial-guard: staged content was rewritten - review with 'git diff --cached' if surprised."
+        exit 0
+    fi
+fi
+
+# Fallback: generic serial-shaped scan of the staged diff (added lines only).
+hits=$(git diff --cached -U0 \
+    | grep -E '^\+' \
+    | grep -iE '(serial|ears|heq|idf|hpn|cal)' \
+    | grep -E '([0-9]{3}-[0-9]{4}|(^|[^0-9])[0-9]{7}([^0-9]|$))' \
+    | grep -vE '000-0000|0000000' \
+    | grep -cvE '(^|[^0-9])20[01][0-9]{4,}' || true)
+
+if [ "${hits:-0}" -gt 0 ]; then
+    echo "serial-guard: BLOCKED - $hits staged line(s) contain a serial-shaped string in cal/EARS context." >&2
+    echo "Replace with the 000-0000 / 0000000 placeholders, or create $serial_file (one line: your" >&2
+    echo "real serial) to enable auto-replace mode." >&2
+    exit 1
+fi
+exit 0
