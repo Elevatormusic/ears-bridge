@@ -43,16 +43,17 @@ TEST_CASE("CurveThumbnail: setRange updates the a11y description to the new rang
     CHECK (! th.getDescription().contains ("12 dB"));    // and drops the old one
 }
 
-// L9: labelled axes paint (smoke: deterministic range + no crash empty/loaded; the pixel
-// truth is Task 9's real-render check + the loaded-card gate case in Task 8).
+// P2.9 (D10): grid-only mini-plot paint (smoke: deterministic range + no crash empty/loaded;
+// axis labels DROPPED at thumbnail scale - the range now lives only in the a11y description,
+// asserted above). The pixel truth is Task 9's real-render check + the loaded-card gate in Task 8.
 TEST_CASE("CurveThumbnail: paints empty and loaded with the fitted range") {
     juce::ScopedJuceInitialiser_GUI juceInit;
     eb::CurveThumbnail th;
     th.setSize (210, 84);
     juce::Image img (juce::Image::ARGB, 210, 84, true);
     juce::Graphics g (img);
-    th.paint (g);                          // empty: placeholder, no axis labels
+    th.paint (g);                          // empty: placeholder, grid only
     th.setCalFile (parseSmallCal());
     CHECK (th.autoFitTopDb() == 12.0f);
-    th.paint (g);                          // loaded: curve + dB + Hz labels
+    th.paint (g);                          // loaded: curve + grid, no axis labels
 }

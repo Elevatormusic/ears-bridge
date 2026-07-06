@@ -54,6 +54,7 @@ public:
     // static_asserts fail-close on an enum edit ALONE (no second hand-maintained number to forget).
     static constexpr int kWorkflowStateCount = (int) WorkflowState::Count;
     juce::Viewport& viewportForTest() { return viewport_; }
+    StageHeader& headerForTest() { return header_; }
 
     // Pure copy rules (headlessly tested in test_calibratestage.cpp):
     static juce::String stageCaptionFor (std::optional<CalType> left, std::optional<CalType> right);

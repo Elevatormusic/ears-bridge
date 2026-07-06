@@ -121,7 +121,7 @@ struct WizardSpine::StepRow : public juce::Component {
         // Keyboard-focus ring (HIG M4) — visible only when this row holds focus.
         if (hasKeyboardFocus (false)) {
             g.setColour (Theme::accent());
-            g.drawRoundedRectangle (r.reduced (1.0f), 10.0f, 2.0f);
+            g.drawRoundedRectangle (r.reduced (2.0f), 10.0f, 1.5f);   // P2.9: tighter inset ring on full-width rows (1.5px at inset 2)
         }
 
         // Node circle.

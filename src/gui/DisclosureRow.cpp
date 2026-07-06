@@ -74,7 +74,7 @@ void DisclosureRow::paintButton (juce::Graphics& g, bool over, bool) {
     }
     if (hasKeyboardFocus (true)) {   // HIG M4: visible keyboard-focus ring
         g.setColour (Theme::accent());
-        g.drawRoundedRectangle (r.toFloat().reduced (1.0f), 6.0f, 2.0f);
+        g.drawRoundedRectangle (r.toFloat().reduced (2.0f), 6.0f, 1.5f);   // P2.9: tighter inset ring on full-width rows (1.5px at inset 2)
     }
     auto chevBox = r.removeFromLeft (18).toFloat().withSizeKeepingCentre (9.0f, 9.0f);
     juce::Path chev;

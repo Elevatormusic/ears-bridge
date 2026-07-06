@@ -63,3 +63,23 @@ TEST_CASE("P2.9 trim row: label left, compact slider, no full-width debug slider
     mc.calibrateStageForTest().setAdvancedOpen (false);
     tmp.deleteRecursively();
 }
+
+TEST_CASE("P2.9 alignment: the stage header shares the content column's edges (no three-way split)") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    for (int w : { 900, 1200 }) {
+        mc.setSize (w, 800);
+        mc.forceWizardStepForTest (eb::WizardStep::Calibrate);
+        auto& stage = mc.calibrateStageForTest();
+        auto& vp = stage.viewportForTest();
+        auto* content = vp.getViewedComponent();
+        // The left card's x in STAGE coords == the header's x (one alignment system).
+        const auto cardX = mc.leftCalForTest().getX() + content->getX() + vp.getX();
+        CHECK (stage.headerForTest().getX() == cardX);
+        CHECK (stage.headerForTest().getRight() == cardX + mc.leftCalForTest().getWidth() * 2
+                                                   + 14 /*kGridGap*/);
+    }
+    tmp.deleteRecursively();
+}

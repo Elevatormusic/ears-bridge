@@ -4,7 +4,7 @@
 namespace eb {
 
 namespace {
-constexpr int kGutter = 16, kPadX = 30;
+constexpr int kGutter = 16;
 constexpr int kContentMaxW = 560;              // the frames' single-column rhythm
 constexpr int kCardPadX = 16, kCardPadY = 12;  // T10: horizontal air kept, vertical on the 4-grid
 constexpr int kCardGap = 8, kDiscH = 24, kDiscIndent = 24;
@@ -213,7 +213,7 @@ int ConnectStage::layoutContent (int width) {
 
 void ConnectStage::resized() {
     auto area = getLocalBounds();
-    header_.setBounds (area.removeFromTop (StageHeader::kHeight).reduced (kPadX, 0));
+    auto headerArea = area.removeFromTop (StageHeader::kHeight);
     viewport_.setBounds (area);
     const int contentW = viewport_.getMaximumVisibleWidth();
     const int contentH = layoutContent (contentW);
@@ -222,6 +222,15 @@ void ConnectStage::resized() {
     if (finalW != contentW) {
         const int h2 = layoutContent (finalW);
         content_.setSize (finalW, juce::jmax (h2, viewport_.getHeight()));
+    }
+    // P2.9 alignment unification: the header adopts the SAME centered content column the body just
+    // laid out (one system: header text, cards, CTA share left/right edges at every width). Placed
+    // AFTER the double-pass so a scrollbar toggle cannot leave the header 10px off the column.
+    {
+        const int cw = viewport_.getMaximumVisibleWidth();
+        const int colW = juce::jmin (kContentMaxW, juce::jmax (0, cw - 2 * kGutter));
+        const int x0 = (cw - colW) / 2;
+        header_.setBounds (headerArea.withX (headerArea.getX() + x0).withWidth (colW));
     }
 }
 
