@@ -104,6 +104,9 @@ public:
     juce::Label&  trimLabelForTest()  { return trimLabel; }
     CalSlotComponent& leftCalForTest()  { return leftCal; }
     CalSlotComponent& rightCalForTest() { return rightCal; }
+    // P2.9 T9: the combine-mode combo, so a test can prove the "(recommended)"/"+6 dB" badges ride
+    // PopupMenu::Item::shortcutKeyText (a dim right-aligned suffix) rather than triple-space item text.
+    juce::ComboBox& combineBoxForTest() { return combineBox; }
     // M-2 seams: drive the Level green-band latch and route an input through the SAME apply path both the
     // user pick (onInputChosen) and the hot-plug lambda use, so a test can prove a changed input key clears
     // the latch (the spine must not keep reading "In green band" on old-gain evidence after a replug).

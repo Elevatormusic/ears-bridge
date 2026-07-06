@@ -63,6 +63,14 @@ public:
     juce::Font getComboBoxFont (juce::ComboBox&) override;
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
 
+    // P2.9: popup-menu item with a dim, right-aligned badge in the shortcut-text slot (the combine
+    // combo's "(recommended)"/"+6 dB"). Every popup in the app renders through this; items with no
+    // shortcut text look V4-equivalent (tick + left text, no badge column).
+    void drawPopupMenuItem (juce::Graphics&, const juce::Rectangle<int>&, bool isSeparator, bool isActive,
+                            bool isHighlighted, bool isTicked, bool hasSubMenu, const juce::String& text,
+                            const juce::String& shortcutKeyText, const juce::Drawable* icon,
+                            const juce::Colour* textColour) override;
+
     // P2.9: buttons opt into a leading 14px glyph via getProperties().set("glyph", "<id>")
     // (ids: play stop tick info refresh folder export warning). Glyph + 7px gap + text centred as a group (W2 .btn .ico).
     void drawButtonText (juce::Graphics&, juce::TextButton&, bool over, bool down) override;

@@ -204,18 +204,10 @@ MainComponent::MainComponent (const TestConfig& cfg)
     styleEyebrow (combineLabel, "COMBINE MODE");
     combineModel = combineModeOrder();
     for (size_t i = 0; i < combineModel.size(); ++i) {
-        auto& m = combineModel[i];
-        juce::String label;
-        switch (m.mode) {
-            case CombineMode::LeftOnly:     label = "Left ear only";          break;
-            case CombineMode::RightOnly:    label = "Right ear only";         break;
-            case CombineMode::Average:      label = "Average (L+R)/2";        break;
-            case CombineMode::Sum:          label = "Sum L+R";                break;
-            case CombineMode::AutoPerEar:   label = "Auto per-ear (Dirac)";   break;
-        }
-        if (m.recommended)     label += "   (recommended)";
-        if (m.clipRiskWarning) label += "   (+6 dB)";
-        combineBox.addItem (label, (int) i + 1);
+        juce::PopupMenu::Item it (combineModeLabel (combineModel[i].mode));
+        it.itemID = (int) i + 1;                                   // same id scheme as before (index+1)
+        it.shortcutKeyDescription = combineModeBadge (combineModel[i]);   // dim right-aligned badge (P2.9): JUCE routes this field to drawPopupMenuItem's shortcutKeyText param
+        combineBox.getRootMenu()->addItem (std::move (it));
     }
     combineBox.onChange = [this] { onCombineChosen(); };
     combineBox.setTitle ("Combine mode");

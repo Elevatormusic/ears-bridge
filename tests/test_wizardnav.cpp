@@ -578,3 +578,19 @@ TEST_CASE("P2.9 disclosure seed: launches OPEN when a stored advanced setting is
     CHECK (mc.calibrateStageForTest().advancedOpenForTest());
     tmp.deleteRecursively();
 }
+
+TEST_CASE("P2.9 combine combo: the recommended badge rides shortcutKeyText, not triple-space text") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (hermetic (tmp));
+    int recommendedBadges = 0;
+    juce::PopupMenu::MenuItemIterator it (*mc.combineBoxForTest().getRootMenu());
+    while (it.next()) {
+        auto& item = it.getItem();
+        CHECK (! item.text.contains ("(recommended)"));
+        if (item.shortcutKeyDescription == "recommended") { ++recommendedBadges; CHECK (item.text == "Auto per-ear (Dirac)"); }   // JUCE Item field -> LnF shortcutKeyText param
+    }
+    CHECK (recommendedBadges == 1);
+    CHECK (mc.combineBoxForTest().getText() == "Auto per-ear (Dirac)");   // default restore path intact
+    tmp.deleteRecursively();
+}

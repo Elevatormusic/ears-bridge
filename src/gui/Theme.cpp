@@ -158,6 +158,49 @@ void Theme::positionComboBoxText (juce::ComboBox& box, juce::Label& label) {
     label.setFont (getComboBoxFont (box));
 }
 
+void Theme::drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle<int>& area,
+                               bool isSeparator, bool isActive, bool isHighlighted, bool isTicked,
+                               bool hasSubMenu, const juce::String& text, const juce::String& shortcutKeyText,
+                               const juce::Drawable* /*icon*/, const juce::Colour* textColourToUse) {
+    if (isSeparator) {
+        g.setColour (sep());
+        g.fillRect (area.reduced (8, 0).withHeight (1).withY (area.getCentreY()));
+        return;
+    }
+    auto r = area.reduced (1);
+    if (isHighlighted && isActive) {
+        g.setColour (findColour (juce::PopupMenu::highlightedBackgroundColourId));
+        g.fillRect (r);
+    }
+    juce::Colour tx = textColourToUse != nullptr ? *textColourToUse
+                     : findColour (isHighlighted ? juce::PopupMenu::highlightedTextColourId
+                                                 : juce::PopupMenu::textColourId);
+    if (! isActive) tx = tx.withMultipliedAlpha (0.5f);
+    auto fr = r.reduced (12, 0);
+    if (isTicked)
+        glyph::drawTick (g, fr.removeFromLeft (18).toFloat().withSizeKeepingCentre (12.0f, 12.0f), tx);
+    else
+        fr.removeFromLeft (18);
+    float badgeW = 0.0f;
+    if (shortcutKeyText.isNotEmpty()) {
+        const juce::Font bf (juce::FontOptions (11.5f));
+        badgeW = juce::GlyphArrangement::getStringWidth (bf, shortcutKeyText) + 10.0f;
+        g.setColour (isHighlighted ? tx : textDim());              // secondary tone, right-aligned (P2.9 ruling)
+        g.setFont (bf);
+        g.drawText (shortcutKeyText, fr.removeFromRight ((int) badgeW), juce::Justification::centredRight, false);
+    }
+    if (hasSubMenu) {                                              // completeness: none of our menus use one today
+        auto ar = fr.removeFromRight (12).toFloat();
+        juce::Path a; a.startNewSubPath (ar.getCentreX() - 2.0f, ar.getCentreY() - 4.0f);
+        a.lineTo (ar.getCentreX() + 2.0f, ar.getCentreY());
+        a.lineTo (ar.getCentreX() - 2.0f, ar.getCentreY() + 4.0f);
+        g.setColour (tx); g.strokePath (a, juce::PathStrokeType (1.6f));
+    }
+    g.setColour (tx);
+    g.setFont (getPopupMenuFont());
+    g.drawFittedText (text, fr, juce::Justification::centredLeft, 1);
+}
+
 void Theme::paintCardSurface (juce::Graphics& g, juce::Rectangle<float> r, float radius) {
     g.setColour (surface());
     g.fillRoundedRectangle (r, radius);

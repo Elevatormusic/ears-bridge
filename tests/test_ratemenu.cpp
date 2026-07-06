@@ -59,6 +59,17 @@ TEST_CASE("combineModeOrder lists AutoPerEar first with the right recommended ba
     CHECK (order[4].clipRiskWarning == true);
 }
 
+TEST_CASE("P2.9 combine labels: clean text, badge carried separately") {
+    CHECK (eb::combineModeLabel (eb::CombineMode::AutoPerEar) == "Auto per-ear (Dirac)");
+    CHECK (eb::combineModeLabel (eb::CombineMode::Sum)        == "Sum L+R");
+    for (const auto& m : eb::combineModeOrder()) {
+        CHECK (! eb::combineModeLabel (m.mode).contains ("recommended"));
+        if (m.recommended)     CHECK (eb::combineModeBadge (m) == "recommended");
+        if (m.clipRiskWarning) CHECK (eb::combineModeBadge (m) == "+6 dB");
+        if (! m.recommended && ! m.clipRiskWarning) CHECK (eb::combineModeBadge (m).isEmpty());
+    }
+}
+
 TEST_CASE("numTapsForRate scales 8192 @ 48k to powers of two") {
     CHECK (eb::numTapsForRate (48000.0)  == 8192);
     CHECK (eb::numTapsForRate (96000.0)  == 16384);

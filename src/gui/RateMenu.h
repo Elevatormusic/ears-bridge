@@ -1,6 +1,7 @@
 #pragma once
 #include "audio/CombineMode.h"
 #include "audio/FirTaps.h"   // firTapsForRate() — single source of truth for tap count
+#include <juce_core/juce_core.h>   // juce::String for combineModeLabel/Badge (P2.9)
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -55,6 +56,24 @@ inline std::vector<CombineMenuItem> combineModeOrder() {
         { CombineMode::Average,      /*recommended*/ false, /*clipRisk*/ false },
         { CombineMode::Sum,          /*recommended*/ false, /*clipRisk*/ true  },
     };
+}
+
+// P2.9: the combo item's CLEAN display label (badges ride PopupMenu::Item::shortcutKeyDescription,
+// which JUCE forwards to LookAndFeel::drawPopupMenuItem's shortcutKeyText parameter).
+inline juce::String combineModeLabel (CombineMode m) {
+    switch (m) {
+        case CombineMode::LeftOnly:   return "Left ear only";
+        case CombineMode::RightOnly:  return "Right ear only";
+        case CombineMode::Average:    return "Average (L+R)/2";
+        case CombineMode::Sum:        return "Sum L+R";
+        case CombineMode::AutoPerEar: return "Auto per-ear (Dirac)";
+    }
+    return {};
+}
+inline juce::String combineModeBadge (const CombineMenuItem& m) {
+    if (m.recommended)     return "recommended";
+    if (m.clipRiskWarning) return "+6 dB";
+    return {};
 }
 
 // Tap count for the FIR at a given rate. Back-compat GUI name; delegates to the single source of
