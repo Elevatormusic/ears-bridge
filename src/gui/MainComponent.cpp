@@ -19,6 +19,7 @@
 #include "gui/GradeGuards.h"                // #32: the grade-path predicates, shared with the tests (no mirror drift)
 #include "gui/StatusLadder.h"               // #50: the PURE Running status ladder (honesty cluster #1 #4 #21 #44)
 #include "gui/LiveInputStatus.h"            // eb::liveInputStatus (live per-channel in-sweep readout)
+#include "gui/DeviceNameDistill.h"          // eb::distillDeviceName (P2.9 T8: spine metas -> W2-style short device summaries)
 #include "audio/LoopbackReference.h"        // eb::captureLoopback / validateReferenceCapture / readDiracDeviceType (Plan 5)
 #include "audio/SweepScheduleStore.h"       // eb::extractSchedule / serialize+deserialize (AutoPerEar schedule, P0-06)
 #include "audio/ReferenceMetaStore.h"       // eb::serializeReferenceMeta / checkReferenceMeta (audit #5/#20 integrity sidecar)
@@ -1330,7 +1331,8 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
     juce::String viewMetas[kWizardStepCount];
     if (auto in = inputPicker.selectedDevice())
         if (auto out = outputPicker.selectedDevice())
-            viewMetas[(int) WizardStep::Connect] = in->name + " -> " + out->name;
+            viewMetas[(int) WizardStep::Connect] = distillDeviceName (in->name) + " -> "
+                                                 + distillDeviceName (out->name);
     // Calibrate done-summary "HEQ pair · <serial>" (spec § view metas). Only when the step is Done (both
     // cals loaded + applied) — else the machine reason (Todo/Error/rebuilding) stays.
     if (ws.steps[(int) WizardStep::Calibrate].state == StepState::Done) {
@@ -1362,7 +1364,8 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
         refLine1 = "n/a (hardware Dirac)";
     } else if (! loadedReferenceL_.empty() && ! loadedReferenceR_.empty()) {
         refLine1 = "learned";
-        refLine2 = loadedReferenceEndpoint_.isNotEmpty() ? loadedReferenceEndpoint_ : juce::String ("Windows Audio");
+        refLine2 = loadedReferenceEndpoint_.isNotEmpty() ? distillDeviceName (loadedReferenceEndpoint_)
+                                                         : juce::String ("Windows Audio");
     } else {
         refLine1 = "not learned";
     }

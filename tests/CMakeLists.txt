@@ -31,6 +31,7 @@ add_executable(eb_tests
     test_curvethumbnail.cpp
     test_designtokens.cpp
     test_disclosurerow.cpp
+    test_distill.cpp
     test_calibratestage.cpp
     test_updatecheck.cpp
     test_clipstatus.cpp
