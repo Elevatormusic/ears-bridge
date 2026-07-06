@@ -42,6 +42,7 @@ add_executable(eb_tests
     test_statusladder.cpp
     test_wizardstate.cpp
     test_wizardspine.cpp
+    test_formatcluster.cpp
     test_wizardnav.cpp
     test_signalchainview.cpp
     test_irquality.cpp

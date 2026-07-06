@@ -31,8 +31,13 @@ public:
     void setParts (const std::array<juce::String, 3>& p) {
         if (p == parts_) return;                // set-if-changed (called every refreshWizardView tick)
         parts_ = p;
-        repaint();
+        markDirty();
     }
+
+    // Repaint discipline (M-2): the count of repaints issued. setParts runs on every refreshWizardView
+    // tick, so an identical re-set must leave this UNCHANGED; a changed set must increment it. Mirrors
+    // WizardSpine's rowRepaintCountForTest markDirty() seam.
+    int repaintCountForTest() const { return repaintCount_; }
     void paint (juce::Graphics& g) override {
         const juce::Font f (juce::FontOptions (12.0f));
         g.setFont (f);
@@ -53,7 +58,10 @@ public:
         }
     }
 private:
+    void markDirty() { ++repaintCount_; repaint(); }   // every repaint funnels here so the guard is observable
+
     std::array<juce::String, 3> parts_ {};
+    int repaintCount_ = 0;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FormatCluster)
 };
 
