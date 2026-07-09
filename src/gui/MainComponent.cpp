@@ -729,6 +729,14 @@ void MainComponent::applyResolvedInput (const DeviceId& d) {
     if (d.key() != lastAppliedInputKey_) {
         levelLatched_       = false;
         lastAppliedInputKey_ = d.key();
+        // Same doctrine, applied to the VERDICTS (P3 Task 1 review, Major): a different device is
+        // different evidence, so grades measured on the old jig must not present fresh after a replug
+        // (the EARS gain-DIP rename fallback lands here too, and it is a real occurrence). Advance the
+        // config generation so verdictGen < configGen downgrades them to STALE. Direct bump, not
+        // rebuildFirsAsync(): the input's identity never enters the FIR design, so a rebuild here would
+        // be wasted work (the user-pick path still rebuilds separately in onInputChosen for the
+        // rate-menu fix-up it performs).
+        bumpConfigGeneration();
     }
 }
 
@@ -759,6 +767,13 @@ void MainComponent::onOutputChosen (const DeviceId& d) {
     preflightInfo.setText ({}, juce::dontSendNotification);   // a fresh pick clears any prior-run fact line
     rebuildBitDepthMenu();
     updateDiracCableHint();
+    // USER RULING (P3 Task 1 review): a different output device is a different signal path into Dirac,
+    // so verdicts measured through the old device must read STALE. Note the bit-depth fallback inside
+    // rebuildBitDepthMenu() above (a saved depth the new device lacks silently becomes 24-bit) is also
+    // covered by this one bump. Belt-and-braces with the PLANNED P3 wait-hint (refEndpointMismatch_,
+    // a later task): that hint will WARN that the learned reference no longer matches the endpoint;
+    // this bump independently downgrades verdict freshness - they coexist, neither replaces the other.
+    bumpConfigGeneration();
     updateStartGate();   // output now selected -> may enable Start
     logDeviceSnapshot ("output changed");
 }
@@ -865,6 +880,11 @@ void MainComponent::onBitDepthChosen() {
     engine.setOutputBitDepth (bitModel[(size_t) idx]);
     logLine (eb::DiagnosticLog::Level::Info,
              "Bit depth changed: preferred " + juce::String (bitModel[(size_t) idx]) + "-bit");
+    // USER RULING (P3 Task 1 review): an output bit-depth change re-quantizes the signal Dirac records,
+    // so verdicts measured under the old depth must read STALE. Mirrors the rate path's generation
+    // advance (onRateChosen -> rebuildFirsAsync), minus the FIR redesign: unlike the rate, the bit
+    // depth never enters the FIR design, so the non-rebuilding bump stamps the same staleness.
+    bumpConfigGeneration();
 }
 
 void MainComponent::onCombineChosen() {
@@ -975,6 +995,21 @@ void MainComponent::rebuildFirsAsync() {
     // #3: the generation just bumped, so the gate is logically CLOSED until the async build lands - grey the
     // Start button NOW (rate/FIR-length/complex handlers previously left it enabled through the build window).
     updateStartGate();
+}
+
+// P3 Task 1 review: advance the config generation WITHOUT redesigning the FIRs, so verdicts stamped under
+// the previous generation read STALE (verdictGen < configGen) while the Start gate and calBuilding are
+// untouched (both read the ENGINE's requested/built generations, which this leaves converged). Used where
+// the measurement CONTEXT changed but the FIR content did not (input identity, output device, output bit
+// depth) - a full rebuildFirsAsync() here would redo identical design work and grey the gate through the
+// build window for an unchanged result. Staleness-conservative: the counter only ever advances.
+// If a FIR build IS in flight (requested != built), route through rebuildFirsAsync() instead: a bare
+// counter bump would orphan the in-flight build (its continuation discards on the genId mismatch, so
+// requested/built would never converge), wedging the gate closed on a phantom "rebuilding".
+void MainComponent::bumpConfigGeneration() {
+    if (engine.requestedGeneration() != engine.builtGeneration()) { rebuildFirsAsync(); return; }
+    calGenCounter_.fetch_add (1, std::memory_order_relaxed);
+    updateStartGate();   // same gate outcome, but the wizard view must re-render verdictsStale NOW
 }
 
 void MainComponent::onStartStop() {
@@ -1313,6 +1348,21 @@ eb::WizardInputs MainComponent::snapshotWizardInputs() const {
 
 void MainComponent::stampVerdictGeneration (int ear) {
     (ear == 1 ? verdictGenR_ : verdictGenL_) = calGenCounter_.load (std::memory_order_relaxed);
+}
+
+// The guarded HEAD of the live publish continuation, extracted so a test can pin the ORDER (P3 Task 1
+// review Fix 4a): the run-generation guard runs FIRST, and a STALE generation publishes nothing and -
+// critically - stamps nothing. A stamp under a stale run would refresh verdictGen to the CURRENT
+// configGen and falsely clear verdictsStale with evidence from a dead run (measurement honesty).
+bool MainComponent::publishGradeIfRunCurrent (int ear, int state, float irSnrDb, float thdPercent,
+                                              bool mismatch, bool lowQuality, uint32_t runGen) {
+    if (gradeRunGen_.load (std::memory_order_relaxed) != runGen)
+        return false;   // a Stop/Start happened since this job was posted -> stale: drop it whole (#4)
+    // Publish THIS ear's verdict snapshot (the SNR lesson: trio published together); raise the guidance
+    // flag matching the verdict. NEITHER flag invalidates the capture (they are guidance only).
+    engine.publishReferenceGrade (ear, state, irSnrDb, thdPercent, mismatch, lowQuality);
+    stampVerdictGeneration (ear);   // §3.2: stamp the generation this verdict was measured under
+    return true;
 }
 
 void MainComponent::publishGradeForTest (int ear, int refMonState, float sweepSnrDb) {
@@ -2528,11 +2578,10 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
                                           graded, shape = std::move (shape)]() mutable {
             auto* mc = safe.getComponent();
             if (! mc) return;
-            if (mc->gradeRunGen_.load (std::memory_order_relaxed) != myGen) return;   // a Stop/Start happened since post -> drop this stale publish (#4)
-            // Publish THIS ear's verdict snapshot (the SNR lesson: trio published together); raise the guidance
-            // flag matching the verdict. NEITHER flag invalidates the capture (they are guidance only).
-            mc->engine.publishReferenceGrade (ear, state, irSnr, thd, mismatch, lowQ);
-            mc->stampVerdictGeneration (ear);   // §3.2: stamp the generation this verdict was measured under
+            // Guard-then-publish-then-stamp, extracted (publishGradeIfRunCurrent) so the ORDER is
+            // test-pinned: a stale run generation publishes NOTHING and stamps NOTHING (#4 + §3.2).
+            if (! mc->publishGradeIfRunCurrent (ear, state, irSnr, thd, mismatch, lowQ, myGen))
+                return;   // a Stop/Start happened since post -> drop this stale publish whole (#4)
             // 3-color quality dots: smooth THIS ear's bands across consecutive grades (anti-flicker) and show
             // them under that ear's status line. The raw dB/% is shown beside each dot (never colour alone).
             {

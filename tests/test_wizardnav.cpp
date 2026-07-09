@@ -643,3 +643,129 @@ TEST_CASE("P3 verdictGen negative: an ungraded ear never reads stale, whatever i
     CHECK_FALSE (eb::computeWizardState (in, std::nullopt).verdictsStale);
     tmp.deleteRecursively();
 }
+
+// ==================================================================================================
+// P3 Task 1 REVIEW fixes: the generation-bump sites. Fix 1 (Major): hot-plug to a DIFFERENT input
+// device stales the verdicts — "a different device is different evidence", the same doctrine that
+// clears the Level latch (M-2), now applied to verdict freshness. Fixes 2+3 (user-ratified): an
+// output bit-depth or output-device change stales them too. Fix 4: guard-before-stamp order + the
+// one-ear || persistence. All staleness-conservative: nothing here can make evidence read fresher.
+// ==================================================================================================
+TEST_CASE("P3 verdictGen: a different-key input apply stales the verdicts; same-key re-apply stays fresh") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (hermetic (tmp));
+
+    // Seed the key memo, then grade both ears fresh under the current config generation.
+    eb::DeviceId dev; dev.typeName = "Windows Audio"; dev.name = "EARS"; dev.uid = "uid-A";
+    mc.applyResolvedInputForTest (dev);
+    mc.publishGradeForTest (0, (int) eb::RefMonState::GradedClean);
+    mc.publishGradeForTest (1, (int) eb::RefMonState::GradedClean);
+    CHECK_FALSE (eb::computeWizardState (mc.snapshotWizardInputsForTest(), std::nullopt).verdictsStale);
+
+    // Negative: a hot-plug re-resolution landing on the SAME device (same key) must NOT downgrade
+    // still-valid verdicts — mirrors the latch's same-key survival in M-2.
+    mc.applyResolvedInputForTest (dev);
+    CHECK_FALSE (eb::computeWizardState (mc.snapshotWizardInputsForTest(), std::nullopt).verdictsStale);
+
+    // A DIFFERENT device (a replugged different jig, or the gain-DIP rename fallback) -> old-jig
+    // verdicts must read STALE. This drives the exact member the hot-plug lambda uses.
+    eb::DeviceId dev2; dev2.typeName = "Windows Audio"; dev2.name = "EARS Pro"; dev2.uid = "uid-B";
+    mc.applyResolvedInputForTest (dev2);
+    CHECK (eb::computeWizardState (mc.snapshotWizardInputsForTest(), std::nullopt).verdictsStale);
+    tmp.deleteRecursively();
+}
+
+TEST_CASE("P3 verdictGen: an output bit-depth change stales the verdicts (user ruling)") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (hermetic (tmp));
+
+    // Determinism: on a machine with real endpoints the ctor may auto-select an output whose menu holds
+    // a SINGLE supported depth (nothing to change to). Empty the picker so rebuildBitDepthMenu takes the
+    // no-device fallback {16,24,32}; the output-choose that rebuilds it bumps the generation itself
+    // (that's the Fix-3 test), so both ears re-publish AFTER it — the final staleness below is then
+    // attributable to the bit-depth change alone.
+    mc.outputPickerForTest().setDevices ({}, {});
+    eb::DeviceId out; out.typeName = "Windows Audio"; out.name = "Speakers (High Definition Audio)"; out.uid = "uid-out";
+    mc.chooseOutputForTest (out);   // rebuilds the bit-depth menu off the (now empty) picker selection
+    mc.publishGradeForTest (0, (int) eb::RefMonState::GradedClean);
+    mc.publishGradeForTest (1, (int) eb::RefMonState::GradedClean);
+    CHECK_FALSE (eb::computeWizardState (mc.snapshotWizardInputsForTest(), std::nullopt).verdictsStale);
+
+    // Drive the REAL combo path (bitBox.onChange -> onBitDepthChosen) with a DIFFERENT depth than the
+    // current selection. sendNotificationSync fires the handler synchronously (headless-safe).
+    auto& bit = mc.bitBoxForTest();
+    REQUIRE (bit.getNumItems() >= 2);
+    const int cur = bit.getSelectedId();
+    for (int i = 0; i < bit.getNumItems(); ++i)
+        if (bit.getItemId (i) != cur) { bit.setSelectedId (bit.getItemId (i), juce::sendNotificationSync); break; }
+    CHECK (bit.getSelectedId() != cur);   // the change was real
+    CHECK (eb::computeWizardState (mc.snapshotWizardInputsForTest(), std::nullopt).verdictsStale);
+    tmp.deleteRecursively();
+}
+
+TEST_CASE("P3 verdictGen: an output-device change stales the verdicts (user ruling)") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (hermetic (tmp));
+
+    mc.publishGradeForTest (0, (int) eb::RefMonState::GradedClean);
+    mc.publishGradeForTest (1, (int) eb::RefMonState::GradedClean);
+    CHECK_FALSE (eb::computeWizardState (mc.snapshotWizardInputsForTest(), std::nullopt).verdictsStale);
+
+    // Drive onOutputChosen — the exact member the output picker's callback invokes. A non-virtual name
+    // keeps the hermetic run off the Dirac shared-mode registry probe (NotVirtual hint branch).
+    eb::DeviceId out; out.typeName = "Windows Audio"; out.name = "Speakers (High Definition Audio)"; out.uid = "uid-out";
+    mc.chooseOutputForTest (out);
+    CHECK (eb::computeWizardState (mc.snapshotWizardInputsForTest(), std::nullopt).verdictsStale);
+    tmp.deleteRecursively();
+}
+
+// Fix 4a: guard-before-stamp ORDER. The live publish continuation cannot be driven headless — it needs a
+// Running engine, a learned loopback reference, and the two-stage firPool -> callAsync worker chain (a
+// real sweep). So the guard+publish+stamp HEAD of that continuation is extracted into the production
+// member publishGradeIfRunCurrent(), the continuation calls it, and this test drives THAT member: the
+// strongest available pin short of hardware (the ordering under test IS the production code, not a
+// replica). A run generation bumped between arming (the myGen capture at job post) and the continuation
+// must drop the publish AND leave the stamp untouched — a stamp from a dead run would falsely refresh
+// verdictGen and clear verdictsStale.
+TEST_CASE("P3 verdictGen: a stale run generation publishes nothing and stamps nothing (guard before stamp)") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (hermetic (tmp));
+
+    const uint32_t armed = mc.gradeRunGenForTest();   // what the poll stamps into the job at post time
+    mc.bumpGradeRunGenForTest();                      // a Stop/Start lands between post and continuation
+    CHECK_FALSE (mc.publishGradeGuardedForTest (0, (int) eb::RefMonState::GradedClean, armed));
+    CHECK (mc.verdictGenForTest (0) == -1);           // NO stamp: the never-graded placeholder survives
+    CHECK_FALSE (mc.snapshotWizardInputsForTest().earGradedL);   // and NO publish reached the engine
+
+    // Control: the CURRENT run generation still publishes + stamps (the extraction kept the live path).
+    CHECK (mc.publishGradeGuardedForTest (0, (int) eb::RefMonState::GradedClean, mc.gradeRunGenForTest()));
+    const auto in = mc.snapshotWizardInputsForTest();
+    CHECK (in.earGradedL);
+    CHECK (mc.verdictGenForTest (0) == in.configGen);
+    tmp.deleteRecursively();
+}
+
+// Fix 4b: one-ear persistence — staleness clears ONLY when BOTH ears re-publish under the current
+// generation (the || in computeWizardState). Re-measuring just L after a config change must leave the
+// pair STALE: R's verdict is still old-config evidence.
+TEST_CASE("P3 verdictGen: re-publishing only one ear keeps the pair stale") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (hermetic (tmp));
+
+    mc.publishGradeForTest (0, (int) eb::RefMonState::GradedClean);
+    mc.publishGradeForTest (1, (int) eb::RefMonState::GradedClean);
+    CHECK_FALSE (eb::computeWizardState (mc.snapshotWizardInputsForTest(), std::nullopt).verdictsStale);
+
+    mc.bumpConfigGenForTest();                                     // config changed under the pair
+    mc.publishGradeForTest (0, (int) eb::RefMonState::GradedClean); // ONLY L re-measured
+    const auto in = mc.snapshotWizardInputsForTest();
+    CHECK (in.verdictGenL == in.configGen);
+    CHECK (in.verdictGenR <  in.configGen);
+    CHECK (eb::computeWizardState (in, std::nullopt).verdictsStale);   // R is still old evidence
+    tmp.deleteRecursively();
+}

@@ -130,6 +130,20 @@ public:
     void bumpConfigGenForTest() { calGenCounter_.fetch_add (1, std::memory_order_relaxed); }
     int  verdictGenForTest (int ear) const { return ear == 1 ? verdictGenR_ : verdictGenL_; }
     WizardInputs snapshotWizardInputsForTest() const { return snapshotWizardInputs(); }
+    // P3 Task 1 review seams. bitBoxForTest/chooseOutputForTest drive the REAL output bit-depth /
+    // output-device change handlers (onBitDepthChosen via the combo's own onChange; onOutputChosen is
+    // the exact member the picker callback invokes) so the user-ratified "an output format/device
+    // change stales the verdicts" rule is pinned on the production handlers, not a replica.
+    juce::ComboBox& bitBoxForTest() { return bitBox; }
+    void chooseOutputForTest (const DeviceId& d) { onOutputChosen (d); }
+    // Fix 4a (guard-before-stamp): the live publish continuation is unreachable headless (it needs a
+    // Running engine, a learned reference and the two-stage worker chain), so its guard+publish+stamp
+    // HEAD is the extracted production member publishGradeIfRunCurrent(); these drive THAT member with
+    // an explicit run generation. Returns whether the publish+stamp happened.
+    bool publishGradeGuardedForTest (int ear, int refMonState, uint32_t runGen)
+        { return publishGradeIfRunCurrent (ear, refMonState, 50.0f, 0.5f, false, false, runGen); }
+    uint32_t gradeRunGenForTest() const { return gradeRunGen_.load (std::memory_order_relaxed); }
+    void bumpGradeRunGenForTest() { gradeRunGen_.fetch_add (1, std::memory_order_relaxed); }
 
 private:
     // The reference/schedule store dir: the TestConfig override (#24, hermetic tests), else %APPDATA%/EarsBridge.
@@ -142,11 +156,12 @@ private:
     void refreshDeviceLists();
     void autoSelectDefaults();       // first run / empty slot: pick a recognised EARS + a standard VB-CABLE
     // Apply an input to the engine and, when the applied device KEY changed since the last apply, invalidate
-    // the Level green-band latch (§3.2: a different device/gain is different level evidence). BOTH the user
-    // pick (onInputChosen) and the hot-plug re-resolution (engine.onDevicesChanged, incl. the EARS gain-DIP
-    // rename fallback) route through here, so the spine can never keep claiming "In green band" on old-gain
-    // evidence. Message-thread only (lastAppliedInputKey_ has no cross-thread reader). Returns nothing; the
-    // caller owns persistence/menu-rebuild (those differ between the two paths).
+    // the Level green-band latch AND the verdict freshness (§3.2: a different device/gain is different
+    // evidence — level and measurement verdicts alike). BOTH the user pick (onInputChosen) and the hot-plug
+    // re-resolution (engine.onDevicesChanged, incl. the EARS gain-DIP rename fallback) route through here,
+    // so the spine can never keep claiming "In green band" — or presenting old-jig verdicts fresh — on
+    // old-device evidence. Message-thread only (lastAppliedInputKey_ has no cross-thread reader). Returns
+    // nothing; the caller owns persistence/menu-rebuild (those differ between the two paths).
     void applyResolvedInput (const DeviceId&);
     juce::String lastAppliedInputKey_;   // the key() of the input last pushed to the engine (latch memo)
     void onInputChosen  (const DeviceId&);
@@ -158,6 +173,10 @@ private:
     void onBitDepthChosen();
     void onCombineChosen();
     void rebuildFirsAsync();         // design both FIRs at the active rate off-thread
+    // Advance the config generation WITHOUT redesigning the FIRs (measurement-context change only:
+    // input identity / output device / output bit depth). See the definition for the in-flight-build
+    // fallback that keeps calBuilding from wedging.
+    void bumpConfigGeneration();
     void onLeftCalLoaded  (const juce::File&);
     void onRightCalLoaded (const juce::File&);
     void onStartStop();
@@ -217,6 +236,11 @@ private:
     // (verdictGen < configGen); evidence is downgraded, not deleted.
     int  verdictGenL_ = -1, verdictGenR_ = -1;
     void stampVerdictGeneration (int ear);
+    // The run-generation-guarded HEAD of the live publish continuation (guard FIRST, then publish, then
+    // stamp) — extracted so the ORDER is test-pinned. Returns false (nothing published, nothing stamped)
+    // when runGen is stale. Message-thread only.
+    bool publishGradeIfRunCurrent (int ear, int state, float irSnrDb, float thdPercent,
+                                   bool mismatch, bool lowQuality, uint32_t runGen);
     bool unityAcceptedSession_ = false;   // §5.2 explicit unity choice; session-scoped, never persisted
     // The first enabled, focusable leaf inside a stage's subtree (top-down), for explicit focus placement
     // on a stage switch. Returns the stage itself when it has no focusable child (never null once built).
