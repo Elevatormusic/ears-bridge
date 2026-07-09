@@ -33,6 +33,12 @@ namespace ShapeFlag {
     inline constexpr unsigned kStep        = 256u;   // D7 mid-sweep level step
     inline constexpr unsigned kBaselineSet = 512u;   // D1 baseline learned this session (NOT an anomaly)
     inline constexpr unsigned kNoBand      = 1024u;  // D3 no measurable band (valid reference, empty measurement edges)
+
+    // Every ANOMALY bit (kBaselineSet is bookkeeping, not a finding). KEEP IN STEP when adding a bit:
+    // the VerdictCard chip table (gui/StatusLadder.h) static_asserts its chip-mask union against this,
+    // so a new detector bit cannot ship silently unchipped (fail-closed, same-file discipline).
+    inline constexpr unsigned kAllAnomalyMask = kDrift | kComb | kTruncHi | kTruncLo | kPolarity
+                                              | kHum | kResonance | kSkew | kStep | kNoBand;
 }
 
 struct WindowedSpectrum {

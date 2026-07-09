@@ -44,6 +44,7 @@ add_executable(eb_tests
     test_wizardspine.cpp
     test_formatcluster.cpp
     test_wizardnav.cpp
+    test_verdictcard.cpp
     test_signalchainview.cpp
     test_irquality.cpp
     test_hysteresis.cpp

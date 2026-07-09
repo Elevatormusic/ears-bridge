@@ -293,6 +293,211 @@ static constexpr bool kShapeCopyRatified = false;
     return lines.joinIntoString ("\n");
 }
 
+// ==================================================================================================
+// P3: the SP3-hybrid VerdictCard copy layer (spec 6 [P3-refresh]). The card is a NEW VIEW over the
+// SAME pure functions above - nothing here invents wording the ladder doesn't carry, and nothing here
+// changes a grade/tone/gate (INFO-only honesty). Headlessly tested in tests/test_verdictcard.cpp.
+// ==================================================================================================
+
+// The card's clip fix copy. Mirrors earStatusLine's clip-tooltip action sentence (same cut math:
+// ceil(peak) + 3 dB margin); the ladder's own tooltip string stays inline there (its "re-measure"
+// tail is frozen ladder copy) - this is the card-side single source, pinned by test_verdictcard.cpp.
+[[nodiscard]] inline juce::String clipFixBody (float peakDb) {
+    const int cutDb = juce::roundToInt (std::ceil (peakDb)) + 3;
+    return "Lower Dirac's output (or the system level) by about " + juce::String (cutDb)
+         + " dB, then measure again.";
+}
+
+// The "n/a" metric placeholder (em dash) - ONE source for the model that writes it and the view
+// that keys the metrics-row visibility off it (all-dash rows are hidden, see VerdictCard.cpp).
+[[nodiscard]] inline juce::String verdictDash() {
+    return juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x94"));
+}
+
+struct ShapeScalars {
+    float driftMaxDb = 0, hfShelfDb = 0, combDepthDb = 0, combDelayMs = 0,
+          effLoHz = 0, effHiHz = 0, lobeWidth = 0, stepDb = 0, resonanceHz = 0;
+    int   humBaseHz = 0;
+};
+
+// The seven chips = the detector FAMILIES D1..D7 (frozen, spec 6 [P3-refresh]): D5's two findings
+// (hum + resonance) share the noise-floor chip under the frame's "Hum" name; D3's three bits share
+// "Band"; D7's step is "Level". static_asserts below make the table fail-closed against ShapeFlag.
+struct VerdictChipDef { const char* label; unsigned mask; };
+inline constexpr VerdictChipDef kVerdictChips[] = {
+    { "Drift",    ShapeFlag::kDrift },                                                // D1
+    { "Comb",     ShapeFlag::kComb },                                                 // D2
+    { "Polarity", ShapeFlag::kPolarity },                                             // D4
+    { "Hum",      ShapeFlag::kHum | ShapeFlag::kResonance },                          // D5 a+b
+    { "Band",     ShapeFlag::kTruncHi | ShapeFlag::kTruncLo | ShapeFlag::kNoBand },   // D3
+    { "Level",    ShapeFlag::kStep },                                                 // D7
+    { "Skew",     ShapeFlag::kSkew },                                                 // D6
+};
+inline constexpr int kVerdictChipCount = (int) std::size (kVerdictChips);
+static_assert (kVerdictChipCount == 7, "spec 6 froze SEVEN chips");
+namespace verdictdetail {
+constexpr unsigned chipUnion()   { unsigned m = 0; for (const auto& c : kVerdictChips) m |= c.mask; return m; }
+constexpr bool     chipsDisjoint() { unsigned seen = 0; for (const auto& c : kVerdictChips) { if ((seen & c.mask) != 0u) return false; seen |= c.mask; } return true; }
+} // namespace verdictdetail
+static_assert (verdictdetail::chipUnion() == ShapeFlag::kAllAnomalyMask,
+               "a ShapeFlag anomaly bit is unchipped - extend kVerdictChips (and only then kAllAnomalyMask)");
+static_assert (verdictdetail::chipsDisjoint(), "chip masks must be pairwise disjoint");
+static_assert ((verdictdetail::chipUnion() & ShapeFlag::kBaselineSet) == 0u, "kBaselineSet is not a finding");
+
+// The flagged chip's short inline value ("" when the chip's family is clean).
+[[nodiscard]] inline juce::String verdictChipValue (int chip, unsigned flags, const ShapeScalars& s) {
+    const unsigned hit = kVerdictChips[chip].mask & flags;
+    if (hit == 0u) return {};
+    switch (chip) {
+        case 0: return juce::String (s.driftMaxDb, 1) + " dB";
+        case 1: return "~" + juce::String (s.combDelayMs, 1) + " ms";
+        case 2: return "inverted";
+        case 3: return (hit & ShapeFlag::kHum) != 0u ? juce::String (s.humBaseHz) + " Hz"
+                                                     : "res ~" + juce::String (s.resonanceHz, 0) + " Hz";
+        case 4: return (hit & ShapeFlag::kNoBand) != 0u ? juce::String ("no band")
+              : (hit & ShapeFlag::kTruncHi) != 0u ? "to " + juce::String (s.effHiHz / 1000.0f, 1) + " kHz"
+                                                  : "from " + juce::String (s.effLoHz, 0) + " Hz";
+        case 5: return juce::String (s.stepDb, 1) + " dB";
+        case 6: return juce::String (s.lobeWidth, 1) + " smp";
+    }
+    return {};
+}
+
+struct VerdictObservation { juce::String text; bool provisional = false; };
+struct VerdictChipView    { juce::String label; bool flagged = false; juce::String value; };
+
+struct VerdictCardModel {
+    bool graded = false;                // false && !hwDirac => the grid shows a CaptureCard instead
+    bool hwDirac = false;               // the ungraded hardware-Dirac variant
+    bool stale = false;                 // 3.2: dim + "from your previous configuration"
+    juce::String earName;               // "LEFT EAR" / "RIGHT EAR"
+    juce::String badge;                 // "Clean" / "Marginal SNR" / "Suspect" / "Re-learn" / "Grading off"
+    StatusTone   badgeTone = StatusTone::Dim;
+    juce::String gradeWord, qualifier;  // "Clean" + "strong capture"
+    juce::String snrVal, irVal, thdVal; // tabular; em dash when n/a
+    bool snrFlag = false, irFlag = false, thdFlag = false;
+    juce::String fixLead, fixBody;      // the ONE promoted fix line (bold lead + wrapped body)
+    StatusTone   fixTone = StatusTone::Dim;
+    juce::String tally;                 // "7 checks pass" / "6 pass - 1 flagged"
+    int flaggedChips = 0;
+    VerdictChipView chips[kVerdictChipCount];
+    std::vector<VerdictObservation> observations;
+};
+
+// Promoted-fix priority (spec 6, frozen): a failed capture never reaches the card (the grid shows the
+// failed CaptureCard) -> clip -> the sweepSNR-band action copy -> a RATIFIED shape finding (only a
+// Clean card headlines one; Marginal/Suspect keep the band action, the finding rides Details) -> the
+// clean "Safe to keep." lead. kShapeCopyRatified's gate inside shapeInfoNote IS the
+// provisional-never-headlines enforcement.
+[[nodiscard]] inline VerdictCardModel verdictCardModel (const char* earName, const EarGradeSnapshot& e,
+                                                        QualityBand snrBand, QualityBand irBand,
+                                                        QualityBand thdBand, unsigned flags,
+                                                        const ShapeScalars& s, bool stale, bool hwDirac) {
+    VerdictCardModel m;
+    m.earName = earName; m.stale = stale;
+    const auto state = (RefMonState) e.state;
+    const juce::String dash = verdictDash();
+    for (int i = 0; i < kVerdictChipCount; ++i) m.chips[i] = { kVerdictChips[i].label, false, {} };
+
+    if (hwDirac || state == RefMonState::GradingOffHardware) {
+        m.hwDirac = true;
+        m.badge = "Grading off";                       m.badgeTone = StatusTone::Dim;
+        m.gradeWord = "Ungraded";                      m.qualifier = "hardware Dirac";
+        m.snrVal = m.irVal = m.thdVal = dash;
+        m.fixLead = "Grading isn't available.";
+        m.fixBody = "The per-ear calibration still works - measure as usual.";
+        return m;                                      // details stay hidden (tally empty)
+    }
+    if (! earIsGraded (e.state)) return m;             // graded stays false
+    m.graded = true;
+
+    const bool snrValid = e.sweepSnrDb != 0.0f;
+    m.snrVal = snrValid ? juce::String (juce::roundToInt (e.sweepSnrDb)) + " dB" : dash;
+    m.irVal  = juce::String (juce::roundToInt (e.irSnrDb)) + " dB";
+    m.thdVal = juce::String (e.thdPercent, e.thdPercent < 1.0f ? 2 : 1) + "%";
+    m.snrFlag = snrValid && snrBand != QualityBand::Green;
+    m.irFlag  = irBand  != QualityBand::Green && irBand  != QualityBand::Unknown;
+    m.thdFlag = thdBand != QualityBand::Green && thdBand != QualityBand::Unknown;
+
+    QualityVerdict v; v.state = state; v.sweepSnrBand = snrBand; v.irSnrBand = irBand; v.thdBand = thdBand;
+    const juce::String note = qualityNote (v);
+    switch (state) {
+        case RefMonState::GradedClean:
+            m.badge = "Clean";                          m.badgeTone = StatusTone::Ok;
+            m.gradeWord = "Clean";                      m.qualifier = "strong capture";
+            m.fixLead = "Safe to keep.";                m.fixTone = StatusTone::Dim;
+            m.fixBody = "A strong, low-noise capture - Dirac will treat this ear as precise.";
+            break;
+        case RefMonState::GradedMarginal:
+            m.badge = m.snrFlag ? "Marginal SNR" : "Marginal";  m.badgeTone = StatusTone::Warn;
+            m.gradeWord = "Marginal";                   m.qualifier = m.snrFlag ? "low signal-to-noise" : "usable";
+            m.fixLead = "Dirac may mark this ear imprecise.";   m.fixTone = StatusTone::Warn;
+            m.fixBody = note.isNotEmpty() ? note : juce::String ("usable - consider re-measuring");
+            break;
+        case RefMonState::GradedSuspect:
+            m.badge = "Suspect";                        m.badgeTone = StatusTone::Danger;
+            m.gradeWord = "Suspect";                    m.qualifier = "noisy or distorted";
+            m.fixLead = "Don't trust this capture.";    m.fixTone = StatusTone::Danger;
+            m.fixBody = note.isNotEmpty() ? note : juce::String ("re-measure");
+            break;
+        default:                                        // ReferenceStale (earIsGraded admits only these)
+            m.badge = "Re-learn";                       m.badgeTone = StatusTone::Warn;
+            m.gradeWord = "No match";                   m.qualifier = "didn't match the reference";
+            m.snrVal = m.irVal = m.thdVal = dash;       m.snrFlag = m.irFlag = m.thdFlag = false;
+            m.fixLead = "This sweep didn't match.";     m.fixTone = StatusTone::Warn;
+            m.fixBody = "Re-learn the reference, then measure again.";
+            break;
+    }
+
+    // Promoted-fix overrides, in the frozen order (clip > band action already set > ratified shape).
+    const bool trueGrade = state == RefMonState::GradedClean || state == RefMonState::GradedMarginal
+                        || state == RefMonState::GradedSuspect;
+    if (trueGrade && e.peakDb >= 0.0f) {
+        m.fixLead = "Input clipped +" + juce::String (e.peakDb, 1) + " dBFS.";
+        m.fixBody = clipFixBody (e.peakDb);
+        m.fixTone = StatusTone::Warn;
+    } else if (trueGrade && e.peakDb >= -1.0f && e.peakDb > -119.0f) {
+        m.fixLead = "Right at clipping.";
+        m.fixBody = "Ease the output down a few dB so the next sweep can't clip.";
+        m.fixTone = StatusTone::Warn;
+    } else if (state == RefMonState::GradedClean) {
+        const auto shapeLine = shapeInfoNote (flags, s.driftMaxDb, s.combDelayMs, s.effHiHz, s.effLoHz, s.humBaseHz);
+        if (shapeLine.isNotEmpty()) {
+            m.fixLead = "Worth checking.";  m.fixBody = shapeLine;  m.fixTone = StatusTone::Dim;   // INFO-only
+        }
+    }
+
+    // Chips + tally + observations (the FULL findings, shapeInfoTip's lines - nothing hidden).
+    const unsigned anomalies = flags & ShapeFlag::kAllAnomalyMask;
+    for (int i = 0; i < kVerdictChipCount; ++i) {
+        const bool hit = (kVerdictChips[i].mask & anomalies) != 0u;
+        m.chips[i].flagged = hit;
+        m.chips[i].value   = verdictChipValue (i, anomalies, s);
+        if (hit) ++m.flaggedChips;
+    }
+    m.tally = m.flaggedChips == 0
+        ? juce::String (kVerdictChipCount) + " checks pass"
+        : juce::String (kVerdictChipCount - m.flaggedChips) + " pass - " + juce::String (m.flaggedChips) + " flagged";
+    const auto tip = shapeInfoTip (flags, s.driftMaxDb, s.hfShelfDb, s.combDepthDb, s.combDelayMs,
+                                   s.effLoHz, s.effHiHz, s.lobeWidth, s.stepDb, s.humBaseHz, s.resonanceHz);
+    for (const auto& line : juce::StringArray::fromLines (tip))
+        if (line.isNotEmpty())
+            m.observations.push_back ({ line, ! kShapeCopyRatified
+                    && (line.startsWith ("Level step:") || line.startsWith ("LF truncation:")) });
+    return m;
+}
+
+// Convenience: bands derived from the ladder's own classifiers (tests, harness scenes). The LIVE path
+// passes the GradeBandSmoother output instead (anti-flicker across consecutive grades).
+[[nodiscard]] inline VerdictCardModel verdictCardModelAuto (const char* earName, const EarGradeSnapshot& e,
+                                                            unsigned flags, const ShapeScalars& s,
+                                                            bool stale, bool hwDirac) {
+    return verdictCardModel (earName, e,
+                             classifySweepSnr (e.sweepSnrDb, e.sweepSnrDb != 0.0f),
+                             classifyIrSnr (e.irSnrDb), classifyThd (e.thdPercent),
+                             flags, s, stale, hwDirac);
+}
+
 // ---- per-ear COMPACT summary (the captured branch's shared second line, #4) ----------------------
 // One short clause per ear; the FULL detail (numbers + guidance) rides in the line's tooltip.
 [[nodiscard]] inline juce::String earCompactSummary (const char* prefix, const EarGradeSnapshot& e) {
