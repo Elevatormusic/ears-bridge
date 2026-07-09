@@ -455,8 +455,11 @@ TEST_CASE("HIG min-font rule: bites on 6px text, quiet on the 11px ramp floor [T
 //   RULE 2 - displacement honesty: with a disclosure open, (a) the disclosed content fully fits,
 //            (b) the collapse affordance stays visible, (c) NO visible warn/danger-toned surface
 //            is displaced out of the viewport. The walker below enforces (c) by CONSTRUCTION
-//            (any Label whose text colour is Theme::warn()/danger() is covered automatically -
-//            there is no list to forget to extend).
+//            (any Label - and, since P3 Task 3, any TextButton - whose painted text colour is
+//            Theme::warn()/danger() is covered automatically; there is no list to forget to
+//            extend). Known residual: warn text hosted in OTHER component classes (ToggleButton,
+//            HyperlinkButton, raw paint()) is still invisible to the walker - keep tone text in
+//            Labels/TextButtons, per VerdictCard's Labels-only construction.
 // ==================================================================================================
 namespace {
 juce::StringArray displacedWarnSurfaces (juce::Viewport& vp) {
@@ -470,6 +473,21 @@ juce::StringArray displacedWarnSurfaces (juce::Viewport& vp) {
                 const auto inVp = vp.getLocalArea (l, l->getLocalBounds());
                 if (! vp.getLocalBounds().contains (inVp))
                     out.add (l->getText().substring (0, 48));
+            }
+        }
+        else if (auto* b = dynamic_cast<juce::TextButton*> (&c)) {
+            // P3 (Task 3): non-Label warn text - the RAW-chip precedent. Theme::drawButtonText
+            // (Theme.cpp) resolves the painted text colour via the LookAndFeel_V2 idiom
+            // getToggleState() ? textColourOnId : textColourOffId (both its glyph path and the
+            // LookAndFeel_V4 fallback) - the walker reads the SAME state-resolved property, so the
+            // paint-time tone and what the gate sees can never disagree.
+            const auto col = b->findColour (b->getToggleState() ? juce::TextButton::textColourOnId
+                                                                : juce::TextButton::textColourOffId);
+            if (b->getButtonText().isNotEmpty()
+                && (col == eb::Theme::warn() || col == eb::Theme::danger())) {
+                const auto inVp = vp.getLocalArea (b, b->getLocalBounds());
+                if (! vp.getLocalBounds().contains (inVp))
+                    out.add (b->getButtonText().substring (0, 48));
             }
         }
         for (auto* ch : c.getChildren()) walk (*ch);
@@ -487,9 +505,12 @@ bool fullyVisibleIn (juce::Viewport& vp, juce::Component& c) {
 // on to catch a warn/danger surface pushed below the fold - but every COMMITTED call expects an
 // EMPTY result, so the walker's own RED path (it actually RETURNS a displaced surface) had zero
 // evidence. This drives a synthetic Viewport + tall content directly through the SAME function the
-// gates call (no copy of the logic) and asserts all four arms: warn below fold -> returned; the
+// gates call (no copy of the logic) and asserts every arm: warn label below fold -> returned; the
 // same label lifted above the fold -> empty; a danger-toned variant below fold -> returned; a
-// NON-warn-toned label below the fold -> NOT returned (the overfire negative).
+// NON-warn-toned label below the fold -> NOT returned (the overfire negative). P3 (Task 3) adds the
+// non-Label arms: a warn-toned TextButton below fold -> returned; a plain button below fold -> not;
+// the warn button lifted above fold -> not; a TOGGLED warn-On button (textColourOnId, the colour
+// Theme::drawButtonText actually paints when toggled) below fold -> returned, untoggled -> not.
 // ==================================================================================================
 TEST_CASE("RULE2 walker bites: displacedWarnSurfaces returns a below-fold warn/danger surface [T10]") {
     juce::ScopedJuceInitialiser_GUI juceInit;
@@ -541,6 +562,49 @@ TEST_CASE("RULE2 walker bites: displacedWarnSurfaces returns a below-fold warn/d
     {
         const auto hits = displacedWarnSurfaces (vp);
         REQUIRE (hits.contains ("output device lost"));
+    }
+
+    // Arm 5 (P3): a warn-toned TextButton below the fold - the RAW-chip precedent. The walker must
+    // return NON-LABEL warn text too.
+    juce::TextButton warnBtn ("fix the RAW pair");
+    warnBtn.setColour (juce::TextButton::textColourOffId, eb::Theme::warn());
+    content.addAndMakeVisible (warnBtn);
+    warnBtn.setBounds (10, 480, 200, 24);
+    {
+        const auto hits = displacedWarnSurfaces (vp);
+        REQUIRE (hits.contains ("fix the RAW pair"));            // RED until the walker learns buttons
+    }
+    // Arm 6: a PLAIN-toned button below the fold must NOT be reported (overfire negative).
+    juce::TextButton plainBtn ("open log folder");
+    content.addAndMakeVisible (plainBtn);
+    plainBtn.setBounds (10, 510, 200, 24);
+    {
+        const auto hits = displacedWarnSurfaces (vp);
+        REQUIRE_FALSE (hits.contains ("open log folder"));
+    }
+    // Arm 7: the SAME warn button lifted above the fold -> not reported.
+    warnBtn.setBounds (10, 40, 200, 24);
+    {
+        const auto hits = displacedWarnSurfaces (vp);
+        REQUIRE_FALSE (hits.contains ("fix the RAW pair"));
+    }
+    // Arm 8 (P3): the TOGGLED path. Theme::drawButtonText paints a toggled button's text from
+    // textColourOnId (the LookAndFeel_V2 idiom, verified in Theme.cpp) - the walker must read the
+    // SAME state-resolved property. Toggled warn-On button below fold -> returned; the identical
+    // button untoggled paints its (plain) Off colour -> not returned.
+    juce::TextButton togBtn ("retry in exclusive mode");
+    togBtn.setColour (juce::TextButton::textColourOnId, eb::Theme::warn());
+    togBtn.setToggleState (true, juce::dontSendNotification);
+    content.addAndMakeVisible (togBtn);
+    togBtn.setBounds (10, 540, 200, 24);
+    {
+        const auto hits = displacedWarnSurfaces (vp);
+        REQUIRE (hits.contains ("retry in exclusive mode"));     // paints warn while toggled
+    }
+    togBtn.setToggleState (false, juce::dontSendNotification);
+    {
+        const auto hits = displacedWarnSurfaces (vp);
+        REQUIRE_FALSE (hits.contains ("retry in exclusive mode")); // now paints the plain Off colour
     }
 
     vp.setViewedComponent (nullptr, false);     // detach before content/labels destruct (JUCE order)
