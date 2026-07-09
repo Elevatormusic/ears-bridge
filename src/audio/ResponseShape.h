@@ -34,11 +34,20 @@ namespace ShapeFlag {
     inline constexpr unsigned kBaselineSet = 512u;   // D1 baseline learned this session (NOT an anomaly)
     inline constexpr unsigned kNoBand      = 1024u;  // D3 no measurable band (valid reference, empty measurement edges)
 
-    // Every ANOMALY bit (kBaselineSet is bookkeeping, not a finding). KEEP IN STEP when adding a bit:
-    // the VerdictCard chip table (gui/StatusLadder.h) static_asserts its chip-mask union against this,
-    // so a new detector bit cannot ship silently unchipped (fail-closed, same-file discipline).
+    // Every ANOMALY bit (kBaselineSet is bookkeeping, not a finding). Adding a bit: allocate it at
+    // kShapeFlagNext (below), double the sentinel, then classify the new bit here - the completeness
+    // static_assert refuses to compile an unclassified bit, and the VerdictCard chip table
+    // (gui/StatusLadder.h) static_asserts its chip-mask union against this, so a new detector bit
+    // cannot ship silently unchipped (fail-closed, same-file discipline).
     inline constexpr unsigned kAllAnomalyMask = kDrift | kComb | kTruncHi | kTruncLo | kPolarity
                                               | kHum | kResonance | kSkew | kStep | kNoBand;
+
+    // Next free bit - allocate new flags FROM HERE (then double this sentinel). The assert makes the
+    // sentinel force the mask: a flag allocated at the sentinel without classifying it above no longer
+    // compiles, which in turn forces the chip table (StatusLadder.h asserts chips against the mask).
+    inline constexpr unsigned kShapeFlagNext = 2048u;
+    static_assert ((kAllAnomalyMask | kBaselineSet) == kShapeFlagNext - 1u,
+                   "a ShapeFlag bit exists that is neither in kAllAnomalyMask nor kBaselineSet - every bit must be classified");
 }
 
 struct WindowedSpectrum {
