@@ -594,3 +594,52 @@ TEST_CASE("P2.9 combine combo: the recommended badge rides shortcutKeyText, not 
     CHECK (mc.combineBoxForTest().getText() == "Auto per-ear (Dirac)");   // default restore path intact
     tmp.deleteRecursively();
 }
+
+// ==================================================================================================
+// P3 Task 1: verdict-generation stamping. The P2 placeholder fed -1/-1; now each ear's publish stamps
+// the config generation it was measured under, snapshotWizardInputs carries the stamps, and the
+// machine's verdictsStale/Measure-Done predicates compute from them. Stamp-only: nothing gates.
+// ==================================================================================================
+TEST_CASE("P3 verdictGen: publish stamps the current generation and the snapshot carries it") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    // Un-stamped: the placeholder truth (-1) so nothing ever reads Done/stale before a real verdict.
+    CHECK (mc.verdictGenForTest (0) == -1);
+    CHECK (mc.verdictGenForTest (1) == -1);
+    auto in0 = mc.snapshotWizardInputsForTest();
+    CHECK (in0.verdictGenL == -1);
+    CHECK_FALSE (eb::computeWizardState (in0, std::nullopt).verdictsStale);
+
+    mc.publishGradeForTest (0, (int) eb::RefMonState::GradedClean);
+    mc.publishGradeForTest (1, (int) eb::RefMonState::GradedMarginal);
+    const auto in1 = mc.snapshotWizardInputsForTest();
+    CHECK (in1.earGradedL); CHECK (in1.earGradedR);
+    CHECK (in1.verdictGenL == in1.configGen);
+    CHECK (in1.verdictGenR == in1.configGen);
+    CHECK_FALSE (eb::computeWizardState (in1, std::nullopt).verdictsStale);   // fresh: NOT stale
+
+    mc.bumpConfigGenForTest();                                                // cal swap / rate change
+    const auto in2 = mc.snapshotWizardInputsForTest();
+    CHECK (in2.verdictGenL < in2.configGen);
+    CHECK (eb::computeWizardState (in2, std::nullopt).verdictsStale);         // evidence downgraded
+
+    mc.publishGradeForTest (0, (int) eb::RefMonState::GradedClean);           // re-measure ONE ear
+    mc.publishGradeForTest (1, (int) eb::RefMonState::GradedClean);           // ... and the other
+    const auto in3 = mc.snapshotWizardInputsForTest();
+    CHECK_FALSE (eb::computeWizardState (in3, std::nullopt).verdictsStale);   // refreshed: stale clears
+    tmp.deleteRecursively();
+}
+
+TEST_CASE("P3 verdictGen negative: an ungraded ear never reads stale, whatever its stamp") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.bumpConfigGenForTest();                       // gen moves with NO verdict published
+    const auto in = mc.snapshotWizardInputsForTest();
+    CHECK_FALSE (in.earGradedL);
+    CHECK_FALSE (eb::computeWizardState (in, std::nullopt).verdictsStale);
+    tmp.deleteRecursively();
+}

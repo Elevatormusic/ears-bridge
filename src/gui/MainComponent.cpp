@@ -1298,8 +1298,8 @@ eb::WizardInputs MainComponent::snapshotWizardInputs() const {
     in.hwDirac        = settings.diracHardwareProcessor();
     in.overrideOn     = settings.advancedOverride();
     in.configGen      = calGenCounter_.load (std::memory_order_relaxed);
-    in.verdictGenL    = -1;      // P1 placeholder — Phase 3 stamps the verdict generation per ear
-    in.verdictGenR    = -1;
+    in.verdictGenL    = verdictGenL_;   // stamped at publish (stampVerdictGeneration); -1 = never
+    in.verdictGenR    = verdictGenR_;
     // earGraded from the per-ear published grade state (the same states the quality dots are read from).
     const auto gradedState = [] (int s) {
         const auto rs = (eb::RefMonState) s;
@@ -1309,6 +1309,18 @@ eb::WizardInputs MainComponent::snapshotWizardInputs() const {
     in.earGradedL = gradedState (engine.refMonState (0));
     in.earGradedR = gradedState (engine.refMonState (1));
     return in;
+}
+
+void MainComponent::stampVerdictGeneration (int ear) {
+    (ear == 1 ? verdictGenR_ : verdictGenL_) = calGenCounter_.load (std::memory_order_relaxed);
+}
+
+void MainComponent::publishGradeForTest (int ear, int refMonState, float sweepSnrDb) {
+    engine.publishReferenceGrade (ear, refMonState, 50.0f, 0.5f, false, false);
+    if (sweepSnrDb > 0.0f)
+        engine.publishCompletedSweepSnrDb (ear, sweepSnrDb);   // the live continuation's sibling publish
+    stampVerdictGeneration (ear);
+    updateStartGate();   // the full refresh path (gate + status + wizard view) - what a live publish reaches
 }
 
 void MainComponent::refreshWizardView() {
@@ -2520,6 +2532,7 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
             // Publish THIS ear's verdict snapshot (the SNR lesson: trio published together); raise the guidance
             // flag matching the verdict. NEITHER flag invalidates the capture (they are guidance only).
             mc->engine.publishReferenceGrade (ear, state, irSnr, thd, mismatch, lowQ);
+            mc->stampVerdictGeneration (ear);   // §3.2: stamp the generation this verdict was measured under
             // 3-color quality dots: smooth THIS ear's bands across consecutive grades (anti-flicker) and show
             // them under that ear's status line. The raw dB/% is shown beside each dot (never colour alone).
             {

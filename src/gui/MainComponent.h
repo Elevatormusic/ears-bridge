@@ -122,6 +122,15 @@ public:
     // if the `&& gate.noCalsLoaded` mask is deleted). Deterministic: no dependency on the async FIR build.
     bool snapshotUnityAcceptedForTest() const { return snapshotWizardInputs().unityAccepted; }
 
+    // P3 verdict-generation seams: publish a grade through the SAME engine-publish + stamp path the
+    // live grade continuation uses, and bump the config generation, so a headless test can drive
+    // Measure done-ness + staleness end-to-end (real grading needs hardware). Stamp-only, never gates.
+    // sweepSnrDb mirrors the live publishCompletedSweepSnrDb so band-driven copy is drivable (<=0 skips).
+    void publishGradeForTest (int ear, int refMonState, float sweepSnrDb = 30.0f);
+    void bumpConfigGenForTest() { calGenCounter_.fetch_add (1, std::memory_order_relaxed); }
+    int  verdictGenForTest (int ear) const { return ear == 1 ? verdictGenR_ : verdictGenL_; }
+    WizardInputs snapshotWizardInputsForTest() const { return snapshotWizardInputs(); }
+
 private:
     // The reference/schedule store dir: the TestConfig override (#24, hermetic tests), else %APPDATA%/EarsBridge.
     juce::File appDataDir() const {
@@ -202,6 +211,12 @@ private:
     // Level SOFT-gate latch (§3.2): set once L and R meter dB both reached the green band [-18,-12] this
     // session while Running; survives Stop (the knob didn't move); reset on an input-device change.
     bool levelLatched_ = false;
+    // §3.2 staleness stamps: the config generation each ear's LAST verdict was measured under (-1 =
+    // never). Config is frozen while Running (updateControlsEnabled), so the generation at publish
+    // time IS the generation the sweep ran under. Never reset — staleness is COMPUTED
+    // (verdictGen < configGen); evidence is downgraded, not deleted.
+    int  verdictGenL_ = -1, verdictGenR_ = -1;
+    void stampVerdictGeneration (int ear);
     bool unityAcceptedSession_ = false;   // §5.2 explicit unity choice; session-scoped, never persisted
     // The first enabled, focusable leaf inside a stage's subtree (top-down), for explicit focus placement
     // on a stage switch. Returns the stage itself when it has no focusable child (never null once built).

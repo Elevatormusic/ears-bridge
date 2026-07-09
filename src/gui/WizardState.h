@@ -53,7 +53,7 @@ struct WizardInputs {
     bool deviceError = false;        // deviceDied_/statusErrorMsg_ nonempty
     bool calProblem = false;         // a rejected pair is surfaced on a card
     bool calBuilding = false;        // async FIR generation in flight
-    bool unityAccepted = false;      // explicit continue-without-cal (P1: always false)
+    bool unityAccepted = false;      // explicit continue-without-cal (P2 T6: session-scoped, masked by noCalsLoaded, revoked on any load attempt)
     bool engineRunning = false;
     bool levelLatched = false;
     bool referenceLoaded = false;
