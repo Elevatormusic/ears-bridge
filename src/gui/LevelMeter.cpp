@@ -48,15 +48,28 @@ void LevelMeter::setLevel (float peakLinear, bool clip) {
     repaint();
 }
 
+juce::String LevelMeter::tagFor (float db, bool clip, bool isOut) {
+    // Order is the honesty ladder: a latched clip beats everything (a clipped Out still says clip);
+    // the Out meter is a routing readout, not a target to chase; then the capture-band words.
+    if (clip)  return "clip";
+    if (isOut) return "to Dirac";
+    if (db >= kTargetLoDb && db <= kTargetHiDb) return "in band";
+    if (db < -60.0f)       return "idle";
+    if (db < kTargetLoDb)  return "low";
+    return "hot";
+}
+
 void LevelMeter::paint (juce::Graphics& g) {
+    // P3 W2 meter row (spec §5.3 [P3-refresh]): caption 34 | rounded 12px track (+ target band) |
+    // dB readout 56 | worded tag 52. View restyle only - the level/clip model is setLevel's, untouched.
     auto r = getLocalBounds().toFloat();
 
-    auto lab = r.removeFromLeft (26.0f);
-    g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+    auto lab = r.removeFromLeft (34.0f);
+    g.setFont (juce::Font (juce::FontOptions (12.0f).withStyle ("Bold")));
     if (active_) {
         // AutoPerEar "live" indicator: an accent DOT (a graphical object) before the label marks the
         // earcup currently fed to Dirac. The label text stays the readable primary colour -- the accent
-        // is a fill, not low-contrast text. Drawn inside the 26 px label column so the track width
+        // is a fill, not low-contrast text. Drawn inside the 34 px caption column so the track width
         // never shifts when the active side toggles.
         g.setColour (Theme::accent());
         g.fillEllipse (lab.getX(), lab.getCentreY() - 3.0f, 6.0f, 6.0f);
@@ -67,13 +80,15 @@ void LevelMeter::paint (juce::Graphics& g) {
         g.drawText (label, lab, juce::Justification::centredLeft);
     }
 
-    auto dbBox = r.removeFromRight (52.0f);
+    auto tagBox = r.removeFromRight (52.0f);
+    r.removeFromRight (6.0f);
+    auto dbBox = r.removeFromRight (56.0f);
     r.removeFromRight (8.0f);
 
-    auto track = r.withSizeKeepingCentre (r.getWidth(), 8.0f);
+    auto track = r.withSizeKeepingCentre (r.getWidth(), 12.0f);
     const float W = track.getWidth();
     g.setColour (Theme::track());
-    g.fillRoundedRectangle (track, 4.0f);
+    g.fillRoundedRectangle (track, 6.0f);
 
     // Green "aim here" target band (-18..-12 dBFS) on capture meters: gives the user a level to set
     // the amp TO, instead of only flagging clipping. A translucent fill (not text), so the soft tint
@@ -83,40 +98,48 @@ void LevelMeter::paint (juce::Graphics& g) {
         const float hiF = dbToFrac (kTargetHiDb);
         auto bandR = juce::Rectangle<float> (track.getX() + loF * W, track.getY(),
                                              (hiF - loF) * W, track.getHeight());
-        // Faint fill + crisp edges, so the "aim here" zone stays legible even when the (also green)
-        // level bar sits inside it -- a flat fill alone reads as one green block under the bar.
-        g.setColour (Theme::okFill().withAlpha (0.16f));
+        // Faint fill + crisp 1px edges, so the "aim here" zone stays legible even when the (also
+        // green) level bar sits inside it -- a flat fill alone reads as one green block under the bar.
+        g.setColour (Theme::okFill().withAlpha (0.14f));
         g.fillRect (bandR);
-        g.setColour (Theme::okFill().withAlpha (0.85f));
+        g.setColour (Theme::okFill().withAlpha (0.4f));
         g.fillRect (bandR.getX(),            bandR.getY(), 1.0f, bandR.getHeight());
         g.fillRect (bandR.getRight() - 1.0f, bandR.getY(), 1.0f, bandR.getHeight());
     }
-
-    // Zones near full scale: amber from -1.0 dB-ish, red at the very top.
-    g.setColour (Theme::warnFill().withAlpha (0.65f));
-    g.fillRect (juce::Rectangle<float> (track.getRight() - W * 0.050f, track.getY(),
-                                        W * 0.034f, track.getHeight()));
-    g.setColour (Theme::dangerFill().withAlpha (0.85f));
-    g.fillRect (juce::Rectangle<float> (track.getRight() - W * 0.016f, track.getY(),
-                                        W * 0.016f, track.getHeight()));
+    // (The old amber/red full-scale zone stripes died in the W2 restyle: the worded tag now carries
+    //  the hot/clip state, so the track keeps only the target band.)
 
     const float frac = linearToFrac (level);
     if (frac > 0.002f) {
-        auto fill = track.withWidth (juce::jmax (4.0f, frac * W));
+        // Rounded-LEFT bar (W2): the leading edge stays square so the bar reads as a level, not a pill.
+        auto fill = track.withWidth (juce::jmax (6.0f, frac * W));
         juce::Colour c = (clipLatched || frac > 0.95f) ? Theme::dangerFill()
                        : (frac > 0.92f)                ? Theme::warnFill()
                                                        : Theme::okFill();
         g.setColour (c);
-        g.fillRoundedRectangle (fill, 4.0f);
+        juce::Path p;
+        p.addRoundedRectangle (fill.getX(), fill.getY(), fill.getWidth(), fill.getHeight(),
+                               6.0f, 6.0f, true, false, true, false);
+        g.fillPath (p);
     }
 
-    // Readout: a literal "CLIP" tag (not colour alone) latches on overload, else the smoothed dB.
+    // dB readout: the smoothed number (the worded state moved to the tag column).
     g.setColour (clipLatched ? Theme::danger() : Theme::textDim());
-    g.setFont (juce::Font (juce::FontOptions (12.0f).withStyle (clipLatched ? "Bold" : "Regular")));
-    juce::String txt = clipLatched          ? juce::String ("CLIP")
-                     : (smoothDb <= -60.0f) ? juce::String ("-")
-                                            : "-" + juce::String (juce::roundToInt (-smoothDb)) + " dB";
+    g.setFont (juce::Font (juce::FontOptions (12.0f)));
+    const juce::String txt = (smoothDb <= -60.0f) ? juce::String ("-")
+                                                  : "-" + juce::String (juce::roundToInt (-smoothDb)) + " dB";
     g.drawText (txt, dbBox, juce::Justification::centredRight);
+
+    // Worded status tag (never colour alone). g.drawText inside LevelMeter is acceptable ONLY because
+    // the meter is never a displaced-warn surface: it sits above the fold in both consumers (Level +
+    // Measure), and the no-scroll fit gates pin that. Do not copy this exemption to a warn label.
+    const juce::String tag = tagFor (smoothDb, clipLatched, ! showTargetBand);
+    g.setColour (tag == "in band"                 ? Theme::ok()
+               : (tag == "low" || tag == "hot")   ? Theme::warn()
+               : tag == "clip"                    ? Theme::danger()
+                                                  : Theme::textDim());
+    g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle (tag == "clip" ? "Bold" : "Regular")));
+    g.drawText (tag, tagBox, juce::Justification::centredLeft);
 }
 
 } // namespace eb

@@ -48,6 +48,13 @@ static void styleEyebrow (juce::Label& l, const juce::String& t) {
     l.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")).withExtraKerningFactor (0.07f));
 }
 
+// The raw-input clip warning's PRODUCTION copy, file-local so the ctor (the one live populate site -
+// the timer only toggles visibility) and driveLevelClipForTest can never drift (P3 Task 4 copy rule).
+static const char* const kInputClipHintText =
+    "EARS mic input near full scale - lower Dirac's Master output (try ~-12.5 dB). "
+    "Don't touch the EARS gain switch. Dirac won't flag this: the clip is at the "
+    "mic, before Dirac records.";
+
 // Human-readable step name for the wizard view (a11y titles/announcements + the banner "Fix in <step>").
 static juce::String stepName (WizardStep s) {
     switch (s) {
@@ -149,11 +156,12 @@ MainComponent::MainComponent (const TestConfig& cfg)
     versionLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (versionLabel);
 
-    // --- Transport (gated Start + status note) ---
+    // --- Transport (gated Start/Stop; P3 Task 4 re-homed it into LevelStage - the stage adopt()s it
+    // below, so no addAndMakeVisible here). The face (text+glyph+primary) is owned by syncTransport();
+    // these seeds only cover the pre-first-updateStartGate construction window.
     startStop.getProperties().set ("primary", true);
-    startStop.getProperties().set ("glyph", "play");   // P2.9: CTA leads with the play glyph (Stop path swaps it)
+    startStop.getProperties().set ("glyph", "play");
     startStop.onClick = [this] { onStartStop(); };
-    addAndMakeVisible (startStop);
     statusLine.setColour (juce::Label::textColourId, Theme::textDim());
     statusLine.setFont (juce::Font (juce::FontOptions (12.0f)));
     statusLine.setJustificationType (juce::Justification::centredRight);
@@ -456,10 +464,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
     inputClipHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     inputClipHint.setJustificationType (juce::Justification::topLeft);
     inputClipHint.setColour (juce::Label::textColourId, Theme::danger());
-    inputClipHint.setText ("EARS mic input near full scale - lower Dirac's Master output (try ~-12.5 dB). "
-                           "Don't touch the EARS gain switch. Dirac won't flag this: the clip is at the "
-                           "mic, before Dirac records.",
-                           juce::dontSendNotification);
+    inputClipHint.setText (kInputClipHintText, juce::dontSendNotification);
     addChildComponent (inputClipHint);   // hidden until a raw-input clip is seen
 
     // --- Restore persisted state ---
@@ -542,7 +547,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
     // the rule (P2.9 T7) - shared with the harness restore below so they can never drift.
     calibrateStage_.setAdvancedOpen (CalibrateStage::advancedFirNonDefault (
         settings.complexPhase(), settings.firLength(), settings.outputTrimDb()));
-    levelStage_.adopt (levelsEyebrow, levelsHint, diracMicGainHint, meterL, meterR, meterOut, inputClipHint);
+    levelStage_.adopt (startStop, levelsEyebrow, levelsHint, diracMicGainHint, meterL, meterR, meterOut, inputClipHint);
     measureStage_.adopt (statusLine, statusLineR, gradeDotsL_, gradeDotsR_,
                          learnRefButton, learnRefResultLabel, hwDiracToggle);
     stageHost_.setStages ({ &connectStage_, &calibrateStage_, &levelStage_, &measureStage_ });
@@ -1016,8 +1021,7 @@ void MainComponent::onStartStop() {
     if (engine.status() == EngineStatus::Running) {
         logLine (eb::DiagnosticLog::Level::Debug, "Button: Stop clicked");
         engine.stop();
-        startStop.setButtonText ("Start");
-        startStop.getProperties().set ("glyph", "play");   // P2.9: text+glyph move together
+        // (P3 Task 4: the transport face is owned by syncTransport, reached via updateStartGate below.)
         // Task 4: re-arm BOTH per-ear grade pollers on Stop so a stale match from this run can't carry into
         // the next (each ear again needs two consecutive matched polls before its first grade).
         gradePollTick_ = 0; gradePollerL_.reset(); gradePollerR_.reset();
@@ -1059,8 +1063,7 @@ void MainComponent::onStartStop() {
         }
         juce::String err;
         if (engine.start (err)) {
-            startStop.setButtonText ("Stop");
-            startStop.getProperties().set ("glyph", "stop");   // P2.9: running -> stop glyph
+            // (P3 Task 4: the transport flips to the Stop face in syncTransport, via updateStartGate below.)
             // #10: record WHICH clock path this run took (macOS aggregate engaged vs the two-clock ASRC
             // fallback) so an on-device validation can't test the wrong path unknowingly. Empty on Windows.
             if (engine.aggregateNote().isNotEmpty())
@@ -1145,7 +1148,22 @@ MainComponent::GateSnapshot MainComponent::computeStartGate() const {
     return g;
 }
 
+void MainComponent::syncTransport() {
+    // §3.3: ONE engine action (onStartStop), per-stage button faces. Text+glyph+primary flip together
+    // (P2.9 rule); repaint only on a real change. Enabled/helpText stay owned by updateStartGate.
+    const bool running = engine.status() == EngineStatus::Running;
+    const auto face = [] (juce::TextButton& b, const juce::String& text, const char* glyph, bool primary) {
+        bool changed = false;
+        if (b.getButtonText() != text)                        { b.setButtonText (text); changed = true; }
+        if (b.getProperties()["glyph"].toString() != glyph)   { b.getProperties().set ("glyph", glyph); changed = true; }
+        if ((bool) b.getProperties()["primary"] != primary)   { b.getProperties().set ("primary", primary); changed = true; }
+        if (changed) b.repaint();
+    };
+    face (startStop, running ? "Stop" : "Start monitoring", running ? "stop" : "play", ! running);
+}
+
 void MainComponent::updateStartGate() {
+    syncTransport();   // §3.3: the transport face follows engine truth - the ONE face writer
     const bool running  = engine.status() == EngineStatus::Running;
     const auto gate     = computeStartGate();
     const bool haveDevs = gate.haveDevs, haveCals = gate.haveCals, wrongMode = gate.wrongMode,
@@ -1437,10 +1455,15 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
     const WizardState masked = computeWizardState (maskedIn, pinnedStep_);
     const WizardStep toShow = resolveShownStage (ws, pinnedStep_, masked);
 
-    // ---- CTA wiring: each non-Measure stage's Continue is enabled iff THAT step is Done -----------------
+    // ---- CTA wiring: Connect/Calibrate Continue enabled iff THAT step is Done; Level is the §3.2
+    // SOFT gate (P3): its Continue is NAVIGATION to Measure - only Blocked forbids it. The un-latched
+    // caution rides the run-note; the SNR grade is the real enforcement.
     connectStage_.continueButton().setEnabled  (ws.steps[(int) WizardStep::Connect].state   == StepState::Done);
     calibrateStage_.continueButton().setEnabled (ws.steps[(int) WizardStep::Calibrate].state == StepState::Done);
-    levelStage_.continueButton().setEnabled    (ws.steps[(int) WizardStep::Level].state     == StepState::Done);
+    levelStage_.continueButton().setEnabled (ws.steps[(int) WizardStep::Measure].state != StepState::Blocked);
+    levelStage_.setRunNote (LevelStage::levelRunNote (
+        ws.steps[(int) WizardStep::Level].state == StepState::Blocked,
+        levelLatched_, ws.steps[(int) WizardStep::Level].reason));
 
     // ---- P2 stage view feed (Connect's line lands with Task 7) ---------------------------------
     // Run-note = the machine's own reason (single wording source; empty once Done) - this is the
@@ -1619,6 +1642,21 @@ void MainComponent::driveConnectWarningsForTest (bool stdCableHintWithFix, bool 
     rateWarn.setText (rateResampleWarn ? juce::String (eb::hints::kRateResample) : juce::String(),
                       juce::dontSendNotification);
     resized();
+}
+
+void MainComponent::driveLevelClipForTest (bool on) {
+    // PRODUCTION copy rule: the ctor set inputClipHint's text from kInputClipHintText once; the live
+    // clip path (timerCallback) only toggles VISIBILITY. Mirror that mechanism - force the visibility
+    // and re-assert the shared constant (never a test-local copy, never cleared: clearing would leave
+    // the live path showing an empty warning after a test drive).
+    inputClipHint.setText (kInputClipHintText, juce::dontSendNotification);
+    inputClipHint.setVisible (on);
+    resized();
+}
+
+void MainComponent::driveDeviceErrorForTest (const juce::String& msg) {
+    statusErrorMsg_ = msg;
+    updateStartGate();          // -> updateStatusLine + refreshWizardView render the error/banner truth
 }
 
 void MainComponent::applyTextColours() {
@@ -2869,11 +2907,14 @@ void MainComponent::timerCallback() {
             // only when enabled), so force it enabled and capture the ready-CTA scene in dark+light. (The
             // former "Advanced expanded" scene died with the disclosure - its children live in the stages,
             // captured by the per-step gate axis instead.) The matrix loop's last scene (calibrate-advanced)
-            // left the pin on Calibrate; re-pin Measure so the ready CTA renders in the measurement-step
-            // context, as before Task 5.
-            forceWizardStepForTest (WizardStep::Measure);
+            // left the pin on Calibrate; force LEVEL - the transport's home since the P3 Task 4 re-home -
+            // so the ready CTA scene renders the stage that actually hosts it. The force must run AFTER
+            // each theme flip (matching the matrix loop's ordering): forceThemeForTest re-renders through
+            // the LIVE path, where a Blocked Level pin falls back to first-unmet and the scene would
+            // capture the wrong stage (the latent pre-Task-4 behaviour, harmless while the bar hosted Start).
             for (const bool dk : { true, false }) {
                 forceThemeForTest (dk);
+                forceWizardStepForTest (WizardStep::Level);
                 const juce::String mtag = dk ? "dark" : "light";
                 startStop.setEnabled (true);                                    // enabled primary CTA (M3)
                 resized();
@@ -2909,8 +2950,7 @@ void MainComponent::timerCallback() {
         gradeInFlight_.store (false);
         gradePollerL_.reset(); gradePollerR_.reset();
         gradeDotsL_.clear();   gradeDotsR_.clear();
-        startStop.setButtonText ("Start");
-        startStop.getProperties().set ("glyph", "play");   // P2.9: device-lost resets to the Start glyph
+        // (P3 Task 4: device-lost resets to the Start face in syncTransport, via updateStartGate below.)
         // #3 heal (same strand as the Stop path): a mid-run FIR change whose build no-oped on the reconfig
         // gate must be re-posted now the engine is out of Running, or the Start gate stays closed forever.
         if (engine.requestedGeneration() != engine.builtGeneration())
@@ -3121,10 +3161,10 @@ void MainComponent::resized() {
     // --- Title bar (brand + Start + update link only; the status stack moved to MeasureStage) ---
     auto bar = area.removeFromTop (kBarH);   // shared with paint() (#25); 56 now the stack left the bar
     {
+        // P3 Task 4: the engine transport moved into LevelStage (§3.3), so the bar keeps only the
+        // brand glyph gutter + update link + format cluster - the update link packs the right edge now.
         auto x = bar.reduced (16, 0);
         x.removeFromLeft (44);                                   // the painted brand glyph's gutter
-        startStop.setBounds (x.removeFromRight (120).withSizeKeepingCentre (120, 34));
-        x.removeFromRight (14);
         if (updateLink.isVisible()) {
             const int w = juce::jmin (230, x.getWidth());
             updateLink.setBounds (x.removeFromRight (w).withSizeKeepingCentre (w, 22));

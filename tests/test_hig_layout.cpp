@@ -741,3 +741,35 @@ TEST_CASE("No-scroll + displacement gate: Connect workflow states at 900x720 [T1
     CHECK (bad.isEmpty());
     tmp.deleteRecursively();
 }
+
+TEST_CASE("No-scroll gate: Level workflow states at 900x720 [P3]") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    static_assert (eb::LevelStage::kWorkflowStateCount == 2,
+                   "new Level workflow state: extend this gate's driver");
+    mc.setSize (900, 720);
+    mc.forceWizardStepForTest (eb::WizardStep::Level);
+    juce::StringArray bad;
+    for (int i = 0; i < eb::LevelStage::kWorkflowStateCount; ++i) {
+        mc.driveLevelClipForTest (i == (int) eb::LevelStage::WorkflowState::ClipWarning);
+        auto& stage = mc.levelStageForTest();
+        // Level has NO viewport (fixed column): RULE1 = every visible child bottom stays inside
+        // the stage; RULE2 = the clip warning (the one warn surface) fully visible when shown.
+        for (auto* ch : stage.getChildren())
+            if (ch->isVisible() && ch->getBounds().getBottom() > stage.getHeight())
+                bad.add ("RULE1 state " + juce::String (i) + ": child below the stage fold");
+        if (i == (int) eb::LevelStage::WorkflowState::ClipWarning) {
+            auto& hint = mc.inputClipHintForTest();
+            if (! hint.isVisible())
+                bad.add ("ClipWarning: the clip hint is not visible after the drive seam");
+            else if (! stage.getLocalBounds().contains (hint.getBoundsInParent()))
+                bad.add ("RULE2 ClipWarning: the clip warning left the stage area");
+        }
+    }
+    mc.driveLevelClipForTest (false);
+    INFO ("violations:\n" << bad.joinIntoString ("\n"));
+    CHECK (bad.isEmpty());
+    tmp.deleteRecursively();
+}

@@ -22,6 +22,10 @@ public:
     // (a shape, not colour alone) + accent label. Repaints only on change.
     void setActive (bool on) { if (on != active_) { active_ = on; repaint(); } }
 
+    // P3 (spec §5.3 [P3-refresh]): the worded status tag beside the dB value ("in band"/"low"/"idle"/
+    // "hot"/"clip"; the Out meter reads "to Dirac"). Words, never colour alone. Pure, headless-tested.
+    static juce::String tagFor (float db, bool clip, bool isOut);
+
     void paint (juce::Graphics&) override;
 
     bool isClipLatched() const noexcept { return clipLatched; }   // exposed for unit tests

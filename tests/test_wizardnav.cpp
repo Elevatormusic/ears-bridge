@@ -769,3 +769,55 @@ TEST_CASE("P3 verdictGen: re-publishing only one ear keeps the pair stale") {
     CHECK (eb::computeWizardState (in, std::nullopt).verdictsStale);   // R is still old evidence
     tmp.deleteRecursively();
 }
+
+// ==================================================================================================
+// P3 Task 4: the Level SOFT gate (§3.2). Continue = navigation to Measure, forbidden only while
+// Measure is Blocked; un-latched shows the honest caution in the run-note. Deps are un-blocked
+// headlessly via ERRORS on both (§3.5: Error does not re-Block downstream): a device error makes
+// Connect Error, and a SWAPPED cal pair makes Calibrate Error SYNCHRONOUSLY (the per-slot side
+// check) - the plan's "valid pair -> Done" route needs the async FIR build pumped, and the pump
+// idiom (runDispatchLoopUntil) requires JUCE_MODAL_LOOPS_PERMITTED, which this project leaves off.
+// ==================================================================================================
+TEST_CASE("P3 Level soft CTA: enabled once deps un-block; caution note until latched") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    const juce::File data (EB_TEST_DATA_DIR);
+    mc.setSize (900, 720);
+
+    // Hermetic default: Connect Todo -> Level/Measure Blocked -> CTA disabled, machine reason shown.
+    auto& stage = mc.levelStageForTest();
+    CHECK_FALSE (stage.continueButton().isEnabled());
+
+    // Swapped pair (Calibrate Error, synchronous) + a device ERROR (Connect Error, NOT Blocked-making).
+    REQUIRE (mc.leftCalForTest().loadFromFile (data.getChildFile ("R_HEQ_0000000.txt")));
+    REQUIRE (mc.rightCalForTest().loadFromFile (data.getChildFile ("L_HEQ_0000000.txt")));
+    mc.driveDeviceErrorForTest ("EARS or audio cable disconnected - measurement stopped.");
+    CHECK (mc.snapshotWizardInputsForTest().calProblem);              // Calibrate reads Error, not Blocked
+    CHECK (stage.continueButton().isEnabled());                       // soft gate: navigable un-latched
+    CHECK (stage.headerForTest().continueButton().isEnabled());       // (same button - sanity)
+
+    // Un-latched -> the caution; latched -> empty.
+    CHECK (eb::LevelStage::levelRunNote (false, false, "x") == "Level not confirmed - the grade will tell you");
+    CHECK (eb::LevelStage::levelRunNote (false, true,  "x") == juce::String());
+    CHECK (eb::LevelStage::levelRunNote (true, false, "Finish Connect and Calibrate first")
+           == "Finish Connect and Calibrate first");
+    mc.driveDeviceErrorForTest ({});                                  // restore
+    tmp.deleteRecursively();
+}
+
+TEST_CASE("P3 transport face: stopped = primary Start monitoring / play; the title bar no longer hosts it") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 720);
+    auto& t = mc.startButtonForTest();
+    CHECK (t.getButtonText() == "Start monitoring");
+    CHECK (t.getProperties()["glyph"].toString() == "play");
+    CHECK ((bool) t.getProperties()["primary"]);
+    // Re-homed: the transport is a descendant of LevelStage, not of the title-bar area.
+    CHECK (t.findParentComponentOfClass<eb::LevelStage>() != nullptr);
+    tmp.deleteRecursively();
+}

@@ -113,6 +113,14 @@ public:
     void setLevelLatchedForTest (bool v) { levelLatched_ = v; }
     bool levelLatchedForTest() const { return levelLatched_; }
     void applyResolvedInputForTest (const DeviceId& d) { applyResolvedInput (d); }
+    // P3 Task 4 (Level rebuild) seams:
+    LevelStage& levelStageForTest() { return levelStage_; }
+    juce::Label& inputClipHintForTest() { return inputClipHint; }
+    // T10-style production-copy forcing for the Level fit gate (mirrors driveConnectWarningsForTest).
+    void driveLevelClipForTest (bool on);
+    // P3: force/clear the device-error state (statusErrorMsg_) so gates/scenes can drive Connect-Error
+    // + the regression banner headlessly. Empty = clear. Display/state only - no engine call.
+    void driveDeviceErrorForTest (const juce::String& msg);
     // §5.2 mask seam: force a stale unity acceptance so a test can prove the `&& noCalsLoaded` mask
     // (snapshotWizardInputs) keeps the flag INERT once a cal loads - no public route leaves it set.
     void setUnityAcceptedForTest (bool v) { unityAcceptedSession_ = v; }
@@ -195,6 +203,7 @@ private:
                           physicalOutput = false, noCalsLoaded = false, ready = false; };
     GateSnapshot computeStartGate() const;
     void updateStartGate();          // enable Start only when a valid calibration generation is applied
+    void syncTransport();            // §3.3 one action, per-stage faces (Level now; Measure joins in Task 5)
     void updateDiracMicGainHint();   // refresh the "add ~+N dB on Dirac's Mic gain" caption from the live headroom
     void updateCalProblems();        // surface a rejected swap/serial/type loudly ON the offending cal card
     // Pure shared computation of the per-card problem strings (per-slot side check + pair diagnostic).

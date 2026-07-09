@@ -33,3 +33,16 @@ TEST_CASE("LevelMeter: continuous clipping stays latched, then releases once it 
         m.setLevel (0.2f, false);            // clipping stops
     CHECK_FALSE (m.isClipLatched());         // auto-released within the hold window
 }
+
+TEST_CASE("LevelMeter::tagFor - worded tags, never colour alone (P3)") {
+    using LM = eb::LevelMeter;
+    CHECK (LM::tagFor (-15.0f, false, false) == "in band");
+    CHECK (LM::tagFor (-18.0f, false, false) == "in band");   // boundary: the band is inclusive
+    CHECK (LM::tagFor (-12.0f, false, false) == "in band");
+    CHECK (LM::tagFor (-24.0f, false, false) == "low");
+    CHECK (LM::tagFor (-80.0f, false, false) == "idle");
+    CHECK (LM::tagFor (-6.0f,  false, false) == "hot");
+    CHECK (LM::tagFor (-15.0f, true,  false) == "clip");      // clip beats everything
+    CHECK (LM::tagFor (-15.0f, false, true)  == "to Dirac");  // the Out meter is a routing readout
+    CHECK (LM::tagFor (-15.0f, true,  true)  == "clip");      // ...but a clipped Out still says clip
+}
