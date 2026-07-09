@@ -488,9 +488,11 @@ MainComponent::MainComponent (const TestConfig& cfg)
             // Route the hot-plug input through applyResolvedInput so a re-resolution that lands on a
             // DIFFERENT device (incl. the EARS gain-DIP rename fallback) clears the Level green-band latch
             // (§3.2) — the direct engine.setInput here used to skip that, so Level kept claiming "In green
-            // band" on old-gain evidence after a replug.
+            // band" on old-gain evidence after a replug. The OUTPUT routes through applyResolvedOutput for
+            // the same doctrine (P3 Task 5 obligation): a re-resolution onto a DIFFERENT cable is a
+            // different signal path into Dirac, so the old-path verdicts must read stale.
             if (auto in  = inputPicker.selectedDevice())  applyResolvedInput (*in);
-            if (auto out = outputPicker.selectedDevice()) engine.setOutput (*out);
+            if (auto out = outputPicker.selectedDevice()) applyResolvedOutput (*out);
             rebuildRateMenu();
             rebuildBitDepthMenu();
             updateDiracCableHint();
@@ -512,7 +514,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
     // NOT auto-persist the OUTPUT: its fallback can pick a *different* virtual sink, and silently
     // overwriting the saved cable with a best-guess is worse than re-resolving it each launch.
     if (auto in  = inputPicker.selectedDevice())  { applyResolvedInput (*in);  if (in->key() != settings.inputKey()) settings.setInputKey (in->key()); }
-    if (auto out = outputPicker.selectedDevice()) engine.setOutput (*out);
+    if (auto out = outputPicker.selectedDevice()) applyResolvedOutput (*out);   // seeds the output-key memo
     rebuildRateMenu();
     rebuildBitDepthMenu();
     updateDiracCableHint();   // show the standard-cable/Dirac warning on launch if applicable
@@ -550,6 +552,9 @@ MainComponent::MainComponent (const TestConfig& cfg)
     levelStage_.adopt (startStop, levelsEyebrow, levelsHint, diracMicGainHint, meterL, meterR, meterOut, inputClipHint);
     measureStage_.adopt (statusLine, statusLineR, gradeDotsL_, gradeDotsR_,
                          learnRefButton, learnRefResultLabel, hwDiracToggle);
+    // §3.3: Measure's header CTA is this stage's transport - the SAME one engine action (onStartStop),
+    // a per-stage face (syncTransport owns "Start listening"/"Stop"; Task 7 adds the Measure-again arm).
+    measureStage_.onTransport = [this] { onMeasureTransport(); };
     stageHost_.setStages ({ &connectStage_, &calibrateStage_, &levelStage_, &measureStage_ });
     // The stage Continue callbacks are created disabled + unwired in P1 (Task 4 wires enablement + the pin
     // navigation); give them the same pin-and-refresh path the spine uses so the seam is already in place.
@@ -745,6 +750,21 @@ void MainComponent::applyResolvedInput (const DeviceId& d) {
     }
 }
 
+void MainComponent::applyResolvedOutput (const DeviceId& d) {
+    engine.setOutput (d);
+    // P3 Task 5 ledgered obligation (Task 1 review + user ruling): the OUTPUT mirror of the input-key
+    // memo above. The hot-plug/ctor re-resolution paths call engine.setOutput directly (bypassing
+    // onOutputChosen), so a re-resolution landing on a DIFFERENT virtual cable used to leave old-path
+    // verdicts presenting fresh. A changed output KEY advances the config generation (staleness only —
+    // the output identity never enters the FIR design, so no rebuild). Guard on the key so a hot-plug
+    // that re-applies the SAME cable does not spuriously downgrade still-valid verdicts. Belt-and-braces
+    // with the refEndpointMismatch_ wait-hint (#34): hard staleness AND the hint, per the user ruling.
+    if (d.key() != lastAppliedOutputKey_) {
+        lastAppliedOutputKey_ = d.key();
+        bumpConfigGeneration();
+    }
+}
+
 void MainComponent::onInputChosen (const DeviceId& d) {
     if (engine.status() == EngineStatus::Running) return;
     applyResolvedInput (d);   // engine.setInput + latch invalidation on a key change (§3.2)
@@ -765,6 +785,7 @@ void MainComponent::onInputChosen (const DeviceId& d) {
 void MainComponent::onOutputChosen (const DeviceId& d) {
     if (engine.status() == EngineStatus::Running) return;
     engine.setOutput (d);
+    lastAppliedOutputKey_ = d.key();   // keep the staleness memo in sync (this path bumps below anyway)
     settings.setOutputKey (d.key());
     preflightLabel.setText (d.isVirtualSink ? juce::String()
                                             : "Selected output is not a known virtual cable.",
@@ -1148,10 +1169,14 @@ MainComponent::GateSnapshot MainComponent::computeStartGate() const {
     return g;
 }
 
-void MainComponent::syncTransport() {
+// P3 Task 5: this task: a plain forward to the ONE engine action (§3.3); Task 7 adds the Measure-again arm.
+void MainComponent::onMeasureTransport() { onStartStop(); }
+
+void MainComponent::syncTransport (bool running, bool gateReady) {
     // §3.3: ONE engine action (onStartStop), per-stage button faces. Text+glyph+primary flip together
-    // (P2.9 rule); repaint only on a real change. Enabled/helpText stay owned by updateStartGate.
-    const bool running = engine.status() == EngineStatus::Running;
+    // (P2.9 rule); repaint only on a real change. `running`/`gateReady` are passed IN by updateStartGate
+    // (engine truth + its already-computed gate snapshot - no recompute); the Level transport's
+    // enabled/helpText stay owned by updateStartGate, the Measure CTA mirrors them here (M1 parity).
     const auto face = [] (juce::TextButton& b, const juce::String& text, const char* glyph, bool primary) {
         bool changed = false;
         if (b.getButtonText() != text)                        { b.setButtonText (text); changed = true; }
@@ -1160,10 +1185,13 @@ void MainComponent::syncTransport() {
         if (changed) b.repaint();
     };
     face (startStop, running ? "Stop" : "Start monitoring", running ? "stop" : "play", ! running);
+    face (measureStage_.transportButton(), running ? "Stop" : "Start listening",
+          running ? "stop" : "play", ! running);
+    measureStage_.transportButton().setEnabled (running || gateReady);
+    measureStage_.transportButton().setHelpText (startStop.getHelpText());   // M1 parity
 }
 
 void MainComponent::updateStartGate() {
-    syncTransport();   // §3.3: the transport face follows engine truth - the ONE face writer
     const bool running  = engine.status() == EngineStatus::Running;
     const auto gate     = computeStartGate();
     const bool haveDevs = gate.haveDevs, haveCals = gate.haveCals, wrongMode = gate.wrongMode,
@@ -1187,6 +1215,9 @@ void MainComponent::updateStartGate() {
         if (reason != startStop.getHelpText())
             startStop.setHelpText (reason);
     }
+    // §3.3: the transport faces follow engine truth - the ONE face writer. AFTER the helpText block so
+    // the Measure CTA's helpText mirror inside reads the fresh value (P3 Task 5 signature amendment).
+    syncTransport (running, ready);
     // Debug, on-change only (updateStartGate runs at 30 Hz): record WHETHER the gate is enabled and, when
     // disabled, the exact reason from the locals above — this is what explains a greyed-out Start button.
     {
@@ -1464,6 +1495,12 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
     levelStage_.setRunNote (LevelStage::levelRunNote (
         ws.steps[(int) WizardStep::Level].state == StepState::Blocked,
         levelLatched_, ws.steps[(int) WizardStep::Level].reason));
+    // P3 Task 5: the Measure run-note (pure copy rule; the honesty contract in words - "Arms the
+    // bridge", never "starts the sweep"). measureAgainShowing arrives with Task 7's re-arm.
+    measureStage_.setRunNote (MeasureStage::measureRunNote (
+        ws.steps[(int) WizardStep::Measure].state == StepState::Blocked,
+        ws.steps[(int) WizardStep::Measure].reason,
+        engine.status() == EngineStatus::Running, /*measureAgainShowing*/ false));
 
     // ---- P2 stage view feed (Connect's line lands with Task 7) ---------------------------------
     // Run-note = the machine's own reason (single wording source; empty once Done) - this is the
@@ -1511,6 +1548,27 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
         if (auto* f = firstFocusTarget (toShow); f != nullptr && f->isShowing()) f->grabKeyboardFocus();
         postStageAnnouncement (toShow);
     }
+
+    // P3 Task 5: refresh the Measure view LAST, so both the live path (refreshWizardView) and the
+    // forced/test path (forceWizardStepForTest) feed it from the same resolved state.
+    refreshMeasureView (ws);
+}
+
+void MainComponent::refreshMeasureView (const eb::WizardState& ws) {
+    juce::ignoreUnused (ws);                       // Task 7 reads ws.verdictsStale
+    const bool running  = engine.status() == EngineStatus::Running;
+    const bool refLoaded = ! loadedReferenceL_.empty() && ! loadedReferenceR_.empty();
+    using Lead = MeasureStage::Lead;
+    const Lead lead = settings.diracHardwareProcessor() ? Lead::HwDirac
+                    : (! refLoaded ? Lead::Reference : Lead::Waiting);
+    measureStage_.setLead (lead);
+    const auto head = MeasureStage::measureHeadCopy (lead, settings.advancedOverride(), /*verdictShowing*/ false);
+    measureStage_.setHeadCopy (head.title, head.sub);
+    measureStage_.setWaitHint (running && lead == Lead::Waiting
+        ? MeasureStage::waitingHint (armedNoSweepTicks_ / 30, refEndpointMismatch_,
+                                     (chainVerdict_.checked && ! chainVerdict_.all48k) || chainVerdict_.unverifiable,
+                                     chainVerdict_.summary, silentTicks_ >= kSilentHoldTicks)
+        : juce::String());
 }
 
 eb::WizardStep MainComponent::resolveShownStage (const eb::WizardState& ws,
@@ -2732,6 +2790,7 @@ void MainComponent::updateActiveEarIndicator (bool silent) {
     const int ear = live ? engine.autoActiveEar() : -1;   // 0 = left, 1 = right, -1 = none
     meterL.setActive (ear == 0);
     meterR.setActive (ear == 1);
+    measureStage_.setActiveEar (ear);   // mirror the accent on Measure's own live-meters strip (§5.4)
 
     juce::String text;
     juce::Colour col;
@@ -2776,8 +2835,19 @@ void MainComponent::pollChainConfig() {
         cfg.input = eb::readEndpointFormat (in->uid.isNotEmpty() ? in->uid : in->name, /*isInput*/ true);
     if (const auto out = outputPicker.selectedDevice())
         cfg.cable = eb::readEndpointFormat (out->uid.isNotEmpty() ? out->uid : out->name, /*isInput*/ false);
-    if (const auto diracOut = eb::readDiracOutputDeviceName(); diracOut.isNotEmpty())
-        cfg.diracOutput = eb::readEndpointFormat (diracOut, /*isInput*/ false);   // a NAME from Dirac's settings file
+    const auto diracName = eb::readDiracOutputDeviceName();   // hoisted: reused by the #34 check below
+    if (diracName.isNotEmpty())
+        cfg.diracOutput = eb::readEndpointFormat (diracName, /*isInput*/ false);   // a NAME from Dirac's settings file
+
+    // #34 (P3 wait-hint input): does Dirac's CURRENT output match the endpoint the reference was
+    // learned from? Reuses this poll's name read - no extra COM traffic on the timer.
+    if (loadedReferenceEndpoint_.isNotEmpty()) {
+        if (diracName.isNotEmpty()) {
+            auto curId = eb::endpointUidForName (diracName, /*isInput*/ false);
+            if (curId.isEmpty()) curId = diracName;
+            refEndpointMismatch_ = curId != loadedReferenceEndpoint_ && diracName != loadedReferenceEndpoint_;
+        } else refEndpointMismatch_ = false;
+    } else refEndpointMismatch_ = false;
 
     chainVerdict_ = eb::checkChainConfig (cfg);
     chainFormats_ = cfg;   // keep the per-endpoint formats so the Signal-chain panel can render rate/channels/bits
@@ -2975,6 +3045,16 @@ void MainComponent::timerCallback() {
         if (inBand (lv.inL) && inBand (lv.inR))
             levelLatched_ = true;
     }
+    // §2 timeout-hint clock: armed = Running + reference loaded + nothing graded yet + no sweep engaged.
+    // Resets the instant a sweep engages or a grade lands; kArmedNoSweepHintSeconds gates the hint copy.
+    {
+        const bool anyGraded = eb::earIsGraded (engine.refMonState (0)) || eb::earIsGraded (engine.refMonState (1));
+        const bool sweepEngaged = sweepActiveTicks_ >= kSweepActiveHoldTicks || sweepActiveReleaseTicks_ > 0;
+        const bool armedWaiting = engine.status() == EngineStatus::Running && engine.referenceLoaded()
+                               && ! anyGraded && ! sweepEngaged;
+        armedNoSweepTicks_ = armedWaiting ? armedNoSweepTicks_ + 1 : 0;
+    }
+    measureStage_.feedLiveLevels (lv.inL, lv.clipL, lv.inR, lv.clipR, lv.outMono, lv.clipOut);
     // Debounce the live silent-input check (read by updateStatusLine): count consecutive below-floor
     // ticks so brief pre-/inter-sweep gaps don't flicker the status; reset the instant signal returns.
     const bool blockSilent = lv.inL < HealthMonitor::kLowLevelLinear && lv.inR < HealthMonitor::kLowLevelLinear;

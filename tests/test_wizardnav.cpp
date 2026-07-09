@@ -821,3 +821,117 @@ TEST_CASE("P3 transport face: stopped = primary Start monitoring / play; the tit
     CHECK (t.findParentComponentOfClass<eb::LevelStage>() != nullptr);
     tmp.deleteRecursively();
 }
+
+// ==================================================================================================
+// P3 Task 5: Measure head copy + run-note + the §2 timeout hint. Pure statics - the honesty contract
+// lives in WORDS here, so the words are pinned. The app never claims it can trigger Dirac.
+// ==================================================================================================
+TEST_CASE("P3 Measure head copy: lead x override x verdict variants") {
+    using MS = eb::MeasureStage;
+    const auto wait = MS::measureHeadCopy (MS::Lead::Waiting, false, false);
+    CHECK (wait.title == "Now run the measurement in Dirac Live");
+    CHECK (wait.sub.contains ("CABLE Input (VB-Audio)"));
+    const auto ovr = MS::measureHeadCopy (MS::Lead::Waiting, true, false);
+    CHECK (ovr.title == "Run your measurement sweep");            // §7 generic variant
+    CHECK_FALSE (ovr.sub.contains ("Dirac"));                     // the Dirac-shaped copy would be wrong
+    const auto verd = MS::measureHeadCopy (MS::Lead::Waiting, false, true);
+    CHECK (verd.title == "Your per-ear result");
+    const auto hw = MS::measureHeadCopy (MS::Lead::HwDirac, false, false);
+    CHECK (hw.sub.contains ("per-ear calibration still works"));
+    const auto ref = MS::measureHeadCopy (MS::Lead::Reference, false, false);
+    CHECK (ref.title == "Learn your reference");
+    // Override does NOT alter Reference/HwDirac heads (negative).
+    CHECK (MS::measureHeadCopy (MS::Lead::Reference, true, false).title == ref.title);
+}
+
+TEST_CASE("P3 Measure run-note: contract wording (never 're-run sweep')") {
+    using MS = eb::MeasureStage;
+    CHECK (MS::measureRunNote (true, "Finish Connect and Calibrate first", false, false)
+           == "Finish Connect and Calibrate first");
+    CHECK (MS::measureRunNote (false, "", false, true)
+           == "Then start the measurement again in Dirac Live.");
+    CHECK (MS::measureRunNote (false, "", false, false)
+           == "Arms the bridge - the sweep still runs in Dirac");
+    CHECK (MS::measureRunNote (false, "", true, false) == juce::String());
+}
+
+TEST_CASE("P3 waiting hint: threshold-gated, escalates by what the app actually knows") {
+    using MS = eb::MeasureStage;
+    // NEGATIVE first: below the threshold NOTHING fires, whatever the flags say.
+    CHECK (MS::waitingHint (MS::kArmedNoSweepHintSeconds - 1, true, true, "48k mismatch", true).isEmpty());
+    CHECK (MS::waitingHint (0, false, false, {}, false).isEmpty());
+    // Escalation: most specific knowledge first.
+    const int t = MS::kArmedNoSweepHintSeconds;
+    CHECK (MS::waitingHint (t, true, true, "x", true).contains ("learned from"));       // #34 endpoint
+    CHECK (MS::waitingHint (t, false, true, "input 44.1k - set 48k", true).contains ("input 44.1k"));
+    CHECK (MS::waitingHint (t, false, false, {}, true).contains ("is Dirac playing"));
+    const auto generic = MS::waitingHint (t, false, false, {}, false);
+    CHECK (generic.contains ("EARS Bridge can't start it for you"));                    // the contract, in words
+}
+
+// ==================================================================================================
+// P3 Task 5 LEDGERED OBLIGATION (Task 1 review + user ruling, belt-and-braces): the hot-plug/ctor
+// OUTPUT re-resolution path (engine.setOutput direct, bypassing onOutputChosen) must stale the
+// verdicts on a KEY change, exactly like the input memo (M-2 doctrine: a different device is
+// different evidence). applyResolvedOutputForTest drives the SAME member the hot-plug lambda and
+// the ctor restore use. Same-key re-apply is the negative (a replug of the SAME cable must not
+// downgrade still-valid verdicts).
+// ==================================================================================================
+TEST_CASE("P3 verdictGen: a different-key output apply (hot-plug path) stales the verdicts; same-key stays fresh") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (hermetic (tmp));
+
+    // Seed the key memo (the ctor path in the live app), then grade both ears fresh.
+    eb::DeviceId out; out.typeName = "Windows Audio"; out.name = "CABLE Input (VB-Audio)"; out.uid = "uid-out-A";
+    mc.applyResolvedOutputForTest (out);
+    mc.publishGradeForTest (0, (int) eb::RefMonState::GradedClean);
+    mc.publishGradeForTest (1, (int) eb::RefMonState::GradedClean);
+    CHECK_FALSE (eb::computeWizardState (mc.snapshotWizardInputsForTest(), std::nullopt).verdictsStale);
+
+    // Negative: a hot-plug re-resolution landing on the SAME output (same key) must NOT downgrade.
+    mc.applyResolvedOutputForTest (out);
+    CHECK_FALSE (eb::computeWizardState (mc.snapshotWizardInputsForTest(), std::nullopt).verdictsStale);
+
+    // A DIFFERENT output device -> old-path verdicts must read STALE (hard staleness AND the wait
+    // hint, per the user's belt-and-braces ruling - this is the staleness half).
+    eb::DeviceId out2; out2.typeName = "Windows Audio"; out2.name = "Hi-Fi Cable Input"; out2.uid = "uid-out-B";
+    mc.applyResolvedOutputForTest (out2);
+    CHECK (eb::computeWizardState (mc.snapshotWizardInputsForTest(), std::nullopt).verdictsStale);
+    tmp.deleteRecursively();
+}
+
+// ==================================================================================================
+// P3 Task 5 (routed here by Task 4's review): the RUNNING transport face. The engine cannot Run
+// headless, so the running face is pinned through syncTransportForTest - a seam onto the SAME
+// production member updateStartGate calls (not a replica). One action, per-stage faces: the Level
+// transport and the Measure header CTA flip together.
+// ==================================================================================================
+TEST_CASE("P3 Measure transport: stopped/running faces + enable mirror (production syncTransport seam)") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (hermetic (tmp));
+    mc.setSize (900, 720);
+
+    auto& mt = mc.measureStageForTest().transportButton();
+    // Stopped face after construction (updateStartGate ran in the ctor): primary Start listening/play.
+    CHECK (mt.getButtonText() == "Start listening");
+    CHECK (mt.getProperties()["glyph"].toString() == "play");
+    CHECK ((bool) mt.getProperties()["primary"]);
+    CHECK_FALSE (mt.isEnabled());                       // hermetic gate closed, not running
+
+    mc.syncTransportForTest (true, false);              // running (gate state irrelevant while running)
+    CHECK (mt.getButtonText() == "Stop");
+    CHECK (mt.getProperties()["glyph"].toString() == "stop");
+    CHECK_FALSE ((bool) mt.getProperties()["primary"]); // Stop face is secondary (the frames' run-cluster)
+    CHECK (mt.isEnabled());                             // running || gateReady
+    CHECK (mc.startButtonForTest().getButtonText() == "Stop");   // the Level face flips WITH it (§3.3)
+
+    mc.syncTransportForTest (false, true);              // stopped + gate ready -> armed-and-enabled
+    CHECK (mt.getButtonText() == "Start listening");
+    CHECK (mt.isEnabled());
+
+    mc.syncTransportForTest (false, false);             // stopped + gate closed -> disabled (negative)
+    CHECK_FALSE (mt.isEnabled());
+    tmp.deleteRecursively();
+}

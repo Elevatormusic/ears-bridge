@@ -52,7 +52,9 @@ void StageHeader::resized() {
     r.removeFromTop (4);
     title_.setBounds (r.removeFromTop (26));   // Title1 leading
     r.removeFromTop (4);
-    sub_.setBounds (r.removeFromTop (34));     // 2 lines of Body 13 (lh 16) + border
+    sub_.setBounds (r);   // FLEXIBLE row: all remaining height (== 34, 2 lines of Body 13, at kHeight
+                          // hosts, so Connect/Calibrate/Level are pixel-identical; a taller host buys
+                          // the 3rd line the frozen Measure subs need - kSubExtraRow, P3 Task 5)
 }
 
 } // namespace eb

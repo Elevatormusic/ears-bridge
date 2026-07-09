@@ -773,3 +773,41 @@ TEST_CASE("No-scroll gate: Level workflow states at 900x720 [P3]") {
     CHECK (bad.isEmpty());
     tmp.deleteRecursively();
 }
+
+TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3]") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    static_assert (eb::MeasureStage::kWorkflowStateCount == 4,
+                   "new Measure workflow state: extend this gate's driver (Tasks 6/7 grow it)");
+    using WS = eb::MeasureStage::WorkflowState;
+    mc.setSize (900, 720);
+    mc.forceWizardStepForTest (eb::WizardStep::Measure);
+    auto& stage = mc.measureStageForTest();
+
+    const auto apply = [&] (WS s) {
+        using Lead = eb::MeasureStage::Lead;
+        stage.setLead (s == WS::ReferenceNeeded ? Lead::Reference
+                     : s == WS::HwDirac ? Lead::HwDirac : Lead::Waiting);
+        stage.setWaitHint (s == WS::TimeoutHint
+            ? eb::MeasureStage::waitingHint (eb::MeasureStage::kArmedNoSweepHintSeconds, false, false, {}, false)
+            : juce::String());
+        mc.resized();
+    };
+    juce::StringArray bad;
+    for (int i = 0; i < eb::MeasureStage::kWorkflowStateCount; ++i) {
+        apply ((WS) i);
+        auto& vp = stage.viewportForTest();
+        const int contentH = vp.getViewedComponent()->getHeight(), vpH = vp.getHeight();
+        if (contentH > vpH)
+            bad.add ("RULE1 state " + juce::String (i) + ": content " + juce::String (contentH)
+                     + " > viewport " + juce::String (vpH));
+        for (auto& s2 : displacedWarnSurfaces (vp))
+            bad.add ("RULE2 state " + juce::String (i) + ": warn surface displaced: " + s2);
+    }
+    apply (WS::ArmedWaiting);   // restore the resting state
+    INFO ("violations:\n" << bad.joinIntoString ("\n"));
+    CHECK (bad.isEmpty());
+    tmp.deleteRecursively();
+}

@@ -113,6 +113,9 @@ public:
     void setLevelLatchedForTest (bool v) { levelLatched_ = v; }
     bool levelLatchedForTest() const { return levelLatched_; }
     void applyResolvedInputForTest (const DeviceId& d) { applyResolvedInput (d); }
+    // P3 Task 5 ledgered obligation (Task 1 review): drives the SAME member the hot-plug/ctor OUTPUT
+    // re-resolution uses, so the output-key staleness memo is pinned on the production path.
+    void applyResolvedOutputForTest (const DeviceId& d) { applyResolvedOutput (d); }
     // P3 Task 4 (Level rebuild) seams:
     LevelStage& levelStageForTest() { return levelStage_; }
     juce::Label& inputClipHintForTest() { return inputClipHint; }
@@ -152,6 +155,11 @@ public:
         { return publishGradeIfRunCurrent (ear, refMonState, 50.0f, 0.5f, false, false, runGen); }
     uint32_t gradeRunGenForTest() const { return gradeRunGen_.load (std::memory_order_relaxed); }
     void bumpGradeRunGenForTest() { gradeRunGen_.fetch_add (1, std::memory_order_relaxed); }
+    // P3 Task 5 seams. measureStageForTest: the rebuilt Measure stage (fit gate + face pins).
+    // syncTransportForTest: the engine cannot Run headless, so the RUNNING transport face (routed here
+    // by Task 4's review) is pinned by driving the SAME production member updateStartGate calls.
+    MeasureStage& measureStageForTest() { return measureStage_; }
+    void syncTransportForTest (bool running, bool gateReady) { syncTransport (running, gateReady); }
 
 private:
     // The reference/schedule store dir: the TestConfig override (#24, hermetic tests), else %APPDATA%/EarsBridge.
@@ -172,6 +180,12 @@ private:
     // nothing; the caller owns persistence/menu-rebuild (those differ between the two paths).
     void applyResolvedInput (const DeviceId&);
     juce::String lastAppliedInputKey_;   // the key() of the input last pushed to the engine (latch memo)
+    // The OUTPUT mirror of applyResolvedInput (P3 Task 5 ledgered obligation, Task 1 review + user
+    // ruling): every engine.setOutput lands here, and a changed output KEY advances the config
+    // generation so verdicts measured through the old signal path read STALE. Belt-and-braces with
+    // the refEndpointMismatch_ wait-hint: hard staleness AND the hint, neither replaces the other.
+    void applyResolvedOutput (const DeviceId&);
+    juce::String lastAppliedOutputKey_;  // the key() of the output last pushed to the engine (memo)
     void onInputChosen  (const DeviceId&);
     void onOutputChosen (const DeviceId&);
     void updateDiracCableHint();     // standard-VB-CABLE-vs-Dirac warning + one-click shared-mode fix
@@ -203,7 +217,9 @@ private:
                           physicalOutput = false, noCalsLoaded = false, ready = false; };
     GateSnapshot computeStartGate() const;
     void updateStartGate();          // enable Start only when a valid calibration generation is applied
-    void syncTransport();            // §3.3 one action, per-stage faces (Level now; Measure joins in Task 5)
+    // §3.3 one action, per-stage faces (Level + Measure). updateStartGate passes engine truth + its
+    // already-computed gate snapshot in (no recompute); the seam above forces them for the face pins.
+    void syncTransport (bool running, bool gateReady);
     void updateDiracMicGainHint();   // refresh the "add ~+N dB on Dirac's Mic gain" caption from the live headroom
     void updateCalProblems();        // surface a rejected swap/serial/type loudly ON the offending cal card
     // Pure shared computation of the per-card problem strings (per-slot side check + pair diagnostic).
@@ -230,6 +246,13 @@ private:
     // Render a resolved WizardState into the view (spine + stage host). Split out of refreshWizardView so
     // the test seam forceWizardStepForTest can feed a state with `.active` overridden (see the seam's note).
     void renderWizardView (const WizardState& ws);
+    // P3 Task 5: refresh the Measure view (lead block, live headline, §2 timeout hint) from live truth.
+    // Called at the END of renderWizardView so BOTH the live path and the forced/test path feed it from
+    // the same state at no extra computeWizardState cost. `ws` is unused until Task 7 (verdictsStale).
+    void refreshMeasureView (const WizardState& ws);
+    void onMeasureTransport();               // this task: a plain forward to onStartStop (Task 7 re-arms)
+    int  armedNoSweepTicks_ = 0;             // §2 timeout-hint clock (armed + no sweep, 30 Hz ticks)
+    bool refEndpointMismatch_ = false;       // #34: Dirac's output != the reference's learned endpoint
     // Fill a WizardInputs from the existing members (GateSnapshot fields + engine state). Pure reads.
     WizardInputs snapshotWizardInputs() const;
     std::optional<WizardStep> pinnedStep_;   // user navigation pin (empty = launch/first-unmet resolution)
