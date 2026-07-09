@@ -935,3 +935,45 @@ TEST_CASE("P3 Measure transport: stopped/running faces + enable mirror (producti
     CHECK_FALSE (mt.isEnabled());
     tmp.deleteRecursively();
 }
+
+// ==================================================================================================
+// P3 Task 6: the per-ear CaptureCards (Waiting / Capturing / Failed). Copy + fraction are pure model
+// rules (no component, no JUCE init); the mid-capture failure is driven through the SAME live path
+// (refreshWizardView -> refreshMeasureView) the device-died branch uses.
+// ==================================================================================================
+TEST_CASE("P3 CaptureCard copy + fraction: honest, approximate, no invented timing") {
+    using CC = eb::CaptureCardModel;
+    const auto w = CC::waiting ("RIGHT EAR");
+    CHECK (w.badge == "Waiting"); CHECK (w.title == "Next in the routine");
+    CHECK (w.foot == "Queued");  CHECK (w.progress < 0.0f);           // NO bar - a fake bar is a lie
+    const auto c = CC::capturing ("LEFT EAR", 0.58f, 10);
+    CHECK (c.badge == "Capturing"); CHECK (c.title == "Sweeping now");
+    CHECK (c.foot == "~10 s sweep");                                   // learned duration, labeled approximate
+    CHECK (c.progress == 0.58f);
+    const auto f = CC::failed ("LEFT EAR");
+    CHECK (f.badge == "Failed"); CHECK (f.title == "Capture interrupted");
+    CHECK (f.sub.contains ("can't be graded"));
+    // fraction math: clamped, zero-duration safe
+    CHECK (eb::CaptureCard::captureFraction (0, 10.0) == 0.0f);
+    CHECK (eb::CaptureCard::captureFraction (150, 10.0) == 0.5f);      // 150 ticks @30Hz = 5s of 10s
+    CHECK (eb::CaptureCard::captureFraction (600, 10.0) == 1.0f);      // clamped at the top
+    CHECK (eb::CaptureCard::captureFraction (100, 0.0)  == 0.0f);      // no duration -> no claim
+}
+
+TEST_CASE("P3 mid-capture failure: the failed card is sticky and never falls back to waiting") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 720);
+    mc.forceWizardStepForTest (eb::WizardStep::Measure);
+    mc.driveMidCaptureFailureForTest (0);                              // the LEFT capture was interrupted
+    auto& card = mc.measureStageForTest().captureCardForTest (0);
+    CHECK (card.titleForTest().getText() == "Capture interrupted");
+    mc.forceWizardStepForTest (eb::WizardStep::Level);                 // navigate away...
+    mc.forceWizardStepForTest (eb::WizardStep::Measure);               // ...and back: STILL failed (sticky)
+    CHECK (card.titleForTest().getText() == "Capture interrupted");
+    // NEGATIVE: the other ear stays a plain waiting card - the failure names ONE capture.
+    CHECK (mc.measureStageForTest().captureCardForTest (1).titleForTest().getText() == "Next in the routine");
+    tmp.deleteRecursively();
+}

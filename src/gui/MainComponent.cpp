@@ -1090,6 +1090,9 @@ void MainComponent::onStartStop() {
             if (engine.aggregateNote().isNotEmpty())
                 logLine (eb::DiagnosticLog::Level::Info, "Clock path: " + engine.aggregateNote());
             inputClipHold_ = 0; silentTicks_ = 0; lowLevelTicks_ = 0; lowSnrTicks_ = 0; statusErrorMsg_.clear();   // no prior-run state bleed
+            // P3 Task 6: a fresh run re-arms the capture cards - the sticky Failed card (§3.1) and the
+            // capture tracking both re-scope to THIS run.
+            failedCaptureEar_ = -1; captureEar_ = -1; captureTicks_ = 0;
             // Live in-sweep readout: start a fresh run at the silent floor with the sweep-active attack/release
             // debounce, the text cadence, and the held live-line text reset, so a prior run's held level /
             // sweep-active state / live text can't bleed in.
@@ -1569,6 +1572,22 @@ void MainComponent::refreshMeasureView (const eb::WizardState& ws) {
                                      (chainVerdict_.checked && ! chainVerdict_.all48k) || chainVerdict_.unverifiable,
                                      chainVerdict_.summary, silentTicks_ >= kSilentHoldTicks)
         : juce::String());
+    // P3 Task 6: compose + feed the capture grid. Failed wins (the §3.1 sticky card names ONE capture);
+    // Capturing carries HONEST progress - elapsed GUI ticks over the LEARNED per-ear reference duration
+    // ("~N s sweep", approximate by label). No learned duration -> captureFraction claims 0 and the
+    // card's copy still never invents Dirac timing.
+    const auto capModel = [&] (int ear, const char* name) -> eb::CaptureCardModel {
+        if (failedCaptureEar_ == ear) return eb::CaptureCardModel::failed (name);
+        if (captureEar_ == ear && engine.status() == EngineStatus::Running) {
+            const auto& ref   = ear == 1 ? loadedReferenceR_ : loadedReferenceL_;
+            const double rate = ear == 1 ? loadedReferenceRateR_ : loadedReferenceRateL_;
+            const double secs = (rate > 0.0 && ! ref.empty()) ? (double) ref.size() / rate : 0.0;
+            return eb::CaptureCardModel::capturing (name, eb::CaptureCard::captureFraction (captureTicks_, secs),
+                                                    juce::roundToInt (secs));
+        }
+        return eb::CaptureCardModel::waiting (name);
+    };
+    measureStage_.setCaptureModels (capModel (0, "LEFT EAR"), capModel (1, "RIGHT EAR"));
 }
 
 eb::WizardStep MainComponent::resolveShownStage (const eb::WizardState& ws,
@@ -2903,7 +2922,8 @@ void MainComponent::timerCallback() {
             // bottom pin Connect/Calibrate/Level (+ calibrate-advanced, Task 8) and drive NO labels - the
             // stage at its natural current state IS the scene. forceWizardStepForTest (below, per-scene)
             // settles the shown stage; calAdv forces the Calibrate Advanced-FIR disclosure open/closed.
-            // Frame count: 14 scenes x 4 appearances + 2 startready = 58 frames (T10 added connect-dirachint).
+            // Frame count: 14 scenes x 4 appearances + 2 startready + 4 capture-cards = 62 frames
+            // (T10 added connect-dirachint; P3 Task 6 added capturecards/capturefailed x dark/light).
             struct St { const char* name; const char* l; const char* r; bool update; bool dots; WizardStep step; bool calAdv; bool diracHint; };
             static const St states[] = {
                 { "idle",        "",                                                                                 "",                                         false, false, WizardStep::Measure, false, false },
@@ -2992,6 +3012,30 @@ void MainComponent::timerCallback() {
                     dir.getChildFile ("hig-" + mtag + "-normal-startready.json"),
                     dir.getChildFile ("hig-" + mtag + "-normal-startready.png"));
             }
+            // P3 Task 6 CAPTURE-CARD SCENES: the capture grid renders only in the Waiting lead with live
+            // capture data (Running engine + learned reference) - unreachable in a cold harness run. Force
+            // the lead + models through the stage's own feed (the fit gate's idiom, AFTER the step pin so
+            // refreshMeasureView's live-truth recompose doesn't overwrite them) and capture dark+light:
+            // a live LEFT sweep at 58% beside the queued RIGHT card, then the sticky Failed card.
+            for (const bool dk : { true, false }) {
+                forceThemeForTest (dk);
+                forceWizardStepForTest (WizardStep::Measure);
+                measureStage_.setLead (MeasureStage::Lead::Waiting);
+                const auto head = MeasureStage::measureHeadCopy (MeasureStage::Lead::Waiting, false, false);
+                measureStage_.setHeadCopy (head.title, head.sub);               // the 2-line armed title, rendered
+                const juce::String mtag = dk ? "dark" : "light";
+                measureStage_.setCaptureModels (eb::CaptureCardModel::capturing ("LEFT EAR", 0.58f, 10),
+                                                eb::CaptureCardModel::waiting ("RIGHT EAR"));
+                resized();
+                hig::writeDesignProbe (*getTopLevelComponent(),
+                    dir.getChildFile ("hig-" + mtag + "-normal-capturecards.json"),
+                    dir.getChildFile ("hig-" + mtag + "-normal-capturecards.png"));
+                measureStage_.setCaptureModels (eb::CaptureCardModel::failed ("LEFT EAR"),
+                                                eb::CaptureCardModel::waiting ("RIGHT EAR"));
+                hig::writeDesignProbe (*getTopLevelComponent(),
+                    dir.getChildFile ("hig-" + mtag + "-normal-capturefailed.json"),
+                    dir.getChildFile ("hig-" + mtag + "-normal-capturefailed.png"));
+            }
 
             eb::SystemA11y::setForTest (false, false, false);       // restore; the next theme tick re-reads the OS
             forceThemeForTest (wasDark);
@@ -3013,6 +3057,13 @@ void MainComponent::timerCallback() {
     if (engine.status() == EngineStatus::Running && engine.consumeDeviceDied()) {
         statusErrorMsg_ = "EARS or audio cable disconnected - measurement stopped.";
         logLine (eb::DiagnosticLog::Level::Error, "Device lost mid-run: " + statusErrorMsg_);
+        // §3.1 mid-capture regression: the Measure stage OWNS the moment - the active capture converts
+        // to an explicit Failed card (sticky until the next Start), never a silent "Listening..." fallback.
+        if (captureEar_ >= 0) {
+            failedCaptureEar_ = captureEar_;
+            logLine (eb::DiagnosticLog::Level::Error,
+                     juce::String ("Capture interrupted mid-sweep (ear=") + (captureEar_ == 1 ? "R" : "L") + ")");
+        }
         engine.onDeviceLost();              // closes devices, flips status -> Error
         // Mirror the Stop path's grade teardown (audit #42): a matchAlign/grade job in flight for the
         // just-captured sweep must not land its verdict + green quality dots INTO the Error state.
@@ -3071,6 +3122,14 @@ void MainComponent::timerCallback() {
     // it never decays mid-run (the flag stays set), which is intended -- a noisy sweep stays flagged
     // until the next Start re-scopes. Mirrors the lowLevelTicks_ debounce pattern.
     lowSnrTicks_ = any (engine.health().flags & HealthFlag::LowSnr) ? (lowSnrTicks_ + 1) : 0;
+    {   // Honest capture progress (P3 Task 6): track WHICH ear is being captured and for how long (GUI
+        // ticks). Same live-ear rule as updateActiveEarIndicator below (autoActiveEar + raw blockSilent).
+        const bool autoMode = settings.combineMode() == CombineMode::AutoPerEar;
+        const int  ear = (engine.status() == EngineStatus::Running && autoMode && ! blockSilent)
+                           ? engine.autoActiveEar() : -1;
+        if (ear != captureEar_) { captureEar_ = ear; captureTicks_ = 0; }
+        else if (ear >= 0)      ++captureTicks_;
+    }
     updateActiveEarIndicator (blockSilent);   // AutoPerEar: highlight the earcup being captured now
     pollReferenceGrade();                      // Plan 5: drain a completed-sweep grade request (off-thread grading)
     pollChainConfig();                         // 48k-everywhere chain-config check (warn + veto green; pre-Start too)

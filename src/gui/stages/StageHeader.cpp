@@ -10,6 +10,8 @@ StageHeader::StageHeader (const juce::String& eyebrow, const juce::String& title
     sub_.setText (sub, juce::dontSendNotification);
     sub_.setJustificationType (juce::Justification::topLeft);
     sub_.setMinimumHorizontalScale (1.0f);                    // wrap, never squish
+    title_.setMinimumHorizontalScale (1.0f);                  // P3 Task 6 ruling: the hero never squishes
+                                                              // (a wide title takes a 2nd row - resized())
     runNote_.setJustificationType (juce::Justification::centredRight);
     // ComponentID is owner-set (setRunNoteComponentID): this class is SHARED across stages, so a
     // hard-coded "calRunNote" here would give every stage the SAME (Calibrate-prefixed) id.
@@ -50,7 +52,13 @@ void StageHeader::resized() {
     r.removeFromRight (16);
     eyebrow_.setBounds (r.removeFromTop (16));
     r.removeFromTop (4);
-    title_.setBounds (r.removeFromTop (26));   // Title1 leading
+    // 2-line title mode (P3 Task 6, routed from Task 5's review): the scale is pinned 1.0 (never
+    // squish the hero instruction), so a title measured wider than the box takes a second 26px row
+    // instead. One-line heads keep today's 26px geometry; the flexible sub row absorbs the delta,
+    // so a host that shows wide titles reserves kTitleExtraRow on top of its header area.
+    const float titleW = juce::GlyphArrangement::getStringWidth (title_.getFont(), title_.getText());
+    const bool  twoLine = titleW > (float) (r.getWidth() - 10);
+    title_.setBounds (r.removeFromTop (twoLine ? 26 + kTitleExtraRow : 26));   // Title1 leading (x2 when wide)
     r.removeFromTop (4);
     sub_.setBounds (r);   // FLEXIBLE row: all remaining height (== 34, 2 lines of Body 13, at kHeight
                           // hosts, so Connect/Calibrate/Level are pixel-identical; a taller host buys

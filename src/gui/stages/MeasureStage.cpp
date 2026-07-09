@@ -8,7 +8,10 @@ constexpr int kCardPadX = 16, kCardPadY = 12, kCardGap = 8;
 // P3 Task 5 (measured, ledgered deviation): the frozen §2 subs need 39px (3 lines of 13px) in the
 // 294px sub box - StageHeader::kHeight's 34px slot clips the 3rd line. This stage reserves the
 // extra sub row; the shared header lays its (flexible) sub into it. Other stages stay at kHeight.
-constexpr int kHeaderH = StageHeader::kHeight + StageHeader::kSubExtraRow;
+// P3 Task 6 (routed ruling, Task 5's review): + kTitleExtraRow for the 2-line armed title (scale is
+// pinned 1.0 - the hero instruction never squishes). A CONSTANT reserve, not per-state: the fold
+// budget must not depend on which title is showing (state-invariant viewport for the fit gate).
+constexpr int kHeaderH = StageHeader::kHeight + StageHeader::kSubExtraRow + StageHeader::kTitleExtraRow;
 } // namespace
 
 // ---- pure copy rules ------------------------------------------------------------------------------
@@ -82,6 +85,8 @@ MeasureStage::MeasureStage() {
                      (juce::Component*) &meterTitle_, (juce::Component*) &meterLegend_,
                      (juce::Component*) &liveL_, (juce::Component*) &liveR_, (juce::Component*) &liveOut_ })
         content_.addChildComponent (*c);                    // visibility is lead-state-driven (layoutContent)
+    content_.addChildComponent (capL_);                     // P3 Task 6: the capture grid (Waiting lead only)
+    content_.addChildComponent (capR_);
     liveL_.setShowTargetBand (true);
     liveR_.setShowTargetBand (true);
     applyTheme();
@@ -89,6 +94,8 @@ MeasureStage::MeasureStage() {
 
 void MeasureStage::applyTheme() {
     header_.applyTheme();
+    capL_.applyTheme();
+    capR_.applyTheme();
     refLead_.setColour (juce::Label::textColourId, Theme::textDim());
     refLead_.setFont (juce::Font (juce::FontOptions (12.0f)));
     refLead_.setText ("The reference is the yardstick every sweep is graded against. Learn it once; it's stored for next time.",
@@ -138,6 +145,13 @@ void MeasureStage::feedLiveLevels (float l, bool cl, float r, bool cr, float out
     liveL_.setLevel (l, cl); liveR_.setLevel (r, cr); liveOut_.setLevel (out, co);
 }
 void MeasureStage::setActiveEar (int ear) { liveL_.setActive (ear == 0); liveR_.setActive (ear == 1); }
+// The grid's geometry is model-invariant (fixed 148px rows; the bar is paint-only) and its
+// visibility is LEAD-driven in layoutContent, so a model feed never needs a relayout - each card
+// is set-if-changed and repaints itself only on a real change.
+void MeasureStage::setCaptureModels (const CaptureCardModel& l, const CaptureCardModel& r) {
+    capL_.setModel (l);
+    capR_.setModel (r);
+}
 
 void MeasureStage::Content::paint (juce::Graphics& g) {
     if (owner == nullptr) return;
@@ -188,7 +202,19 @@ int MeasureStage::layoutContent (int width) {
     if (waitHint_.isVisible()) { waitHint_.setBounds (rr.removeFromTop (32)); rr.removeFromTop (4); }
     rr.removeFromTop (8);
 
-    // ---- TRANSITIONAL (Task 7 replaces with the CaptureCard/VerdictCard grid) ----
+    // ---- capture grid (Waiting lead only; hidden for Reference/HwDirac leads) ----
+    const bool grid = isWait;
+    capL_.setVisible (grid); capR_.setVisible (grid);
+    if (grid) {
+        const int cardW = (colW - 14) / 2, cardH = 164;     // 164 = 12+18+10+24+4+48+10+6+6+14+12 (CaptureCard rows;
+                                                            // 48px sub = 3 lines, render-measured - see CaptureCard::resized)
+        auto row = rr.removeFromTop (cardH);
+        capL_.setBounds ({ x0, row.getY(), cardW, cardH });
+        capR_.setBounds ({ x0 + cardW + 14, row.getY(), cardW, cardH });
+        rr.removeFromTop (kCardGap);
+    }
+
+    // ---- TRANSITIONAL (Task 7 replaces with the VerdictCard grid) ----
     if (gradeDotsL_ && gradeDotsR_ && statusLineR_) {
         gradeDotsL_->setBounds  (rr.removeFromTop (16));
         gradeDotsR_->setBounds  (rr.removeFromTop (16));

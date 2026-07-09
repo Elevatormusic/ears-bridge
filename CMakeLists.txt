@@ -144,6 +144,7 @@ add_library(eb_gui STATIC
     src/gui/HigScore.cpp
     src/gui/WizardSpine.cpp
     src/gui/VerdictCard.cpp
+    src/gui/CaptureCard.cpp
     src/gui/stages/ConnectStage.cpp
     src/gui/stages/CalibrateStage.cpp
     src/gui/stages/LevelStage.cpp

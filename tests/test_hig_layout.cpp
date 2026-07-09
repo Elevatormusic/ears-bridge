@@ -779,8 +779,8 @@ TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3
     auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
     eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
                                                           tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
-    static_assert (eb::MeasureStage::kWorkflowStateCount == 4,
-                   "new Measure workflow state: extend this gate's driver (Tasks 6/7 grow it)");
+    static_assert (eb::MeasureStage::kWorkflowStateCount == 6,
+                   "new Measure workflow state: extend this gate's driver (Task 7 grows it)");
     using WS = eb::MeasureStage::WorkflowState;
     mc.setSize (900, 720);
     mc.forceWizardStepForTest (eb::WizardStep::Measure);
@@ -788,11 +788,23 @@ TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3
 
     const auto apply = [&] (WS s) {
         using Lead = eb::MeasureStage::Lead;
-        stage.setLead (s == WS::ReferenceNeeded ? Lead::Reference
-                     : s == WS::HwDirac ? Lead::HwDirac : Lead::Waiting);
+        using CC   = eb::CaptureCardModel;
+        const Lead lead = s == WS::ReferenceNeeded ? Lead::Reference
+                        : s == WS::HwDirac ? Lead::HwDirac : Lead::Waiting;
+        stage.setLead (lead);
+        // Render the REAL per-lead head copy too (P3 Task 6): the armed title is the app's widest -
+        // it exercises the 2-line title mode inside the constant kHeaderH reserve.
+        const auto head = eb::MeasureStage::measureHeadCopy (lead, false, false);
+        stage.setHeadCopy (head.title, head.sub);
         stage.setWaitHint (s == WS::TimeoutHint
             ? eb::MeasureStage::waitingHint (eb::MeasureStage::kArmedNoSweepHintSeconds, false, false, {}, false)
             : juce::String());
+        // P3 Task 6: the capture grid. Capturing = a live LEFT sweep beside a queued RIGHT card;
+        // MidCaptureFailed = the sticky danger card (its Labels are what RULE2 must keep above the fold).
+        stage.setCaptureModels (s == WS::Capturing        ? CC::capturing ("LEFT EAR", 0.58f, 10)
+                              : s == WS::MidCaptureFailed ? CC::failed ("LEFT EAR")
+                                                          : CC::waiting ("LEFT EAR"),
+                                CC::waiting ("RIGHT EAR"));
         mc.resized();
     };
     juce::StringArray bad;
@@ -806,6 +818,32 @@ TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3
         for (auto& s2 : displacedWarnSurfaces (vp))
             bad.add ("RULE2 state " + juce::String (i) + ": warn surface displaced: " + s2);
     }
+
+    // ---- routed ruling (Task 5 review, landed with Task 6): 2-line title mode ----
+    {
+        auto& hdr = stage.headerForTest();
+        // House law: the hero instruction never squishes (the armed title used to render at 0.73).
+        CHECK (hdr.titleForTest().getMinimumHorizontalScale() == 1.0f);
+        // Deterministic mode pin (font-metric independent): an over-wide title takes the second
+        // 26px row; a short title keeps today's one-line geometry.
+        const auto keep = hdr.titleForTest().getText();
+        hdr.setTitleText ("An impossibly wide synthetic hero instruction title for the two-line mode pin");
+        CHECK (hdr.titleForTest().getHeight() == 26 + eb::StageHeader::kTitleExtraRow);
+        hdr.setTitleText ("Short");
+        CHECK (hdr.titleForTest().getHeight() == 26);
+        // Scale-1.0 safety across the app: the other stages reserve only kHeight, so their (static)
+        // titles must fit ONE line in the title box - the reviewer's <=~280px claim, verified against
+        // the actual strings + the actual title font on this platform.
+        const juce::Font f  = hdr.titleForTest().getFont();
+        const float boxW    = (float) (hdr.titleForTest().getWidth() - 10);
+        for (const char* t : { "Connect your devices", "Load your ear calibrations", "Set your level" }) {
+            INFO (juce::String (t) << " measures "
+                  << juce::GlyphArrangement::getStringWidth (f, t) << "px of " << boxW);
+            CHECK (juce::GlyphArrangement::getStringWidth (f, t) <= boxW);
+        }
+        hdr.setTitleText (keep);
+    }
+
     apply (WS::ArmedWaiting);   // restore the resting state
     INFO ("violations:\n" << bad.joinIntoString ("\n"));
     CHECK (bad.isEmpty());

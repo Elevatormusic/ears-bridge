@@ -160,6 +160,10 @@ public:
     // by Task 4's review) is pinned by driving the SAME production member updateStartGate calls.
     MeasureStage& measureStageForTest() { return measureStage_; }
     void syncTransportForTest (bool running, bool gateReady) { syncTransport (running, gateReady); }
+    // P3 Task 6 seam: latch a mid-capture failure exactly as the device-died branch does (the sticky
+    // §3.1 Failed card), then re-render through the SAME live path (refreshWizardView ->
+    // refreshMeasureView). Display/state only - no engine call; a real device loss cannot run headless.
+    void driveMidCaptureFailureForTest (int ear) { failedCaptureEar_ = ear; refreshWizardView(); }
 
 private:
     // The reference/schedule store dir: the TestConfig override (#24, hermetic tests), else %APPDATA%/EarsBridge.
@@ -253,6 +257,14 @@ private:
     void onMeasureTransport();               // this task: a plain forward to onStartStop (Task 7 re-arms)
     int  armedNoSweepTicks_ = 0;             // §2 timeout-hint clock (armed + no sweep, 30 Hz ticks)
     bool refEndpointMismatch_ = false;       // #34: Dirac's output != the reference's learned endpoint
+    // P3 Task 6 honest capture progress (§5.4): WHICH ear the engine is capturing now (-1 = none) +
+    // elapsed GUI ticks (30 Hz) since it engaged - progress is elapsed over the LEARNED reference
+    // duration, never invented. failedCaptureEar_ latches a mid-capture device loss (§3.1: the sticky
+    // Failed card - the Measure stage owns the moment); only the next successful Start re-arms it.
+    // Message-thread only (timer + died-branch + refreshMeasureView all run there).
+    int  captureEar_ = -1;
+    int  captureTicks_ = 0;
+    int  failedCaptureEar_ = -1;
     // Fill a WizardInputs from the existing members (GateSnapshot fields + engine state). Pure reads.
     WizardInputs snapshotWizardInputs() const;
     std::optional<WizardStep> pinnedStep_;   // user navigation pin (empty = launch/first-unmet resolution)
