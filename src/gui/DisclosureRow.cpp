@@ -22,6 +22,7 @@ void DisclosureRow::setOpen (bool open) {
     if (getToggleState() == open) return;
     setToggleState (open, juce::dontSendNotification);
     chevRamp_.start();                                        // P4: ease the chevron through the change
+    if (auto* h = getAccessibilityHandler()) h->notifyAccessibilityEvent (juce::AccessibilityEvent::structureChanged);
     if (onOpenChanged) onOpenChanged (open);
 }
 
@@ -35,6 +36,7 @@ void DisclosureRow::clicked() {
         return;
     }
     chevRamp_.start();                   // P4: the locked-revert above starts NO ramp (no visual change)
+    if (auto* h = getAccessibilityHandler()) h->notifyAccessibilityEvent (juce::AccessibilityEvent::structureChanged);
     if (onOpenChanged) onOpenChanged (getToggleState());
 }
 
@@ -51,7 +53,27 @@ void DisclosureRow::setLocked (bool locked) {
 void DisclosureRow::setSummary (const juce::String& s) {
     if (summary_ == s) return;
     summary_ = s;
+    setDescription (summary_);           // AT reads the always-visible summary as the description
     repaint();
+}
+
+std::unique_ptr<juce::AccessibilityHandler> DisclosureRow::createAccessibilityHandler() {
+    // P4 (HIG a11y / P2-T4 ledger): a disclosure announces EXPANDED/COLLAPSED, not checkbox on/off.
+    // Replaces the toggle-button handler (setClickingTogglesState made VoiceOver read on/off) with a
+    // plain button handler carrying the expandable state; press = the same lock-respecting click path.
+    struct Handler : juce::AccessibilityHandler {
+        explicit Handler (DisclosureRow& r)
+            : juce::AccessibilityHandler (r, juce::AccessibilityRole::button,
+                  juce::AccessibilityActions().addAction (juce::AccessibilityActionType::press,
+                                                          [&r] { r.clickForTest(); })),
+              row (r) {}
+        juce::AccessibleState getCurrentState() const override {
+            const auto s = juce::AccessibilityHandler::getCurrentState().withExpandable();
+            return row.isOpen() ? s.withExpanded() : s.withCollapsed();
+        }
+        DisclosureRow& row;
+    };
+    return std::make_unique<Handler> (*this);
 }
 
 // Single source for the title column width. `content` is the row space AFTER the chevron gutter

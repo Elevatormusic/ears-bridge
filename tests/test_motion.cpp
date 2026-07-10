@@ -186,3 +186,32 @@ TEST_CASE("P4 CaptureCard: capturing border eases in; Reduce Motion snaps; FAILE
     CHECK (card.borderRampForTest().value() == 1.0f);
     eb::SystemA11y::setForTest (false, false, false);
 }
+
+// ==================================================================================================
+// P4 Task 5: disclosure a11y. getAccessibilityHandler() needs a native peer (vendored
+// juce_Component.cpp:2992 - the ':2994' precondition from P2 T1), so the test calls the protected
+// factory directly through a test subclass: same handler class, no peer, deterministic.
+// ==================================================================================================
+TEST_CASE("P4 DisclosureRow a11y: announces expandable + expanded/collapsed, not toggle on/off") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    struct TestRow : eb::DisclosureRow {
+        TestRow() : DisclosureRow ("Advanced FIR") {}
+        using eb::DisclosureRow::createAccessibilityHandler;   // expose the protected factory
+    } row;
+    auto handler = row.createAccessibilityHandler();
+    REQUIRE (handler != nullptr);
+    CHECK (handler->getRole() == juce::AccessibilityRole::button);
+    auto closed = handler->getCurrentState();
+    CHECK (closed.isExpandable());
+    CHECK_FALSE (closed.isExpanded());
+    CHECK_FALSE (closed.isCheckable());                        // the old toggle semantics are GONE
+    row.setOpen (true);
+    auto open = handler->getCurrentState();
+    CHECK (open.isExpanded());
+    // Locked-open row: still reports expanded (the state is the truth, the lock is behavior).
+    row.setLocked (true);
+    CHECK (handler->getCurrentState().isExpanded());
+    // The summary rides the accessible description.
+    row.setSummary ("Min phase - Auto length");
+    CHECK (row.getDescription() == "Min phase - Auto length");
+}

@@ -27,6 +27,7 @@ public:
     MotionRamp& chevronRampForTest() { return chevRamp_; }
 protected:
     void clicked() override;
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 private:
     juce::Rectangle<int> layoutTitleColumn (juce::Rectangle<int>& content) const; // single source: carves the title column off content, returns the summary remainder
     juce::String summary_;
