@@ -36,7 +36,7 @@ via a small PR to `integration/redesign-v3` — never developed divergently in e
 
 ## House rules on every branch
 
-- Test serial numbers are always the `000-0000` / `0000000` placeholders. A serial-guard
+- Test serial numbers are always repeated-single-digit placeholders (`000-0000`, `111-1111`, `0000000`...) - never a real serial. A serial-guard
   CI workflow scans every push; a local pre-commit hook is available:
   `git config core.hooksPath tools/git-hooks`
 - The full test suite must be green before pushing (`ctest --test-dir build`).
