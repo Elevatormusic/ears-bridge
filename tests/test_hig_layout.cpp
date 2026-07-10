@@ -1048,10 +1048,8 @@ TEST_CASE("Regression banner: 28px strip displaces the stage and never overlaps 
         // on THIS shown stage at the banner-reduced height.
         for (bool dark : { true, false }) {
             mc.forceThemeForTest (dark);
-            jf.deleteFile();
-            pf.deleteFile();   // the probe PNG writer APPENDS (FileOutputStream) - wipe so a frame
-                               // does not ride behind a stale earlier one (T7 workaround; chip owns the fix)
-            hig::writeDesignProbe (mc, jf, pf);
+            hig::writeDesignProbe (mc, jf, pf);   // overwrites in place - writeSnapshot truncates on
+                                                  // re-probe (regression pinned below), JSON replaces
             for (auto& f : eb::hig::scoreDescriptor (juce::JSON::parse (jf)))
                 if (f.category == "overlap" || f.category == "clip")
                     bad.add (tag + " " + (dark ? "dark" : "light") + ": " + f.category + " on "
@@ -1065,3 +1063,40 @@ TEST_CASE("Regression banner: 28px strip displaces the stage and never overlaps 
     tmp.deleteRecursively();
 }
 
+// ==================================================================================================
+// PNG-append regression (found during P3 Task 7): juce::FileOutputStream opens append-at-end, so
+// writeSnapshot to an EXISTING .png used to append a SECOND complete PNG after the first — decoders
+// then render the FIRST (stale) frame forever (t7-dark-stale.png grew 123192 -> 184188 = old + new,
+// still showing the old state). The JSON side replaces; only the PNG lied. This pins the overwrite:
+// a re-probe to the same path must equal a fresh single write byte-for-byte in size, and must DECODE
+// to the SECOND state.
+// ==================================================================================================
+TEST_CASE("writeDesignProbe re-probe overwrites the PNG: same path decodes to the second state") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    struct Rig : juce::Component {
+        juce::Label l;
+        Rig() { l.setText ("probe", juce::dontSendNotification); addAndMakeVisible (l); }
+        void resized() override { l.setBounds (getLocalBounds()); }
+    };
+    Rig rig;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    const auto jf = tmp.getChildFile ("p.json");
+    const auto pf = tmp.getChildFile ("p.png");
+
+    rig.setSize (200, 80);
+    hig::writeDesignProbe (rig, jf, pf);
+    REQUIRE (pf.getSize() > 0);
+
+    rig.setSize (300, 120);                      // a different state, so a stale first frame is detectable
+    hig::writeDesignProbe (rig, jf, pf);         // re-probe to the SAME path
+
+    const auto fresh = tmp.getChildFile ("fresh.png");
+    hig::writeDesignProbe (rig, jf, fresh);      // virgin-path write of the same state = ground truth
+    CHECK (pf.getSize() == fresh.getSize());     // append bug: pf = firstPng + secondPng, strictly larger
+
+    const auto img = juce::ImageFileFormat::loadFrom (pf);   // decoders read the FIRST image in the file
+    REQUIRE (img.isValid());
+    CHECK (img.getWidth()  == 300);
+    CHECK (img.getHeight() == 120);
+    tmp.deleteRecursively();
+}
