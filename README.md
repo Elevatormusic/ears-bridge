@@ -127,6 +127,7 @@ Open the standalone **Dirac Live** app:
 
 1. **Output device** → your **headphone amp or DAC** (whatever the headphones plug into), on the **Windows Audio** driver from step 1. This is what plays the sweep. Confirm it's at **48 kHz**.
 2. **Recording device** (the microphone) → the cable's capture side, **"CABLE Output (VB-Audio Virtual Cable)"** (macOS: **BlackHole 2ch**). Also at **48 kHz**. This is EARS Bridge's feed standing in as the mic.
+3. **No mic calibration file in Dirac.** Dirac can attach a calibration file to the recording device — leave it empty. EARS Bridge has already applied the EARS calibration, so loading one in Dirac would correct the measurement twice.
 
 ### 4. Learn the reference
 
@@ -138,6 +139,8 @@ EARS Bridge needs to hear Dirac's own sweep once so it can grade your measuremen
 
 ### 5. Measure
 
+In Dirac's **Select Sweet Spot** step, pick **Home → Focused** — a jig is a single listener in a dedicated position, which is exactly what Focused models.
+
 1. **Press Start** in EARS Bridge.
 2. In Dirac, click **Re-measure selected position** — *this* is the real, graded measurement. It's one routine that sweeps left, then right; EARS Bridge follows automatically and a live indicator shows which earcup is being captured.
 3. **Check the level.** EARS Bridge's **L and R meters** should sit in the **green band**, matched and not clipping. If it flags **clipping**, turn Dirac's output **down** from −12.5 dB and re-measure; if it's too quiet, raise it. The absolute loudness doesn't matter — clipping or too-quiet is what hurts (see [Setting the level](#setting-the-level-gain-staging)).
@@ -147,6 +150,8 @@ EARS Bridge needs to hear Dirac's own sweep once so it can grade your measuremen
 ### 6. Build the filter
 
 Back in Dirac Live, once both ears are measured across your positions, design the correction the way you normally would — choose or draw your target curve and let Dirac compute the filter — and **export** it so the Processor can load it.
+
+Want a starting point? EARS Bridge ships a house target — [**Jazzi Overall**](site/assets/jazzi-overall-dirac-target.txt) ([direct download](https://elevatormusic.github.io/ears-bridge/assets/jazzi-overall-dirac-target.txt)) — a Harman-style bass shelf with a relaxed 2.5–3 kHz presence dip and flat treble. It was tuned against HPN-calibrated measurements; if you measure with HEQ files (which bake in their own bass lift), flatten its low shelf first.
 
 ### 7. Apply it and listen
 
