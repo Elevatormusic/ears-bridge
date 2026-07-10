@@ -27,6 +27,7 @@ add_executable(eb_tests
     test_asiofallback.cpp
     test_lrverify.cpp
     test_levelmeter.cpp
+    test_motion.cpp
     test_calslot.cpp
     test_curvethumbnail.cpp
     test_designtokens.cpp
