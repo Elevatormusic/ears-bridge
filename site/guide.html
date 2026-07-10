@@ -210,6 +210,9 @@ own response is removed before Dirac ever sees the signal.</p>
       the fix for Dirac's "recording device error 600007".</li>
   <li>In <b>Dirac Live</b>, choose the virtual cable (for example <i>CABLE Output</i> /
       <i>BlackHole 2ch</i>) as the recording device. Dirac now sees one calibrated microphone.</li>
+  <li><b>Don't load a mic calibration file in Dirac.</b> Dirac offers to attach a calibration
+      file to the recording device — leave it empty. EARS Bridge has already applied your EARS
+      calibration, so loading one in Dirac would correct the measurement twice.</li>
 </ol>
 
 <h2 id="level">Step 4 — Set the level</h2>
@@ -232,6 +235,10 @@ Dirac has a single measurement flow and sweeps both channels in one pass; EARS B
 earcup each sweep is exciting and records only that ear's calibrated microphone. The app shows a
 live indicator of the side being captured, and its status line tracks the sweep from
 "Listening" through "Capturing" to a graded result.</p>
+<p>In Dirac's <b>Select Sweet Spot</b> step, choose <b>Home &rarr; Focused</b>. A headphone jig is
+the definition of a single listener in a dedicated position, which is exactly what Focused models.
+Between measurement positions, gently re-seat the headphones on the jig — slightly up, down,
+forward, back — so the correction averages over the seating differences of real use.</p>
 <p>EARS Bridge cannot start the measurement for you — Dirac owns the sweep. If the app says it's
 armed and listening, the next step is always to press <b>Start measurement</b> inside Dirac Live.</p>
 
@@ -246,6 +253,14 @@ the <b>Dirac Live Processor</b> in your listening chain. One target-curve note: 
 <b>HEQ</b> calibration files, start from a <b>flat bass target</b> rather than a bass-boosted one —
 HEQ already includes a bass lift, and stacking a boosted target on top of it double-counts the
 bass.</p>
+<h3 id="target">A house target curve to start from</h3>
+<p><a href="assets/jazzi-overall-dirac-target.txt" download>Download the Jazzi Overall target
+curve</a> and import it in Dirac's filter-design stage. It pairs a Harman-style bass shelf
+(+10.5&nbsp;dB at 20&nbsp;Hz, easing to flat by 200&nbsp;Hz) with a gentle presence relaxation
+around 2.5&ndash;3&nbsp;kHz and flat treble — a warm, natural starting point you can then bend
+to taste. One pairing note: it was tuned against <b>HPN</b>-calibrated measurements. HEQ files
+bake a mild bass lift into the measurement itself, so if you measured with HEQ, flatten this
+target's low shelf first (or expect noticeably more bass than intended).</p>
 
 <h2 id="troubleshoot">Troubleshooting</h2>
 <h3>Dirac shows "recording device error 600007"</h3>
