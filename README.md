@@ -37,6 +37,8 @@ The capture device and the virtual output device run on independent clocks, so t
 
 Both installers are currently unsigned, so the first launch shows a one-time security prompt — see the install steps below.
 
+A GUI redesign is in progress on parallel experiment branches — see [BRANCHES.md](BRANCHES.md) for how the branches fit together.
+
 ## Roadmap
 
 EARS Bridge is in active development. A look at recent and upcoming work:
