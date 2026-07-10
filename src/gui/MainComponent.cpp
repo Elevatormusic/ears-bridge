@@ -3057,6 +3057,11 @@ void MainComponent::timerCallback() {
             // forceWizardStepForTest — the Measure scenes surface the driven labels; the stage scenes render
             // Connect/Calibrate/Level at their natural state. The pin also settles the shown stage + resizes.
             const auto pinnedWas = pinnedStep_;
+            // T8/T9 fix: clearCal() PERSISTS the cleared path (onCalCleared -> setLeftCalPath({})),
+            // so the empty-scene re-seed must use a SNAPSHOT of the launch paths - reading the live
+            // settings re-seeds from the very value the first calibrate-empty scene just wiped
+            // (caught by the T9 live evidence run: every post-empty frame rendered empty slots).
+            const juce::String seedCalL = settings.leftCalPath(), seedCalR = settings.rightCalPath();
             for (auto& ap : appears) {
                 eb::SystemA11y::setForTest (false, ap.hc, ap.hc);   // reduceMotion off; contrast+transparency = hc
                 forceThemeForTest (ap.dark);                        // reapply palette + settle the non-owned labels
@@ -3079,10 +3084,10 @@ void MainComponent::timerCallback() {
                         if (leftCal.hasCal())  leftCal.clearCal();
                         if (rightCal.hasCal()) rightCal.clearCal();
                     } else {
-                        if (! leftCal.hasCal()  && settings.leftCalPath().isNotEmpty())
-                            leftCal.loadFromFile (juce::File (settings.leftCalPath()));
-                        if (! rightCal.hasCal() && settings.rightCalPath().isNotEmpty())
-                            rightCal.loadFromFile (juce::File (settings.rightCalPath()));
+                        if (! leftCal.hasCal()  && seedCalL.isNotEmpty())
+                            leftCal.loadFromFile (juce::File (seedCalL));
+                        if (! rightCal.hasCal() && seedCalR.isNotEmpty())
+                            rightCal.loadFromFile (juce::File (seedCalR));
                     }
                     setUnityAcceptedForTest (s.p3 == 15);   // accepted wording only for calibrate-unity (set AFTER any loads - loading resets the flag)
                     forceWizardStepForTest (s.step);                // pin + render + show this scene's stage, then resize
@@ -3186,10 +3191,10 @@ void MainComponent::timerCallback() {
             // T8: the calibrate-empty/unity scenes cleared the slot pair + set the unity flag; restore
             // the launch seeding (same guards as startup) and the un-accepted default.
             setUnityAcceptedForTest (false);
-            if (! leftCal.hasCal() && settings.leftCalPath().isNotEmpty())
-                leftCal.loadFromFile (juce::File (settings.leftCalPath()));
-            if (! rightCal.hasCal() && settings.rightCalPath().isNotEmpty())
-                rightCal.loadFromFile (juce::File (settings.rightCalPath()));
+            if (! leftCal.hasCal() && seedCalL.isNotEmpty())
+                leftCal.loadFromFile (juce::File (seedCalL));
+            if (! rightCal.hasCal() && seedCalR.isNotEmpty())
+                rightCal.loadFromFile (juce::File (seedCalR));
             // P3 (Task 8) restores - belt-and-braces: the final refreshWizardView recomposes every
             // Measure feed from live truth anyway, but leave NO forced scene state behind on any path.
             driveLevelClipForTest (false);
