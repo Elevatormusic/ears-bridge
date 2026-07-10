@@ -9,7 +9,7 @@
 
 Key facts:
 - Free, source-available (PolyForm Noncommercial); independent project, not affiliated with miniDSP or Dirac.
-- Use HEQ calibration files for headphones, IDF for in-ear monitors; HEQ includes a mild bass boost, so pair it with a flat bass target in Dirac.
+- Use HEQ calibration files for headphones, IDF for in-ear monitors.
 - Run the whole chain at 48 kHz in shared mode; absolute loudness doesn't matter (Dirac normalizes) but signal-to-noise does.
 - Dirac's "imprecise (excluded from phase correction)" on headphone measurements is almost always per-sweep signal-to-noise (amp hiss / room noise), fixed by raising level into the app's green band and quieting the room.
 - Grades every sweep per ear (Clean / Marginal / Suspect) with SNR, impulse-response and distortion checks, so a bad capture is flagged instead of passing silently.

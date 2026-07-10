@@ -151,7 +151,7 @@ In Dirac's **Select Sweet Spot** step, pick **Home → Focused** — a jig is a 
 
 Back in Dirac Live, once both ears are measured across your positions, design the correction the way you normally would — choose or draw your target curve and let Dirac compute the filter — and **export** it so the Processor can load it.
 
-Want a starting point? EARS Bridge ships a house target — [**Jazzi Overall**](site/assets/jazzi-overall-dirac-target.txt) ([direct download](https://elevatormusic.github.io/ears-bridge/assets/jazzi-overall-dirac-target.txt)) — a Harman-style bass shelf with a relaxed 2.5–3 kHz presence dip and flat treble. It was tuned against HPN-calibrated measurements; if you measure with HEQ files (which bake in their own bass lift), flatten its low shelf first.
+Want a starting point? EARS Bridge ships a house target — [**Jazzi Overall**](site/assets/jazzi-overall-dirac-target.txt) ([direct download](https://elevatormusic.github.io/ears-bridge/assets/jazzi-overall-dirac-target.txt)) — a Harman-style bass shelf with a relaxed 2.5–3 kHz presence dip and flat treble.
 
 ### 7. Apply it and listen
 
@@ -163,7 +163,7 @@ Each EARS capsule ships with its own calibration as an FRD text file. EARS Bridg
 
 miniDSP supplies a few variants per capsule. For Dirac, use **HEQ** — it's what miniDSP now recommends:
 
-- **HEQ** — miniDSP's recommended calibration for headphone EQ, including with Dirac Live, and EARS Bridge's default. It has a mild bass boost built in, so when you design the filter in Dirac, start with a **flat target in the bass** and adjust to taste.
+- **HEQ** — miniDSP's recommended calibration for headphone EQ, including with Dirac Live, and EARS Bridge's default.
 - **HPN** — the older curve (not offered on the newer EARS Pro). It still works, but miniDSP now recommends HEQ.
 - **RAW** — the mic capsules with no compensation; miniDSP marks it unsupported. Use HEQ unless you specifically need RAW.
 
