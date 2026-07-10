@@ -2984,42 +2984,56 @@ void MainComponent::timerCallback() {
             const auto outDir = juce::SystemStats::getEnvironmentVariable ("EB_HIG_STATES", {});
             if (outDir.isNotEmpty()) {
             const juce::File dir (outDir);
-            // Each scene now carries the wizard STEP it renders (Task 5): the 9 status scenes drive the
-            // MeasureStage's status line + quality dots, so they pin Measure; the 4 stage scenes at the
-            // bottom pin Connect/Calibrate/Level (+ calibrate-advanced, Task 8) and drive NO labels - the
-            // stage at its natural current state IS the scene. forceWizardStepForTest (below, per-scene)
-            // settles the shown stage; calAdv forces the Calibrate Advanced-FIR disclosure open/closed.
-            // Frame count: 14 scenes x 4 appearances + 2 startready + 4 capture-cards = 62 frames
-            // (T10 added connect-dirachint; P3 Task 6 added capturecards/capturefailed x dark/light).
-            struct St { const char* name; const char* l; const char* r; bool update; bool dots; WizardStep step; bool calAdv; bool diracHint; };
+            // PNG-append workaround (T7 found-in-passing; the standalone chip owns the real writer fix):
+            // writeSnapshot's FileOutputStream APPENDS to an existing file, so a harness re-run into the
+            // same dir keeps every PNG's STALE first frame. Wipe the target PNG before each write.
+            const auto probeScene = [this, &dir] (const juce::String& stem) {
+                const auto png = dir.getChildFile (stem + ".png");
+                png.deleteFile();
+                hig::writeDesignProbe (*getTopLevelComponent(),
+                                       dir.getChildFile (stem + ".json"), png);
+            };
+            // Each scene = a (step, state) pair (spec §8 item 4, P3 Task 8 rework): the Measure scenes
+            // drive REAL state through the SAME seams the gates use (driveVerdictForTest /
+            // setCaptureModels / setLead / setWaitHint / driveDeviceErrorForTest - production models and
+            // machine state, never label injection); the stage scenes pin Connect/Calibrate/Level at
+            // their natural (or forced-disclosure / warned / clip-warned) state. forceWizardStepForTest
+            // (per-scene) settles the shown stage; p3 selects the driven P3 state (codes below).
+            // Frame count: 21 scenes x 4 appearances + 2 startready = 86 frames (P3 Task 8: the scene
+            // matrix owns capturing/midcapture-failed, so the Task-6 standalone capture-card block died;
+            // verdict-suspect rides beyond the plan's 20-row table - see the task report).
+            struct St { const char* name; const char* statusText; bool update; WizardStep step;
+                        bool calAdv; bool diracHint; int p3; };
+            // p3 codes: 0 none | 1 armed-waiting | 2 timeout-hint | 3 capturing | 4 midcapture-failed
+            //           5 verdict | 6 verdict-details | 7 verdict-stale | 8 hwdirac | 9 override
+            //           10 level-clip | 11 regression-banner | 12 verdict-suspect
             static const St states[] = {
-                { "idle",        "",                                                                                 "",                                         false, false, WizardStep::Measure, false, false },
-                { "running",     "Running - waiting for the Dirac sweep...",                                         "",                                         false, false, WizardStep::Measure, false, false },
-                { "capturing",   "Auto per-ear - capturing the LEFT earcup",                                         "",                                         false, true,  WizardStep::Measure, false, false },
-                { "clean",       "Sweep captured - safe to run the next sweep",                                      "R clean - SNR 30 dB, IR 56 dB",            false, true,  WizardStep::Measure, false, false },
-                { "imprecise",   "Noisy capture - Dirac will likely mark it imprecise; raise level or lower noise.", "R marginal SNR 18 dB - re-measure",        false, true,  WizardStep::Measure, false, false },
-                { "lowlevel",    "Running - level low: turn your amp up to the green band",                          "",                                         false, false, WizardStep::Measure, false, false },
-                { "error",       "EARS or audio cable disconnected - measurement stopped.",                          "",                                         false, false, WizardStep::Measure, false, false },
-                { "update+full", "Running - no input signal (check the EARS)",                                       "R weak impulse response - time-variance?", true,  true,  WizardStep::Measure, false, false },
-                // SP3 shape INFO note RENDERED on the per-ear line, worst case: a verified line + peak tail
-                // + the LONGEST note (the drift copy), already run through earStatusLine's #68 length budget
-                // (the note elides with ".." past 78 chars; the full text rides the tooltip). Proves the
-                // populated status line does not clip at the app's minimum width.
-                { "shapenote",   "L: verified - IR-SNR 56 dB, THD 0% (calibration pending) (peak -8 dBFS)  -  res..", "R: verified 54 dB", false, true,  WizardStep::Measure, false, false },
-                // STAGE SCENES (Task 5): one per non-Measure step at its current state. No driven labels —
-                // the gate MEASURES each hand-laid stage body, so the descriptor element counts differ per
-                // step (this is the "step axis actually probes 4 stages" honesty check). Naming: hig-<ap>-<step>.
-                { "connect",     "", "", false, false, WizardStep::Connect,   false, false },
-                // T10: the Connect signal-path with the standard-cable/Dirac warning + one-click fix forced
-                // visible (the message slot's warning state). driveConnectWarningsForTest paints the amber
-                // hint + fix button so native-review can measure the warned SIGNAL PATH card.
-                { "connect-dirachint", "", "", false, false, WizardStep::Connect, false, true },
-                { "calibrate",   "", "", false, false, WizardStep::Calibrate, false, false },
-                { "level",       "", "", false, false, WizardStep::Level,     false, false },
-                // P2 (Task 8): the Calibrate stage with the Advanced-FIR disclosure OPEN. The "calibrate"
-                // scene above renders it COLLAPSED (the launch default in the hermetic env); this one forces
-                // the disclosed section so native-review can measure the four advanced controls' layout.
-                { "calibrate-advanced", "", "", false, false, WizardStep::Calibrate, true, false },
+                { "idle",             "",                                                          false, WizardStep::Measure, false, false, 0 },
+                { "running",          "Running - waiting for the Dirac sweep...",                  false, WizardStep::Measure, false, false, 1 },
+                { "lowlevel",         "Running - level low: turn your amp up to the green band",   false, WizardStep::Measure, false, false, 1 },
+                { "error",            "EARS or audio cable disconnected - measurement stopped.",   false, WizardStep::Measure, false, false, 0 },
+                { "update+armed",     "Listening for Dirac's sweep...",                            true,  WizardStep::Measure, false, false, 1 },
+                { "timeout-hint",     "Listening for Dirac's sweep...",                            false, WizardStep::Measure, false, false, 2 },
+                { "capturing",        "Sweep in progress...",                                      false, WizardStep::Measure, false, false, 3 },
+                { "midcapture-failed","EARS or audio cable disconnected - measurement stopped.",   false, WizardStep::Measure, false, false, 4 },
+                { "verdict",          "",                                                          false, WizardStep::Measure, false, false, 5 },
+                { "verdict-details",  "",                                                          false, WizardStep::Measure, false, false, 6 },
+                { "verdict-stale",    "",                                                          false, WizardStep::Measure, false, false, 7 },
+                { "verdict-suspect",  "",                                                          false, WizardStep::Measure, false, false, 12 },
+                { "hwdirac",          "",                                                          false, WizardStep::Measure, false, false, 8 },
+                { "override",         "Listening for the sweep...",                                false, WizardStep::Measure, false, false, 9 },
+                // STAGE SCENES: one per non-Measure step at its current state (the gate MEASURES each
+                // hand-laid stage body - the "step axis actually probes 4 stages" honesty check).
+                // connect-dirachint forces the standard-cable/Dirac warning + one-click fix (T10);
+                // calibrate-advanced forces the Advanced-FIR disclosure OPEN (P2 Task 8); level-clip
+                // forces the input-clip warning through the same production-copy seam the Level gate uses.
+                { "connect",          "", false, WizardStep::Connect,   false, false, 0 },
+                { "connect-dirachint","", false, WizardStep::Connect,   false, true,  0 },
+                { "calibrate",        "", false, WizardStep::Calibrate, false, false, 0 },
+                { "calibrate-advanced","",false, WizardStep::Calibrate, true,  false, 0 },
+                { "level",            "", false, WizardStep::Level,     false, false, 0 },
+                { "level-clip",       "", false, WizardStep::Level,     false, false, 10 },
+                { "regression-banner","", false, WizardStep::Measure,   false, false, 11 },
             };
             // APPEARANCE MATRIX (EARS-vendored extension, 2026-07-04): the base sweep only rendered the
             // OS launch mode at normal contrast, but the composited-pixel HIG checks are mode/contrast
@@ -3043,67 +3057,97 @@ void MainComponent::timerCallback() {
                 eb::SystemA11y::setForTest (false, ap.hc, ap.hc);   // reduceMotion off; contrast+transparency = hc
                 forceThemeForTest (ap.dark);                        // reapply palette + settle the non-owned labels
                 for (auto& s : states) {
-                    statusLine.setText  (s.l, juce::dontSendNotification);
-                    // P3 Task 7: statusLineR + the quality dots retired from the tree (the
-                    // VerdictCards supersede them). The scene table's `r`/`dots` axes are INERT
-                    // until the Task 8 scene rework replaces them with driveVerdictForTest scenes;
-                    // this block is patched minimally so the harness still compiles + runs.
-                    juce::ignoreUnused (s.r, s.dots);
-                    if (s.update) updateLink.setButtonText ("Update available");
-                    updateLink.setVisible (s.update);
+                    // ORDER IS THE TASK-6 HARNESS LESSON (see driveVerdictForTest): machine STATE first
+                    // (deviceError feeds computeWizardState -> the banner), then the PIN - whose
+                    // renderWizardView -> refreshMeasureView recomposes every Measure feed from LIVE
+                    // truth - and only THEN the driven display feeds. The plan's Task-8 snippet pinned
+                    // LAST, which would have recomposed-away every driven P3 state and rendered 21
+                    // identical live-truth frames (flagged in the task report; fixed here).
+                    driveDeviceErrorForTest (s.p3 == 11 ? "Device error - check the EARS and cable"
+                                                        : juce::String());
                     calibrateStage_.setAdvancedOpen (s.calAdv);     // P2: force the Advanced-FIR disclosure per scene
                     driveConnectWarningsForTest (s.diracHint, s.diracHint);   // T10: the cable-warning scene
                     forceWizardStepForTest (s.step);                // pin + render + show this scene's stage, then resize
-                    const juce::String stem = juce::String ("hig-") + ap.tag + "-" + s.name;
-                    hig::writeDesignProbe (*getTopLevelComponent(),
-                        dir.getChildFile (stem + ".json"),
-                        dir.getChildFile (stem + ".png"));
+                    statusLine.setText (s.statusText, juce::dontSendNotification);
+                    if (s.update) updateLink.setButtonText ("Update available");
+                    updateLink.setVisible (s.update);
+                    using Lead = MeasureStage::Lead;  using CCM = eb::CaptureCardModel;
+                    // The DRIVEN Measure scenes (p3 1-9, 12) force the armed/hw workflow states that are
+                    // unreachable in a cold harness run (they need a Running engine + a learned reference).
+                    // p3 0/10/11 scenes render the pinned stage at LIVE truth - refreshMeasureView already
+                    // recomposed the Measure feeds, and the banner scene's displacement IS that truth.
+                    if ((s.p3 >= 1 && s.p3 <= 9) || s.p3 == 12) {
+                        // Verdict models through the SAME pure composer the live feed uses (production
+                        // path, never label injection): clean LEFT + marginal RIGHT with a flagged Drift
+                        // chip; the stale scene sets the models' own stale bit; the suspect scene pairs
+                        // the danger-toned card with a clean sibling (scene variety, per the #68 gate).
+                        eb::EarGradeSnapshot ce; ce.state = (int) eb::RefMonState::GradedClean;
+                        ce.sweepSnrDb = 30; ce.irSnrDb = 56; ce.thdPercent = 0.8f; ce.peakDb = -8;
+                        eb::EarGradeSnapshot me = ce; me.state = (int) eb::RefMonState::GradedMarginal;
+                        me.sweepSnrDb = 18; me.irSnrDb = 52; me.thdPercent = 0.3f;
+                        eb::EarGradeSnapshot se = ce; se.state = (int) eb::RefMonState::GradedSuspect;
+                        se.sweepSnrDb = 8; se.irSnrDb = 20; se.thdPercent = 6.0f;
+                        eb::ShapeScalars ds; ds.driftMaxDb = -9.0f;
+                        const auto cleanM = eb::verdictCardModelAuto ("LEFT EAR",  ce, 0u, {}, s.p3 == 7, false);
+                        const auto margM  = eb::verdictCardModelAuto ("RIGHT EAR", me, eb::ShapeFlag::kDrift, ds,
+                                                                      s.p3 == 7, false);
+                        const auto suspM  = eb::verdictCardModelAuto ("LEFT EAR",  se, 0u, {}, false, false);
+                        const auto cleanR = eb::verdictCardModelAuto ("RIGHT EAR", ce, 0u, {}, false, false);
+                        const Lead lead = s.p3 == 8 ? Lead::HwDirac : Lead::Waiting;
+                        measureStage_.setLead (lead);
+                        // The scene's HONEST head copy (the plan snippet drove it only for the override
+                        // scene, leaving hwdirac/armed scenes with the Reference-lead head over a
+                        // Waiting/HwDirac lead - a state the app can never show; flagged + fixed): the
+                        // same pure rule refreshMeasureView applies. Canonical AUTO scenes (mode copy
+                        // variants are pinned headless in test_wizardnav.cpp). The verdict scenes'
+                        // driveVerdictForTest below re-applies its own verdict-showing head on top.
+                        const auto head = MeasureStage::measureHeadCopy (lead, /*overrideOn*/ s.p3 == 9,
+                                                                         /*verdictShowing*/ false,
+                                                                         eb::CombineMode::AutoPerEar);
+                        measureStage_.setHeadCopy (head.title, head.sub);
+                        measureStage_.setWaitHint (s.p3 == 2
+                            ? MeasureStage::waitingHint (MeasureStage::kArmedNoSweepHintSeconds,
+                                                         false, false, {}, false)
+                            : juce::String());
+                        measureStage_.setCaptureModels (
+                            s.p3 == 3 ? CCM::capturing ("LEFT EAR", 0.58f, 10)
+                          : s.p3 == 4 ? CCM::failed ("LEFT EAR")
+                                      : CCM::waiting ("LEFT EAR", eb::CombineMode::AutoPerEar),
+                            CCM::waiting ("RIGHT EAR", eb::CombineMode::AutoPerEar));
+                        if (s.p3 == 5 || s.p3 == 6 || s.p3 == 7)
+                            driveVerdictForTest (cleanM, margM, s.p3 == 6);   // re-pins Measure (its own order rule)
+                        else if (s.p3 == 12)
+                            driveVerdictForTest (suspM, cleanR, false);
+                        else
+                            measureStage_.setVerdictModels ({}, {}, false);
+                    }
+                    driveLevelClipForTest (s.p3 == 10);   // Level clip warning (production copy seam); clears itself
+                    resized();                            // settle the direct stage feeds before the probe
+                    probeScene (juce::String ("hig-") + ap.tag + "-" + s.name);
                 }
             }
+            // The matrix's LAST scene (regression-banner) leaves the device error latched; clear it
+            // BEFORE the startready frames or they render banner-displaced Level stages (the plan put
+            // this restore after the startready section - the leak is flagged in the task report).
+            driveDeviceErrorForTest ({});
             // COMPONENT-STATE SCENE: the status sweep above leaves Start DISABLED (its accent fill paints
             // only when enabled), so force it enabled and capture the ready-CTA scene in dark+light. (The
             // former "Advanced expanded" scene died with the disclosure - its children live in the stages,
-            // captured by the per-step gate axis instead.) The matrix loop's last scene (calibrate-advanced)
-            // left the pin on Calibrate; force LEVEL - the transport's home since the P3 Task 4 re-home -
+            // captured by the per-step gate axis instead.) The matrix loop's last scene (regression-banner)
+            // left the pin on Measure; force LEVEL - the transport's home since the P3 Task 4 re-home -
             // so the ready CTA scene renders the stage that actually hosts it. The force must run AFTER
             // each theme flip (matching the matrix loop's ordering): forceThemeForTest re-renders through
             // the LIVE path, where a Blocked Level pin falls back to first-unmet and the scene would
             // capture the wrong stage (the latent pre-Task-4 behaviour, harmless while the bar hosted Start).
+            // (The Task-6 standalone capture-card scenes died here: capturing/midcapture-failed now ride
+            // the full appearance matrix above.)
             for (const bool dk : { true, false }) {
                 forceThemeForTest (dk);
                 forceWizardStepForTest (WizardStep::Level);
                 const juce::String mtag = dk ? "dark" : "light";
                 startStop.setEnabled (true);                                    // enabled primary CTA (M3)
                 resized();
-                hig::writeDesignProbe (*getTopLevelComponent(),
-                    dir.getChildFile ("hig-" + mtag + "-normal-startready.json"),
-                    dir.getChildFile ("hig-" + mtag + "-normal-startready.png"));
-            }
-            // P3 Task 6 CAPTURE-CARD SCENES: the capture grid renders only in the Waiting lead with live
-            // capture data (Running engine + learned reference) - unreachable in a cold harness run. Force
-            // the lead + models through the stage's own feed (the fit gate's idiom, AFTER the step pin so
-            // refreshMeasureView's live-truth recompose doesn't overwrite them) and capture dark+light:
-            // a live LEFT sweep at 58% beside the queued RIGHT card, then the sticky Failed card.
-            for (const bool dk : { true, false }) {
-                forceThemeForTest (dk);
-                forceWizardStepForTest (WizardStep::Measure);
-                measureStage_.setLead (MeasureStage::Lead::Waiting);
-                // Canonical AUTO scenes (the routine the grid depicts); the mode variants are pinned headless.
-                const auto head = MeasureStage::measureHeadCopy (MeasureStage::Lead::Waiting, false, false,
-                                                                 eb::CombineMode::AutoPerEar);
-                measureStage_.setHeadCopy (head.title, head.sub);               // the 2-line armed title, rendered
-                const juce::String mtag = dk ? "dark" : "light";
-                measureStage_.setCaptureModels (eb::CaptureCardModel::capturing ("LEFT EAR", 0.58f, 10),
-                                                eb::CaptureCardModel::waiting ("RIGHT EAR", eb::CombineMode::AutoPerEar));
-                resized();
-                hig::writeDesignProbe (*getTopLevelComponent(),
-                    dir.getChildFile ("hig-" + mtag + "-normal-capturecards.json"),
-                    dir.getChildFile ("hig-" + mtag + "-normal-capturecards.png"));
-                measureStage_.setCaptureModels (eb::CaptureCardModel::failed ("LEFT EAR"),
-                                                eb::CaptureCardModel::waiting ("RIGHT EAR", eb::CombineMode::AutoPerEar));
-                hig::writeDesignProbe (*getTopLevelComponent(),
-                    dir.getChildFile ("hig-" + mtag + "-normal-capturefailed.json"),
-                    dir.getChildFile ("hig-" + mtag + "-normal-capturefailed.png"));
+                probeScene ("hig-" + mtag + "-normal-startready");
             }
 
             eb::SystemA11y::setForTest (false, false, false);       // restore; the next theme tick re-reads the OS
@@ -3114,6 +3158,14 @@ void MainComponent::timerCallback() {
             calibrateStage_.setAdvancedOpen (CalibrateStage::advancedFirNonDefault (
                 settings.complexPhase(), settings.firLength(), settings.outputTrimDb()));
             driveConnectWarningsForTest (false, false);   // T10: clear the forced cable-warning scene
+            // P3 (Task 8) restores - belt-and-braces: the final refreshWizardView recomposes every
+            // Measure feed from live truth anyway, but leave NO forced scene state behind on any path.
+            driveLevelClipForTest (false);
+            driveDeviceErrorForTest ({});
+            measureStage_.setVerdictModels ({}, {}, false);
+            measureStage_.setWaitHint ({});
+            measureStage_.setCaptureModels (eb::CaptureCardModel::waiting ("LEFT EAR",  settings.combineMode()),
+                                            eb::CaptureCardModel::waiting ("RIGHT EAR", settings.combineMode()));
             pinnedStep_ = pinnedWas;                                // restore the pre-sweep navigation pin
             refreshWizardView();
             }   // if (outDir.isNotEmpty())

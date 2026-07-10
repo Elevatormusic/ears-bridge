@@ -997,3 +997,46 @@ TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3
     tmp.deleteRecursively();
 }
 
+// ==================================================================================================
+// P1 carryover, landed here because Measure now OWNS driven banner states: the §3.1 regression banner
+// must DISPLACE the stage by exactly kBannerH - never overlap it - and the banner's own label + jump
+// button must fit inside the strip at the minimum window.
+// ==================================================================================================
+TEST_CASE("Regression banner: 28px strip displaces the stage and never overlaps content [P3]") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    const juce::File data (EB_TEST_DATA_DIR);
+    const bool wasDark = eb::Theme::dark();
+    mc.setSize (900, 720);
+    // Deps done-ish (cals loaded) + a device ERROR while the user sits on Measure -> banner + jump.
+    REQUIRE (mc.leftCalForTest().loadFromFile (data.getChildFile ("L_HEQ_0000000.txt")));
+    REQUIRE (mc.rightCalForTest().loadFromFile (data.getChildFile ("R_HEQ_0000000.txt")));
+    mc.forceWizardStepForTest (eb::WizardStep::Measure);
+    const auto stageBoundsBefore = mc.measureStageForTest().getBounds();
+    mc.driveDeviceErrorForTest ("Device error - check the EARS and cable");
+    mc.forceWizardStepForTest (eb::WizardStep::Measure);               // re-render with the error truth
+    const auto stageBoundsAfter = mc.measureStageForTest().getBounds();
+    CHECK (stageBoundsAfter.getY() == stageBoundsBefore.getY() + eb::StageHost::kBannerH);   // displaced
+    CHECK (stageBoundsAfter.getBottom() <= stageBoundsBefore.getBottom());                   // never grows past
+    // Probe the whole tree in both themes: the banner strip introduces no overlap/clip finding.
+    juce::StringArray bad;
+    const auto jf = tmp.getChildFile ("b.json"), pf = tmp.getChildFile ("b.png");
+    for (bool dark : { true, false }) {
+        mc.forceThemeForTest (dark);
+        pf.deleteFile();   // the probe PNG writer APPENDS (FileOutputStream) - wipe so the light-theme
+                           // frame does not ride behind a stale dark one (T7 workaround; chip owns the fix)
+        hig::writeDesignProbe (mc, jf, pf);
+        for (auto& f : eb::hig::scoreDescriptor (juce::JSON::parse (jf)))
+            if (f.category == "overlap" || f.category == "clip")
+                bad.add (juce::String (dark ? "dark" : "light") + ": " + f.category + " on "
+                         + f.element + " - " + f.message);
+    }
+    mc.forceThemeForTest (wasDark);
+    mc.driveDeviceErrorForTest ({});                                    // restore
+    INFO ("findings:\n" << bad.joinIntoString ("\n"));
+    CHECK (bad.isEmpty());
+    tmp.deleteRecursively();
+}
+
