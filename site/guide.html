@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dirac Live headphone calibration with a miniDSP EARS</title>
+<meta name="description" content="Step-by-step: measure and correct your headphones with Dirac Live using a miniDSP EARS jig and the free EARS Bridge app — setup, levels, sweeps, results.">
+<link rel="canonical" href="https://elevatormusic.github.io/ears-bridge/guide.html">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="EARS Bridge">
+<meta property="og:title" content="Dirac Live headphone calibration with a miniDSP EARS">
+<meta property="og:description" content="Step-by-step: measure and correct your headphones with Dirac Live using a miniDSP EARS jig and the free EARS Bridge app.">
+<meta property="og:url" content="https://elevatormusic.github.io/ears-bridge/guide.html">
+<meta property="og:image" content="https://elevatormusic.github.io/ears-bridge/assets/app-light.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Dirac Live headphone calibration with a miniDSP EARS">
+<meta name="twitter:description" content="Step-by-step: measure and correct your headphones with Dirac Live using a miniDSP EARS jig and the free EARS Bridge app.">
+<meta name="twitter:image" content="https://elevatormusic.github.io/ears-bridge/assets/app-light.png">
+<link rel="icon" type="image/svg+xml" href="assets/icon.svg?v=3">
+<link rel="icon" href="assets/icon.png?v=3">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Dirac Live headphone calibration with a miniDSP EARS",
+  "description": "Step-by-step guide to measuring and correcting headphones with Dirac Live using a miniDSP EARS or EARS Pro measurement jig and the free, open-source EARS Bridge app.",
+  "image": "https://elevatormusic.github.io/ears-bridge/assets/app-light.png",
+  "datePublished": "2026-07-10",
+  "dateModified": "2026-07-10",
+  "author": { "@type": "Person", "name": "Elevatormusic", "url": "https://github.com/Elevatormusic" },
+  "publisher": { "@type": "Organization", "name": "EARS Bridge", "url": "https://elevatormusic.github.io/ears-bridge/",
+                 "sameAs": ["https://github.com/Elevatormusic/ears-bridge"] },
+  "mainEntityOfPage": "https://elevatormusic.github.io/ears-bridge/guide.html"
+}
+</script>
+<style>
+:root{
+  color-scheme: light dark;
+  --bg:#FFFFFF; --bg2:#F5F5F7; --card:#FFFFFF; --sep:rgba(0,0,0,.10);
+  --tx:#1D1D1F; --tx2:#636366; --accent:#0071E3; --accent-h:#0077ED; --ok:#1E8E3E;
+  --btn:#0071E3; --btn-h:#0077ED; --on-accent:#FFFFFF; --eyebrow:#0066CC;
+  --sans:-apple-system,"SF Pro Text","SF Pro Display","Segoe UI Variable Text","Segoe UI",system-ui,Roboto,sans-serif;
+  --mono:"SF Mono","Cascadia Code",Consolas,ui-monospace,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#000000; --bg2:#161617; --card:#1C1C1E; --sep:rgba(255,255,255,.12);
+    --tx:#F5F5F7; --tx2:#A1A1A6; --accent:#2997FF; --accent-h:#47A6FF; --ok:#30D158;
+    --btn:#0A66D6; --btn-h:#0A74EE; --eyebrow:#2997FF; }
+}
+*{ box-sizing:border-box; margin:0; }
+html{ scroll-behavior:smooth; }
+@media (prefers-reduced-motion: reduce){ html{ scroll-behavior:auto; } }
+body{ background:var(--bg); color:var(--tx); font-family:var(--sans); line-height:1.6; -webkit-font-smoothing:antialiased; }
+a{ color:var(--accent); text-decoration:none; }
+a:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:6px; }
+img{ max-width:100%; display:block; }
+.wrap{ max-width:1040px; margin:0 auto; padding:0 24px; }
+
+nav{ position:sticky; top:0; z-index:10; background:color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter:saturate(180%) blur(20px); border-bottom:1px solid var(--sep); }
+nav .wrap{ display:flex; align-items:center; height:52px; gap:8px; }
+nav .brand{ display:inline-flex; align-items:center; min-height:44px; gap:8px; font-weight:600; font-size:17px; color:var(--tx); }
+nav .brand img{ width:24px; height:24px; border-radius:6px; }
+nav .grow{ flex:1; }
+nav a.navlink{ display:inline-flex; align-items:center; min-height:44px; padding:0 6px; margin-left:16px; color:var(--tx2); font-size:14px; }
+nav a.navlink:hover{ color:var(--tx); }
+nav a.navlink[aria-current="page"]{ color:var(--tx); font-weight:600; }
+
+article{ max-width:720px; margin:0 auto; padding:56px 24px 80px; }
+article header h1{ font-size:clamp(30px,5.4vw,44px); font-weight:600; letter-spacing:-.02em; line-height:1.1; }
+.updated{ margin-top:12px; color:var(--tx2); font-size:14px; }
+.lede{ margin-top:20px; font-size:18px; color:var(--tx2); }
+article h2{ font-size:26px; font-weight:600; letter-spacing:-.01em; margin:52px 0 0; line-height:1.2; }
+article h3{ font-size:19px; font-weight:600; margin:32px 0 0; }
+article p{ margin-top:14px; font-size:16px; }
+article p, article li{ color:var(--tx); }
+article ul, article ol{ margin:14px 0 0; padding-left:24px; font-size:16px; }
+article li{ margin:8px 0; }
+article li::marker{ color:var(--tx2); }
+article a{ text-decoration:underline; text-underline-offset:2px; }
+article code{ font-family:var(--mono); font-size:13.5px; background:var(--bg2); padding:2px 6px; border-radius:6px; }
+article b, article strong{ font-weight:600; }
+.toc{ margin-top:28px; background:var(--bg2); border:1px solid var(--sep); border-radius:14px; padding:18px 22px; }
+.toc p{ margin:0; font-weight:600; font-size:14px; color:var(--tx2); text-transform:uppercase; letter-spacing:.03em; }
+.toc ol{ margin-top:10px; font-size:15px; }
+.toc li{ margin:5px 0; }
+.toc a{ text-decoration:none; }
+.toc a:hover{ text-decoration:underline; }
+.note{ margin-top:18px; background:var(--bg2); border:1px solid var(--sep); border-left:3px solid var(--accent); border-radius:10px; padding:14px 18px; font-size:15px; color:var(--tx2); }
+.note b{ color:var(--tx); }
+
+footer{ border-top:1px solid var(--sep); padding:40px 0; color:var(--tx2); font-size:13px; }
+footer .wrap{ display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; }
+footer .grow{ flex:1; }
+footer .fbrand{ display:inline-flex; align-items:center; min-height:44px; gap:8px; color:var(--tx); font-weight:600; }
+footer .fbrand img{ width:20px; height:20px; border-radius:5px; }
+footer a:not(.fbrand){ display:inline-flex; align-items:center; min-height:44px; padding:4px 2px; }
+footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+  <a class="brand" href="./"><img src="assets/icon.svg?v=3" alt="" aria-hidden="true">EARS Bridge</a>
+  <span class="grow"></span>
+  <a class="navlink" href="guide.html" aria-current="page">Guide</a>
+  <a class="navlink" href="faq.html">FAQ</a>
+  <a class="navlink" href="./#download">Download</a>
+  <a class="navlink" href="https://github.com/Elevatormusic/ears-bridge">GitHub</a>
+</div></nav>
+
+<main>
+<article>
+<header>
+  <h1>Dirac Live headphone calibration with a miniDSP EARS</h1>
+  <p class="updated">Updated July 10, 2026 · applies to EARS Bridge 0.4 and Dirac Live 3</p>
+  <p class="lede">You can measure and correct headphones with Dirac Live using a miniDSP EARS or EARS
+  Pro measurement jig and the free, open-source <a href="./">EARS Bridge</a> app. EARS Bridge applies
+  each ear's calibration and presents the jig to Dirac Live as the single calibrated microphone it
+  expects — this guide walks through the whole setup, from a fresh install to a corrected headphone.</p>
+</header>
+
+<div class="toc">
+  <p>In this guide</p>
+  <ol>
+    <li><a href="#need">What you need</a></li>
+    <li><a href="#why">Why Dirac Live can't use an EARS directly</a></li>
+    <li><a href="#install">Step 1 — Install the software</a></li>
+    <li><a href="#cal">Step 2 — Load your EARS calibration files</a></li>
+    <li><a href="#config">Step 3 — Configure the audio chain</a></li>
+    <li><a href="#level">Step 4 — Set the level</a></li>
+    <li><a href="#measure">Step 5 — Run the Dirac Live measurement</a></li>
+    <li><a href="#apply">Step 6 — Check the grade and apply the correction</a></li>
+    <li><a href="#troubleshoot">Troubleshooting</a></li>
+  </ol>
+</div>
+
+<h2 id="need">What you need</h2>
+<ul>
+  <li>A <b>miniDSP EARS or EARS Pro</b> headphone measurement jig, with the calibration files for
+      your unit's serial number (downloadable from miniDSP's website).</li>
+  <li><b>Dirac Live 3</b> (the measurement app) and the <b>Dirac Live Processor</b> plugin or
+      standalone to apply the resulting correction while you listen.</li>
+  <li>A <b>virtual audio cable</b>: <a href="https://vb-audio.com/Cable/">VB-CABLE</a> on Windows or
+      <a href="https://existential.audio/blackhole/">BlackHole 2ch</a> on macOS.</li>
+  <li><b><a href="./">EARS Bridge</a></b> — free and open source, for Windows 10/11 and macOS.</li>
+  <li>Your headphones, seated on the jig the way you actually wear them.</li>
+</ul>
+
+<h2 id="why">Why can't Dirac Live use an EARS directly?</h2>
+<p>Dirac Live is built around one calibrated measurement microphone. A miniDSP EARS is a
+two-channel device — an independent microphone in each artificial ear — and each capsule has its own
+calibration file. Plug the EARS in directly and Dirac would record one uncalibrated channel and
+ignore the other, so the measurement would carry the jig's own frequency response as an error.</p>
+<p>EARS Bridge sits between the two. It captures both EARS channels, applies each ear's calibration
+as an inverse FIR filter, reduces the result to the single channel Dirac expects, and plays it into
+a virtual audio cable. In Dirac Live you simply select the cable as the recording device — from
+Dirac's point of view it is one well-behaved calibrated microphone. In the default
+<b>Auto&nbsp;per-ear</b> mode, EARS Bridge follows Dirac's sweep and records only the earcup being
+swept, so both ears are measured cleanly in a single Dirac routine with no crosstalk between the
+open backs.</p>
+
+<h2 id="install">Step 1 — Install the software</h2>
+<h3>On Windows</h3>
+<ol>
+  <li>Download and run <code>EARS-Bridge-Windows-Setup.exe</code> from the
+      <a href="https://github.com/Elevatormusic/ears-bridge/releases">releases page</a> — it's
+      self-contained and doesn't need admin rights.</li>
+  <li>Install <a href="https://vb-audio.com/Cable/">VB-CABLE</a> and reboot if it asks.</li>
+  <li>On first launch SmartScreen may warn (the app isn't code-signed yet) — choose
+      <b>More info → Run anyway</b>.</li>
+</ol>
+<h3>On macOS</h3>
+<ol>
+  <li>Open the <code>.dmg</code> and drag <b>EARS Bridge</b> to Applications (universal binary,
+      Apple Silicon and Intel).</li>
+  <li>Install <a href="https://existential.audio/blackhole/">BlackHole 2ch</a>.</li>
+  <li>The app isn't notarized yet, so the first launch is blocked: open
+      <b>System Settings → Privacy &amp; Security</b>, scroll down, and click <b>Open Anyway</b>.</li>
+</ol>
+
+<h2 id="cal">Step 2 — Load your EARS calibration files</h2>
+<p>Every EARS unit ships with individual calibration files measured for its serial number. Download
+them from miniDSP's site, then drop the left and right files onto the two slots in EARS Bridge —
+files are matched to the correct ear automatically, and a mismatched pair (a left file in the right
+slot, or files from two different serials) is flagged rather than silently accepted.</p>
+<p>miniDSP publishes several compensation types per unit. For headphone EQ with Dirac Live:</p>
+<ul>
+  <li><b>HEQ</b> — use this for regular headphones. It's miniDSP's recommended headphone-EQ
+      compensation. Note that HEQ bakes in a mild bass boost, which matters when you choose a target
+      curve later (<a href="#apply">step 6</a>).</li>
+  <li><b>IDF</b> — use this for in-ear monitors.</li>
+  <li><b>HPN</b> — miniDSP's older headphone curve. It works, but HEQ has superseded it.</li>
+  <li><b>RAW</b> — microphone-only data with no ear compensation; not intended for Dirac
+      correction, and EARS Bridge will warn if you load it.</li>
+</ul>
+<p>Once both files are loaded, EARS Bridge builds a minimum-phase inverse FIR per ear, so the jig's
+own response is removed before Dirac ever sees the signal.</p>
+
+<h2 id="config">Step 3 — Configure the audio chain</h2>
+<ol>
+  <li>In EARS Bridge, select the <b>EARS as the input device</b> and the
+      <b>virtual cable as the output device</b>.</li>
+  <li>Keep the combine mode on <b>Auto per-ear</b> (the default). This is the mode designed for
+      Dirac Live: Dirac plays its sweep through both channels in one routine, and EARS Bridge
+      follows whichever earcup is currently sounding.</li>
+  <li>Set <b>everything to 48&nbsp;kHz</b> — the EARS, the cable, and Dirac. A mismatched rate means
+      the operating system resamples behind your back; EARS Bridge detects and warns about a
+      resampled chain, because a silently resampled measurement is less trustworthy.</li>
+  <li>Leave devices in <b>shared mode</b>. Dirac's recording path expects it, and EARS Bridge can
+      apply the correct Dirac shared-mode setting for the standard VB-CABLE in one click — this is
+      the fix for Dirac's "recording device error 600007".</li>
+  <li>In <b>Dirac Live</b>, choose the virtual cable (for example <i>CABLE Output</i> /
+      <i>BlackHole 2ch</i>) as the recording device. Dirac now sees one calibrated microphone.</li>
+</ol>
+
+<h2 id="level">Step 4 — Set the level</h2>
+<p>Absolute loudness does not matter for a Dirac headphone correction — Dirac normalizes the
+measurement, so there is no SPL target to hit. What matters is signal-to-noise: a sweep well above
+the room and amplifier noise floor.</p>
+<p>Press <b>Start</b> in EARS Bridge and play Dirac's test signal, then turn your headphone
+amplifier up until the L and R meters sit in the <b>green target band</b>. EARS Bridge warns
+explicitly when the level is too low and when the input clips, and a too-quiet capture is flagged
+rather than passed off as clean — in measurement software, a wrong-but-confident result is worse
+than an honest warning.</p>
+<div class="note"><b>Quiet matters more than loud.</b> Close windows, stop fans and air
+conditioning, and keep the room quiet during sweeps. Low sweep-to-noise ratio is the most common
+reason Dirac marks a headphone measurement "imprecise" (see
+<a href="faq.html#imprecise">the FAQ</a>).</div>
+
+<h2 id="measure">Step 5 — Run the Dirac Live measurement</h2>
+<p>Run Dirac Live's normal measurement routine — there is nothing special to do on the Dirac side.
+Dirac has a single measurement flow and sweeps both channels in one pass; EARS Bridge detects which
+earcup each sweep is exciting and records only that ear's calibrated microphone. The app shows a
+live indicator of the side being captured, and its status line tracks the sweep from
+"Listening" through "Capturing" to a graded result.</p>
+<p>EARS Bridge cannot start the measurement for you — Dirac owns the sweep. If the app says it's
+armed and listening, the next step is always to press <b>Start measurement</b> inside Dirac Live.</p>
+
+<h2 id="apply">Step 6 — Check the grade and apply the correction</h2>
+<p>After each sweep, EARS Bridge grades the capture per ear against a learned reference —
+<b>Clean</b>, <b>Marginal</b>, or <b>Suspect</b> — with the signal-to-noise, impulse-response and
+distortion numbers behind the verdict, plus shape checks for problems a single number misses
+(clipping, mains hum, duplicate paths, drift). A flagged sweep is worth re-running: fix the noted
+cause and measure again.</p>
+<p>When the measurement is done, design your filter in Dirac Live as usual and load the result in
+the <b>Dirac Live Processor</b> in your listening chain. One target-curve note: if you measured with
+<b>HEQ</b> calibration files, start from a <b>flat bass target</b> rather than a bass-boosted one —
+HEQ already includes a bass lift, and stacking a boosted target on top of it double-counts the
+bass.</p>
+
+<h2 id="troubleshoot">Troubleshooting</h2>
+<h3>Dirac shows "recording device error 600007"</h3>
+<p>The virtual cable is in exclusive mode. Put the recording device in shared mode — with the
+standard VB-CABLE, EARS Bridge offers the correct setting as a one-click fix.</p>
+<h3>Dirac marks the measurement "imprecise (excluded from phase correction)"</h3>
+<p>This is almost always a signal-to-noise problem with the individual sweep, not a defect in the
+chain: amplifier hiss or room noise too close to the sweep level. Raise the level into the green
+band, quieten the room, and re-measure. EARS Bridge's per-sweep SNR grade predicts this — a sweep it
+grades Clean is one Dirac should accept. More detail in <a href="faq.html#imprecise">the FAQ</a>.</p>
+<h3>EARS Bridge says it's listening but nothing happens</h3>
+<p>Start the measurement in Dirac Live — the app arms and follows, it never triggers Dirac. If a
+sweep is playing and still nothing arrives, check that Dirac's recording device is the virtual
+cable and that its output device is what your headphones are actually connected to.</p>
+<h3>The level meters stay far below the green band</h3>
+<p>Turn up the headphone amplifier, not the EARS gain switch. The gain switch changes the jig's
+calibration reference; the amplifier sets how loud the sweep actually is at the mic.</p>
+<h3>Windows SmartScreen or macOS blocks the app</h3>
+<p>Expected while the app is unsigned — see <a href="#install">step 1</a> for the per-platform
+override. The source is public on
+<a href="https://github.com/Elevatormusic/ears-bridge">GitHub</a> if you'd rather build it
+yourself.</p>
+
+<p style="margin-top:44px;"><b>More questions?</b> The <a href="faq.html">FAQ</a> covers
+calibration file types, hardware Dirac processors, EARS vs EARS Pro, and more — or open an issue on
+<a href="https://github.com/Elevatormusic/ears-bridge/issues">GitHub</a>.</p>
+</article>
+</main>
+
+<footer><div class="wrap">
+  <a class="fbrand" href="./"><img src="assets/icon.svg?v=3" alt="" aria-hidden="true">EARS Bridge</a>
+  <span class="grow"></span>
+  <a href="guide.html">Guide</a>
+  <a href="faq.html">FAQ</a>
+  <a href="https://github.com/Elevatormusic/ears-bridge">GitHub</a>
+  <a href="https://github.com/Elevatormusic/ears-bridge/releases">Releases</a>
+  <p class="disc">EARS Bridge is an independent open-source project. Not affiliated with or endorsed by miniDSP or Dirac. EARS, EARS Pro and Dirac Live are trademarks of their respective owners.</p>
+</div></footer>
+</body>
+</html>
