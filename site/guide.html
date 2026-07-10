@@ -185,8 +185,7 @@ slot, or files from two different serials) is flagged rather than silently accep
 <p>miniDSP publishes several compensation types per unit. For headphone EQ with Dirac Live:</p>
 <ul>
   <li><b>HEQ</b> — use this for regular headphones. It's miniDSP's recommended headphone-EQ
-      compensation. Note that HEQ bakes in a mild bass boost, which matters when you choose a target
-      curve later (<a href="#apply">step 6</a>).</li>
+      compensation.</li>
   <li><b>IDF</b> — use this for in-ear monitors.</li>
   <li><b>HPN</b> — miniDSP's older headphone curve. It works, but HEQ has superseded it.</li>
   <li><b>RAW</b> — microphone-only data with no ear compensation; not intended for Dirac
@@ -249,10 +248,7 @@ distortion numbers behind the verdict, plus shape checks for problems a single n
 (clipping, mains hum, duplicate paths, drift). A flagged sweep is worth re-running: fix the noted
 cause and measure again.</p>
 <p>When the measurement is done, design your filter in Dirac Live as usual and load the result in
-the <b>Dirac Live Processor</b> in your listening chain. One target-curve note: if you measured with
-<b>HEQ</b> calibration files, start from a <b>flat bass target</b> rather than a bass-boosted one —
-HEQ already includes a bass lift, and stacking a boosted target on top of it double-counts the
-bass.</p>
+the <b>Dirac Live Processor</b> in your listening chain.</p>
 <h3 id="target">A house target curve to start from</h3>
 <p><a href="assets/jazzi-overall-dirac-target.txt" download>Download the Jazzi Overall target
 curve</a> and import it in Dirac's filter-design stage. It pairs a Harman-style bass shelf

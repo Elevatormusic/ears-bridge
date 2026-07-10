@@ -163,7 +163,7 @@ Each EARS capsule ships with its own calibration as an FRD text file. EARS Bridg
 
 miniDSP supplies a few variants per capsule. For Dirac, use **HEQ** — it's what miniDSP now recommends:
 
-- **HEQ** — miniDSP's recommended calibration for headphone EQ, including with Dirac Live, and EARS Bridge's default. It has a mild bass boost built in, so when you design the filter in Dirac, start with a **flat target in the bass** and adjust to taste.
+- **HEQ** — miniDSP's recommended calibration for headphone EQ, including with Dirac Live, and EARS Bridge's default.
 - **HPN** — the older curve (not offered on the newer EARS Pro). It still works, but miniDSP now recommends HEQ.
 - **RAW** — the mic capsules with no compensation; miniDSP marks it unsupported. Use HEQ unless you specifically need RAW.
 
