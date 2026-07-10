@@ -3109,6 +3109,12 @@ void MainComponent::timerCallback() {
                             ? MeasureStage::waitingHint (MeasureStage::kArmedNoSweepHintSeconds,
                                                          false, false, {}, false)
                             : juce::String());
+                        // T8 review note: for the verdict scenes (p3 5/6/7/12) this outer write is
+                        // DEAD - driveVerdictForTest below re-pins Measure, and its renderWizardView
+                        // -> refreshMeasureView recomposes the capture feed from live truth (the
+                        // driven verdict models then hide the capture cards entirely). Kept
+                        // unconditional for the non-verdict scenes' symmetry: one feed order for
+                        // every driven scene.
                         measureStage_.setCaptureModels (
                             s.p3 == 3 ? CCM::capturing ("LEFT EAR", 0.58f, 10)
                           : s.p3 == 4 ? CCM::failed ("LEFT EAR")
