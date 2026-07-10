@@ -204,9 +204,12 @@ own response is removed before Dirac ever sees the signal.</p>
   <li>Set <b>everything to 48&nbsp;kHz</b> — the EARS, the cable, and Dirac. A mismatched rate means
       the operating system resamples behind your back; EARS Bridge detects and warns about a
       resampled chain, because a silently resampled measurement is less trustworthy.</li>
-  <li>Leave devices in <b>shared mode</b>. Dirac's recording path expects it, and EARS Bridge can
-      apply the correct Dirac shared-mode setting for the standard VB-CABLE in one click — this is
-      the fix for Dirac's "recording device error 600007".</li>
+  <li><b>Turn off exclusive mode on every device in the chain</b> — the EARS input, the virtual
+      cable, and your output device. In Windows: Sound settings → the device's <i>Properties →
+      Advanced</i> → untick <i>"Allow applications to take exclusive control"</i>. Dirac's
+      recording path can't open an exclusive-mode device — this is the cause of its
+      "recording device error 600007" — and for the standard VB-CABLE, EARS Bridge offers the
+      correct setting as a one-click fix.</li>
   <li>In <b>Dirac Live</b>, choose the virtual cable (for example <i>CABLE Output</i> /
       <i>BlackHole 2ch</i>) as the recording device. Dirac now sees one calibrated microphone.</li>
   <li><b>Don't load a mic calibration file in Dirac.</b> Dirac offers to attach a calibration
@@ -259,8 +262,10 @@ to taste. (Curious how the calibration types interact with targets?
 
 <h2 id="troubleshoot">Troubleshooting</h2>
 <h3>Dirac shows "recording device error 600007"</h3>
-<p>The virtual cable is in exclusive mode. Put the recording device in shared mode — with the
-standard VB-CABLE, EARS Bridge offers the correct setting as a one-click fix.</p>
+<p>The virtual cable has exclusive mode enabled, and Dirac's recording path can't open it. Turn
+off exclusive mode on the cable (Sound settings → <i>Properties → Advanced</i> → untick
+<i>"Allow applications to take exclusive control"</i>) — with the standard VB-CABLE, EARS Bridge
+offers this as a one-click fix.</p>
 <h3>Dirac marks the measurement "imprecise (excluded from phase correction)"</h3>
 <p>This is almost always a signal-to-noise problem with the individual sweep, not a defect in the
 chain: amplifier hiss or room noise too close to the sweep level. Raise the level into the green
