@@ -2,6 +2,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "gui/StatusLadder.h"
 #include "gui/VerdictCard.h"
+#include "gui/SystemA11y.h"
 #include "gui/Theme.h"
 #include "gui/juce_design_probe.h"
 #include "gui/HigScore.h"
@@ -260,4 +261,52 @@ TEST_CASE("VerdictCard render scenes: clean / marginal-open / stale / hw score c
     INFO ("findings:\n" << bad.joinIntoString ("\n"));
     CHECK (bad.isEmpty());
     tmp.deleteRecursively();
+}
+
+// ==================================================================================================
+// P4 Task 3: the details fade. The disclosed content eases in AT FINAL LAYOUT (geometry lands
+// instantly - only paint eases); close is instant. HONESTY EXCLUSION (Fable ruling, T7-era
+// displacement contract): a warn-FLAGGED chip carries a finding + its value - it must be readable
+// the MOMENT the layout lands, so it NEVER rides the fade. Chip 0 ("Drift") is the flagged chip in
+// this kDrift model; chip 1 ("Comb") is passing. The card's COMPONENT alpha is the stale-dim
+// semantic channel and the ramp must never touch it.
+// ==================================================================================================
+TEST_CASE("P4 VerdictCard details: passing chips fade in on open; warn-flagged chips land instantly; Reduce Motion snaps; close instant") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::VerdictCard card;
+    card.setSize (273, 300);
+    eb::ShapeScalars s; s.driftMaxDb = -9.0f;
+    card.setModel (eb::verdictCardModelAuto ("RIGHT EAR",
+        ear (RefMonState::GradedMarginal, 18, 52, 0.3f), eb::ShapeFlag::kDrift, s, false, false));
+    auto& flagged   = card.chipForTest (0);            // "Drift -9.0 dB" - warn-toned, carries the finding
+    auto& unflagged = card.chipForTest (1);            // "Comb" - passing, decorative
+    // NEGATIVE (RM ON): open -> everything at full alpha immediately, no ramp running.
+    eb::SystemA11y::setForTest (true, false, false);
+    card.setDetailsOpen (true);
+    CHECK (flagged.getAlpha() == 1.0f);
+    CHECK (unflagged.getAlpha() == 1.0f);
+    CHECK_FALSE (card.detailsRampForTest().running());
+    card.setDetailsOpen (false);
+    // POSITIVE (RM OFF): open fades the passing chips + observations; the flagged chip is EXCLUDED.
+    eb::SystemA11y::setForTest (false, false, false);
+    card.setDetailsOpen (true);
+    CHECK (flagged.getAlpha() == 1.0f);                // readable NOW - the finding never rides the fade
+    CHECK (unflagged.getAlpha() < 0.05f);
+    CHECK (card.observationsForTest().getAlpha() < 0.05f);
+    CHECK (card.detailsRampForTest().running());
+    card.detailsRampForTest().finishForTest();
+    CHECK (unflagged.getAlpha() == 1.0f);
+    CHECK (card.observationsForTest().getAlpha() == 1.0f);
+    card.setDetailsOpen (false);
+    CHECK (unflagged.getAlpha() == 1.0f);
+    CHECK_FALSE (card.detailsRampForTest().running());
+    // CLOSE MID-FADE is instant (frozen decision 2): the snap restores full alpha, no ramp left running.
+    card.setDetailsOpen (true);
+    CHECK (unflagged.getAlpha() < 0.05f);
+    card.setDetailsOpen (false);
+    CHECK (unflagged.getAlpha() == 1.0f);
+    CHECK_FALSE (card.detailsRampForTest().running());
+    // The card's COMPONENT alpha is untouched by the ramp (semantic channel - stale dimming only).
+    CHECK (card.getAlpha() == 1.0f);
+    eb::SystemA11y::setForTest (false, false, false);
 }

@@ -42,6 +42,7 @@ CaptureCard::CaptureCard() {
     sub_.setMinimumHorizontalScale (1.0f);
     foot_.setFont (juce::Font (juce::FontOptions (11.0f)));
     for (auto* l : { &ear_, &badge_, &title_, &sub_, &foot_ }) addAndMakeVisible (*l);
+    borderRamp_.onTick = [this] { repaint(); };      // P4: the ramp repaints only its owner, only while running
     applyTheme();
 }
 
@@ -64,6 +65,11 @@ void CaptureCard::applyModelTone() {
 
 void CaptureCard::setModel (const CaptureCardModel& m) {
     if (m == model_) return;                                 // 30 Hz feed: repaint only on a real change
+    // P4 motion: detect the STATE transition before overwriting the model. Only ENTERING Capturing
+    // eases (the accent border fades in); a progress-only update keeps the same state, so the 30 Hz
+    // feed can never restart the ramp mid-capture.
+    const bool wasCapturing = model_.state == CaptureCardModel::State::Capturing;
+    const bool isCapturing  = m.state == CaptureCardModel::State::Capturing;
     model_ = m;
     ear_.setText (m.ear, juce::dontSendNotification);
     badge_.setText (m.badge, juce::dontSendNotification);
@@ -73,6 +79,11 @@ void CaptureCard::setModel (const CaptureCardModel& m) {
     applyModelTone();
     setAlpha (m.state == CaptureCardModel::State::Waiting ? 0.55f : 1.0f);
     setDescription (m.ear + ", " + m.badge + ": " + m.title);
+    if (isCapturing && ! wasCapturing)      borderRamp_.start();
+    // LEAVING Capturing snaps the ramp closed: a Failed card must never carry a live ramp (danger
+    // snaps, frozen decision 3) and a re-armed Waiting card must rest at full value — a ramp may only
+    // tick while its surface is the one easing (churn discipline).
+    else if (wasCapturing && ! isCapturing) borderRamp_.snapToEnd();
     repaint();
 }
 
@@ -98,7 +109,9 @@ void CaptureCard::paint (juce::Graphics& g) {
     const auto r = getLocalBounds().toFloat();
     Theme::paintCardSurface (g, r);
     if (model_.state == CaptureCardModel::State::Capturing) {
-        g.setColour (Theme::accent().withAlpha (0.45f));
+        // P4: the accent border eases in (ramp-scaled alpha). ONLY this surface rides the ramp — the
+        // Failed/danger border below stays instant by contract, and the progress bar stays data-driven.
+        g.setColour (Theme::accent().withAlpha (0.45f * borderRamp_.value()));
         g.drawRoundedRectangle (r.reduced (0.5f), 12.0f, 1.0f);
     } else if (model_.state == CaptureCardModel::State::Failed) {
         g.setColour (Theme::dangerFill().withAlpha (0.38f));

@@ -3,6 +3,7 @@
 #include <functional>
 #include "gui/StatusLadder.h"     // VerdictCardModel / kVerdictChipCount / StatusTone
 #include "gui/DisclosureRow.h"
+#include "gui/MotionRamp.h"       // P4: the details-content fade (at final layout, open only)
 
 namespace eb {
 
@@ -34,6 +35,8 @@ public:
     juce::Label&   badgeForTest()      { return badge_; }
     juce::Label&   staleTagForTest()   { return staleTag_; }
     juce::Label&   observationsForTest() { return observations_; }   // P3 T7 ruling: the cap/parity pins
+    juce::Label&   chipForTest (int i) { return chip_[i]; }          // P4: the details-fade pins
+    MotionRamp&    detailsRampForTest() { return detailsRamp_; }
 
     void applyTheme();
     void paint (juce::Graphics&) override;
@@ -47,6 +50,12 @@ private:
     DisclosureRow details_ { "Details" };
     juce::Label chip_[kVerdictChipCount];
     juce::Label observations_, staleTag_;
+    // P4: fades the DISCLOSED content in at final layout when Details opens (close is instant). This
+    // ramp drives child-label alphas + painted chip surfaces ONLY — never the card's own component
+    // alpha, which is the 0.55 stale-dim SEMANTIC channel (frozen decision 3). Warn-FLAGGED chips are
+    // excluded from the fade (honesty ruling, P4 Task 3): a chip carrying a finding must be readable
+    // the moment the layout lands.
+    MotionRamp detailsRamp_;
     VerdictCardModel model_;
     bool inlineStaleTag_ = true;                    // false in the Measure grid (the strip speaks)
     juce::Rectangle<int> badgeBg_; juce::Rectangle<int> chipBg_[kVerdictChipCount];

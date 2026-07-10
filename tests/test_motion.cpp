@@ -3,6 +3,7 @@
 #include "gui/MotionRamp.h"
 #include "gui/SystemA11y.h"
 #include "gui/DisclosureRow.h"
+#include "gui/CaptureCard.h"
 #include "gui/MainComponent.h"
 
 // ==================================================================================================
@@ -143,4 +144,45 @@ TEST_CASE("P4 section reveal: Connect override section - same contract") {
     stage.notUsingDiracForTest().setOpen (false);
     CHECK (ovr.getAlpha() == 1.0f);                            // close restored alpha instantly
     tmp.deleteRecursively();
+}
+
+// ==================================================================================================
+// P4 Task 3: Measure motion. The capturing border EASES IN; everything danger-adjacent SNAPS (frozen
+// decision 3) - the Failed border never touches the ramp, and a mid-flight Capturing -> Failed flip
+// STOPS the ramp (a Failed card must never carry a live 60 Hz ramp ticking repaints on a danger
+// surface). Progress stays DATA-driven: a progress-only model update never restarts the ease.
+// ==================================================================================================
+TEST_CASE("P4 CaptureCard: capturing border eases in; Reduce Motion snaps; FAILED SNAPS ALWAYS") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::CaptureCard card;
+    card.setSize (273, 148);
+    // NEGATIVE (RM ON): Waiting -> Capturing completes the ramp immediately.
+    eb::SystemA11y::setForTest (true, false, false);
+    card.setModel (eb::CaptureCardModel::waiting ("LEFT EAR", eb::CombineMode::AutoPerEar));
+    card.setModel (eb::CaptureCardModel::capturing ("LEFT EAR", 0.2f, 10));
+    CHECK (card.borderRampForTest().value() == 1.0f);
+    CHECK_FALSE (card.borderRampForTest().running());
+    // POSITIVE (RM OFF): the transition starts the one-shot ramp.
+    eb::SystemA11y::setForTest (false, false, false);
+    card.setModel (eb::CaptureCardModel::waiting ("LEFT EAR", eb::CombineMode::AutoPerEar));
+    card.setModel (eb::CaptureCardModel::capturing ("LEFT EAR", 0.2f, 10));
+    CHECK (card.borderRampForTest().value() < 0.05f);
+    CHECK (card.borderRampForTest().running());
+    card.borderRampForTest().finishForTest();
+    CHECK (card.borderRampForTest().value() == 1.0f);
+    // A progress-only update (same state) must NOT restart the ramp (30 Hz feed discipline).
+    card.setModel (eb::CaptureCardModel::capturing ("LEFT EAR", 0.4f, 10));
+    CHECK_FALSE (card.borderRampForTest().running());
+    // DANGER SNAPS (frozen decision 3): Capturing -> Failed never animates - no ramp involvement.
+    card.setModel (eb::CaptureCardModel::failed ("LEFT EAR"));
+    CHECK_FALSE (card.borderRampForTest().running());
+    // MID-FLIGHT failure (churn negative, past the brief): the flip stops a RUNNING ramp - the
+    // danger surface owns the moment with the ramp at rest, not mid-ease.
+    card.setModel (eb::CaptureCardModel::waiting ("LEFT EAR", eb::CombineMode::AutoPerEar));
+    card.setModel (eb::CaptureCardModel::capturing ("LEFT EAR", 0.1f, 10));
+    CHECK (card.borderRampForTest().running());
+    card.setModel (eb::CaptureCardModel::failed ("LEFT EAR"));
+    CHECK_FALSE (card.borderRampForTest().running());
+    CHECK (card.borderRampForTest().value() == 1.0f);
+    eb::SystemA11y::setForTest (false, false, false);
 }

@@ -82,7 +82,22 @@ VerdictCard::VerdictCard() {
     for (auto& c : chip_) addChildComponent (c);               // visible only while details are open
     addChildComponent (observations_);
     addChildComponent (staleTag_);
-    details_.onOpenChanged = [this] (bool) { resized(); if (onLayoutChanged) onLayoutChanged(); };
+    details_.onOpenChanged = [this] (bool nowOpen) {
+        resized(); if (onLayoutChanged) onLayoutChanged();
+        // P4: the disclosed content fades in AT FINAL LAYOUT (the T2-upheld pattern - geometry lands
+        // instantly, only paint eases). Open only; closing snaps (frozen decision 2).
+        if (nowOpen) detailsRamp_.start(); else detailsRamp_.snapToEnd();
+    };
+    detailsRamp_.onTick = [this] {
+        const float v = detailsRamp_.value();
+        // HONESTY EXCLUSION (P4 Task 3 ruling): a warn-FLAGGED chip carries a finding + its value -
+        // it must be readable the MOMENT the layout lands, so it never rides the fade. Only the
+        // passing chips and the neutral-toned observations ease in.
+        for (int i = 0; i < kVerdictChipCount; ++i)
+            chip_[i].setAlpha (model_.chips[i].flagged ? 1.0f : v);
+        observations_.setAlpha (v);
+        repaint();                                   // chip BACKGROUNDS are painted surfaces; they ride v too
+    };
     applyTheme();
 }
 
@@ -122,6 +137,9 @@ void VerdictCard::setModel (const VerdictCardModel& m) {
                               : juce::String (m.chips[i].label),
                           juce::dontSendNotification);
         chip_[i].setColour (juce::Label::textColourId, m.chips[i].flagged ? Theme::warn() : Theme::textDim());
+        // A chip whose flagged-ness changes MID-FADE must obey the exclusion immediately (warn tone
+        // changes snap - never wait for the next 60 Hz tick). At rest value() == 1.0: a no-op.
+        chip_[i].setAlpha (m.chips[i].flagged ? 1.0f : detailsRamp_.value());
     }
     // Observation cap (kObsCap, ruling above). ORDER IS LOAD-BEARING: compose the FULL join FIRST,
     // hand it to the tooltip + accessibility help, THEN set the capped label - reading the label back
@@ -276,17 +294,23 @@ void VerdictCard::paint (juce::Graphics& g) {
     if (fixRuleY_ > 0) g.fillRect (kPadX, fixRuleY_, getWidth() - 2 * kPadX, 1);
     // (metric-column separators: the 12px column trim carries the frame's separation; add 1px sep()
     //  lines at the two column edges ONLY if the T9 eyeball says the columns read as one blob)
-    if (details_.isVisible() && details_.isOpen())
+    if (details_.isVisible() && details_.isOpen()) {
+        // P4: the painted chip surfaces ride the details fade (withMultipliedAlpha - chipBg carries its
+        // own intrinsic alpha). The warn-flagged fill/border do NOT: the honesty exclusion above - a
+        // warn surface lands at full strength the moment the layout lands.
+        const float dv = detailsRamp_.value();
         for (int i = 0; i < kVerdictChipCount; ++i)
             if (! chipBg_[i].isEmpty()) {
                 const bool f = model_.chips[i].flagged;
-                g.setColour (f ? Theme::warnFill().withAlpha (0.14f) : Theme::chipBg());
+                g.setColour (f ? Theme::warnFill().withAlpha (0.14f) : Theme::chipBg().withMultipliedAlpha (dv));
                 g.fillRoundedRectangle (chipBg_[i].toFloat(), 8.0f);
                 if (f) { g.setColour (Theme::warnFill().withAlpha (0.32f));
                          g.drawRoundedRectangle (chipBg_[i].toFloat().reduced (0.5f), 8.0f, 1.0f); }
                 else eb::glyph::drawTick (g, juce::Rectangle<float> ((float) chipBg_[i].getX() + 5.0f,
-                                              (float) chipBg_[i].getCentreY() - 5.5f, 11.0f, 11.0f), Theme::okFill());
+                                              (float) chipBg_[i].getCentreY() - 5.5f, 11.0f, 11.0f),
+                                          Theme::okFill().withMultipliedAlpha (dv));
             }
+    }
 }
 
 } // namespace eb
