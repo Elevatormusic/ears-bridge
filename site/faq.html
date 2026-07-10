@@ -32,8 +32,8 @@
       "acceptedAnswer": { "@type": "Answer", "text": "Use HEQ for regular headphones and IDF for in-ear monitors. HPN is miniDSP's older headphone curve, superseded by HEQ. RAW is uncompensated microphone-only data and is not intended for headphone EQ. HEQ includes a mild bass boost, so pair it with a flat bass target in Dirac." } },
     { "@type": "Question", "name": "HPN vs HEQ — what is the difference, and which should I pick?",
       "acceptedAnswer": { "@type": "Answer", "text": "HEQ is tuned so a good-sounding headphone measures roughly flat — the preferred-sound character (close to the Harman preference curve) is built into its reference; that is why miniDSP recommends it: measure, EQ to a flat bass target, done. The extra bass exists for a physical reason: headphones can't move air the way speakers in a room do — you hear the low end but never feel it — so a little more bass than flat is what actually sounds balanced. HPN follows the older conventions of published headphone measurements, so the same headphone reads bass-heavy under it — pick HPN if you use a bass-lifted reference target like the downloadable Jazzi Overall curve, and let the target carry the bass." } },
-    { "@type": "Question", "name": "Should I use Dirac's Auto Target function with headphones?",
-      "acceptedAnswer": { "@type": "Answer", "text": "Yes. Let Dirac generate its Auto Target from your measurement, then match it to a reference curve like the downloadable Jazzi Overall — or load the curve directly as your target. Dirac corrects your headphones to the target you give it, so pairing the Auto Target starting point with a proven reference curve is the whole point of the workflow." } },
+    { "@type": "Question", "name": "What target curve should I use in Dirac Live for headphones?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Dirac corrects your headphones to whatever target you give it — correcting to a proven reference is the whole point. If you measured with HPN calibration files, import the downloadable Jazzi Overall curve in Dirac's filter-design stage and use it as your target, adjusting to taste from there. If you measured with HEQ, start from a flat bass target instead — the warmth is already built into the calibration." } },
     { "@type": "Question", "name": "Does the playback level matter when measuring headphones with Dirac Live?",
       "acceptedAnswer": { "@type": "Answer", "text": "Absolute loudness does not matter — Dirac normalizes the measurement. Signal-to-noise does: set your headphone amplifier so the level meters reach the green target band and keep the room quiet, so the sweep sits well above the noise floor." } },
     { "@type": "Question", "name": "Why does Dirac Live mark my headphone measurement 'imprecise (excluded from phase correction)'?",
@@ -161,11 +161,13 @@ downloadable <a href="guide.html#target">Jazzi Overall house curve</a> (or want 
 to classic published measurements), use <b>HPN</b> and let the target carry the bass — which is
 exactly what the Jazzi curve does.</p>
 
-<h2 id="auto-target">Should I use Dirac's Auto Target function?</h2>
-<p>Yes. Let Dirac generate its Auto Target from your measurement, then match it to a reference
-curve like the <a href="guide.html#target">Jazzi Overall</a> — or load the curve directly as
-your target. Dirac corrects your headphones <i>to the target you give it</i>, so pairing the Auto
-Target starting point with a proven reference curve is the whole point of the workflow.</p>
+<h2 id="target-curve">What target curve should I use in Dirac?</h2>
+<p>Dirac corrects your headphones <i>to whatever target you give it</i> — correcting to a proven
+reference is the whole point. If you measured with <b>HPN</b>, import the downloadable
+<a href="guide.html#target">Jazzi Overall</a> in Dirac's filter-design stage and use it as your
+target (adjust to taste from there). If you measured with <b>HEQ</b>, start from a <b>flat bass
+target</b> instead — the warmth is already in the calibration (see
+<a href="#hpn-heq">HPN vs HEQ</a> above).</p>
 
 <h2 id="level">Does the playback level matter for the measurement?</h2>
 <p>Absolute loudness doesn't matter — Dirac normalizes the measurement, so there's no SPL number to
