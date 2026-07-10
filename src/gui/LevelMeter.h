@@ -30,6 +30,9 @@ public:
 
     bool isClipLatched() const noexcept { return clipLatched; }   // exposed for unit tests
 
+    float levelForTest()    const noexcept { return level; }      // P4 seam: ballistics RM negative
+    float smoothDbForTest() const noexcept { return smoothDb; }
+
     // The clip indicator holds for ~1.5 s after the LAST clip, then auto-releases (re-armed on
     // every new clip). At the 30 Hz GUI tick that is ~45 ticks.
     static constexpr int kClipHoldTicks = 45;

@@ -4,6 +4,7 @@
 #include <optional>
 #include "gui/CalSlotComponent.h"
 #include "gui/DisclosureRow.h"
+#include "gui/MotionRamp.h"
 #include "gui/stages/StageHeader.h"
 #include "cal/CalFile.h"
 
@@ -38,6 +39,8 @@ public:
     // T10: the Advanced-FIR disclosure row itself, for the displacement-honesty gate to assert
     // the collapse affordance stays fully inside the viewport with the section disclosed.
     DisclosureRow& advancedFirForTest() { return advancedFir_; }
+    // P4 motion: the on-open section fade (close is instant - frozen decision 2). Test clock seam.
+    MotionRamp& revealRampForTest() { return revealRamp_; }
 
     // Unity path (spec 5.2): visible only while BOTH slots are empty; `accepted` swaps the
     // wording and retires the button (the header CTA takes over). MainComponent owns the flag.
@@ -90,6 +93,7 @@ private:
     juce::Label    unityHint_;
     juce::TextButton unityBtn_ { "Continue without calibration" };
     DisclosureRow  advancedFir_ { "Advanced FIR" };
+    MotionRamp     revealRamp_;                    // P4: fades the disclosed controls in on open
 
     CalSlotComponent*   leftCal_ = nullptr;
     CalSlotComponent*   rightCal_ = nullptr;

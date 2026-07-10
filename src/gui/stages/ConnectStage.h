@@ -4,6 +4,7 @@
 #include <vector>
 #include "gui/DevicePicker.h"
 #include "gui/DisclosureRow.h"
+#include "gui/MotionRamp.h"
 #include "gui/stages/StageHeader.h"
 
 namespace eb {
@@ -36,6 +37,8 @@ public:
     void setRunNote (const juce::String& s) { header_.setRunNote (s); }
     void syncOverrideDisclosure();                     // lock-open + summary while the override is ON
     DisclosureRow& notUsingDiracForTest() { return notUsingDirac_; }
+    // P4 motion: the on-open section fade (close is instant - frozen decision 2). Test clock seam.
+    MotionRamp& revealRampForTest() { return revealRamp_; }
     // Task-7 review seam: the group-card rects the paint reads (content-local). A test asserts the
     // geometry stays FRESH after a relayout grows a card on a tall window (the stripe itself is
     // paint-path, only verifiable by render). Returns a copy - do not mutate the live layout state.
@@ -76,6 +79,7 @@ private:
     juce::Viewport viewport_;
     Content        content_;
     DisclosureRow  notUsingDirac_ { "Not using Dirac?" };
+    MotionRamp     revealRamp_;                        // P4: fades the disclosed override toggle in on open
     std::vector<juce::Rectangle<int>> groupRects_;     // the three card fills (in content-local coords)
 
     // Adopted (owned by MainComponent) - held as pointers for layout only.

@@ -28,7 +28,20 @@ CalibrateStage::CalibrateStage() {
 
     content_.addChildComponent (caption_);             // shown while the caption text is nonempty
     content_.addAndMakeVisible (advancedFir_);
-    advancedFir_.onOpenChanged = [this] (bool) { resized(); };
+    advancedFir_.onOpenChanged = [this] (bool open) {
+        resized();
+        // P4 motion (frozen decision 2): the revealed section fades in AT its final layout; the
+        // push-down itself is instant (the fit/displacement gates score end-states). Close is
+        // instant — snapToEnd restores every alpha to 1 for the next open.
+        if (open) revealRamp_.start(); else revealRamp_.snapToEnd();
+    };
+    revealRamp_.onTick = [this] {
+        const float v = revealRamp_.value();
+        for (juce::Component* c : { (juce::Component*) complexPhaseToggle_, (juce::Component*) firLenLabel_,
+                                    (juce::Component*) firLenBox_, (juce::Component*) trimLabel_,
+                                    (juce::Component*) trimSlider_ })
+            if (c != nullptr) c->setAlpha (v);
+    };
 
     // Unity path (spec 5.2): a warn-toned hint + the secondary "Continue without calibration"
     // button, both shown only while BOTH slots are empty (setUnityState drives visibility).

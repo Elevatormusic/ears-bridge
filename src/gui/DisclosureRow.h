@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
+#include "gui/MotionRamp.h"
 
 namespace eb {
 
@@ -20,11 +21,16 @@ public:
     void clickForTest();                           // documented seam: flip + clicked(), sync
     void paintButton (juce::Graphics&, bool over, bool down) override;
     int summaryAvailableWidth() const;             // width left for the summary after the measured title column (test seam)
+    // P4 motion: the chevron eases 0<->90 degrees over MotionRamp::kMotionMs (frame-exact .15s-ish).
+    // amount 0 = closed glyph, 1 = open glyph; mid-values only while the ramp runs.
+    float chevronAmountForTest() const { return getToggleState() ? chevRamp_.value() : 1.0f - chevRamp_.value(); }
+    MotionRamp& chevronRampForTest() { return chevRamp_; }
 protected:
     void clicked() override;
 private:
     juce::Rectangle<int> layoutTitleColumn (juce::Rectangle<int>& content) const; // single source: carves the title column off content, returns the summary remainder
     juce::String summary_;
+    MotionRamp chevRamp_;                          // P4: rotation ease, both directions (state supplies the direction)
     bool locked_ = false;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DisclosureRow)
 };

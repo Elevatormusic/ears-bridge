@@ -29,7 +29,18 @@ ConnectStage::ConnectStage() {
     addAndMakeVisible (viewport_);
 
     content_.addAndMakeVisible (notUsingDirac_);
-    notUsingDirac_.onOpenChanged = [this] (bool) { resized(); };
+    notUsingDirac_.onOpenChanged = [this] (bool open) {
+        resized();
+        // P4 motion (frozen decision 2): the disclosed override fades in AT its final layout; the
+        // push-down is instant. Close is instant — snapToEnd restores alpha 1 for the next open.
+        // A setLocked(true)-triggered open (persisted override ON at launch) rides the same ramp:
+        // a harmless one-shot 160 ms fade. syncOverrideDisclosure is click/restore-driven (never
+        // per-tick), and DisclosureRow::setOpen is change-guarded besides — no ramp-restart churn.
+        if (open) revealRamp_.start(); else revealRamp_.snapToEnd();
+    };
+    revealRamp_.onTick = [this] {
+        if (overrideToggle_ != nullptr) overrideToggle_->setAlpha (revealRamp_.value());
+    };
 }
 
 void ConnectStage::Content::paint (juce::Graphics& g) {

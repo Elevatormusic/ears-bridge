@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include "gui/LevelMeter.h"
+#include "gui/SystemA11y.h"
 
 // Regression for the field bug "clip never resets / levels red instead of green": the clip latch
 // used to clear ONLY on full silence, so a single transient clip left the readout stuck on "CLIP"
@@ -45,4 +47,20 @@ TEST_CASE("LevelMeter::tagFor - worded tags, never colour alone (P3)") {
     CHECK (LM::tagFor (-15.0f, true,  false) == "clip");      // clip beats everything
     CHECK (LM::tagFor (-15.0f, false, true)  == "to Dirac");  // the Out meter is a routing readout
     CHECK (LM::tagFor (-15.0f, true,  true)  == "clip");      // ...but a clipped Out still says clip
+}
+
+TEST_CASE("LevelMeter ballistics: Reduce Motion snaps; animated path keeps fast-attack/slow-release (P4)") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::LevelMeter m ("L");
+    // POSITIVE (RM OFF): release is ballistic - a drop decays by 0.80/tick, it does not snap.
+    eb::SystemA11y::setForTest (false, false, false);
+    m.setLevel (1.0f, false);
+    m.setLevel (0.1f, false);
+    CHECK (m.levelForTest() == Catch::Approx (0.80f));         // max(0.1, 1.0*0.8)
+    // NEGATIVE (RM ON): the same drop SNAPS to the value - no easing under the flag.
+    eb::SystemA11y::setForTest (true, false, false);
+    m.setLevel (1.0f, false);
+    m.setLevel (0.1f, false);
+    CHECK (m.levelForTest() == Catch::Approx (0.1f));
+    eb::SystemA11y::setForTest (false, false, false);
 }

@@ -88,6 +88,7 @@ public:
     CalibrateStage&  calibrateStageForTest() { return calibrateStage_; }
     ConnectStage&    connectStageForTest()  { return connectStage_; }
     juce::ToggleButton& overrideToggleForTest() { return overrideToggle; }
+    juce::ToggleButton& complexPhaseToggleForTest() { return complexPhaseToggle; }   // P4: reveal-fade probe
     juce::TextButton& connectContinueForTest() { return connectStage_.continueButton(); }
     juce::TextButton& startButtonForTest() { return startStop; }
     FormatCluster&   fmtClusterForTest() { return fmtCluster_; }
