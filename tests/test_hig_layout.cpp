@@ -155,11 +155,16 @@ TEST_CASE("MainComponent::resized() relays stages: a newly-visible stage surface
     const auto pf = tmp.getChildFile ("d.png");
 
     mc.setSize (900, 780);
-    // Pin Measure so the status lines + dots are the visible stage; a distinctive driven text lets us
-    // find the surface in the descriptor by label.
-    mc.forceWizardStepForTest (eb::WizardStep::Measure);
-    const juce::String driven = "Left earcup: verified clean";
-    mc.driveHeaderForTest (driven, "Right earcup: verified clean", /*showDots*/ true);
+    // P3 Task 7 re-point: the driven header retired with statusLineR/dots - the VerdictCard grid is
+    // the stage-hosted surface now. The LEFT clean card's fix body is the distinctive driven text.
+    eb::EarGradeSnapshot cleanE, margE;
+    cleanE.state = (int) eb::RefMonState::GradedClean;    cleanE.sweepSnrDb = 30; cleanE.irSnrDb = 56; cleanE.thdPercent = 0.8f; cleanE.peakDb = -8;
+    margE.state  = (int) eb::RefMonState::GradedMarginal; margE.sweepSnrDb  = 18; margE.irSnrDb  = 52; margE.thdPercent  = 0.3f; margE.peakDb  = -8;
+    const auto clean = eb::verdictCardModelAuto ("LEFT EAR",  cleanE, 0u, {}, false, false);
+    const auto marg  = eb::verdictCardModelAuto ("RIGHT EAR", margE,  0u, {}, false, false);
+    mc.driveVerdictForTest (clean, marg, false);
+    const juce::String driven = clean.fixBody;   // "A strong, low-noise capture - ..." (spec 6 clean copy)
+    CHECK (driven == "A strong, low-noise capture - Dirac will treat this ear as precise.");
 
     hig::writeDesignProbe (mc, jf, pf);
     const auto tree = juce::JSON::parse (jf);
@@ -173,7 +178,7 @@ TEST_CASE("MainComponent::resized() relays stages: a newly-visible stage surface
             const auto* b = e.getProperty ("bounds", {}).getDynamicObject();
             REQUIRE (b != nullptr);
             const int w = (int) b->getProperty ("w"), h = (int) b->getProperty ("h");
-            INFO ("driven statusLine showing=" << (int) showing << " bounds " << w << "x" << h);
+            INFO ("driven fixBody showing=" << (int) showing << " bounds " << w << "x" << h);
             if (showing && w > 0 && h > 0) foundShowingNonEmpty = true;
         }
     mc.forceThemeForTest (wasDark);
@@ -215,64 +220,94 @@ TEST_CASE("HIG gate bites: probe+score flags a real overlap and a real clip (not
 }
 
 // ==================================================================================================
-// #68: the per-ear verdict text + quality dots were never RENDER-verified - the captured two-line
-// header only exists mid-run, which the construct-and-probe sweep above never reaches. Drive the
-// WORST-CASE captured wording (generated from the pure StatusLadder, so this test tracks wording
-// changes automatically) through the REAL header at the MINIMUM window and score the render.
+// #68 (P3 Task 7 re-point): the per-ear verdict was never RENDER-verified. The two-line header +
+// dots retired - the render-ratification budget is re-derived for the CARD (spec 6): drive the
+// worst-case CARD MODELS through the real Measure stage at the MINIMUM window, score dark+light for
+// blocking findings, and pin the promoted fix body's textOverflows:false (measured-wrap budget).
+// Cases: (1) CLIPPED marginal (longest fix body via clipFixBody); (2) the longest CALM model (clean
+// + the ratified drift note headlining); (3) SUSPECT (the Red-SNR ladder note - 3 lines at card
+// width, the T2-review trust-bug scene); (4) RE-LEARN (the unpinned qualifier squish scene).
 // ==================================================================================================
-TEST_CASE("HIG gate: the captured two-line header renders clean at the minimum window [#68]") {
+TEST_CASE("HIG gate: worst-case VerdictCards render clean at the minimum window [#68]") {
     juce::ScopedJuceInitialiser_GUI juceInit;
     auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
     eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
                                                           tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
     const bool wasDark = eb::Theme::dark();
+    // NO "duplicate" in this blocking set (a DOCUMENTED, scoped exclusion): the per-ear grid
+    // legitimately repeats identical structural labels across its two cards - "SNR"/"IR-SNR"/"THD"
+    // column heads and the "Details" rows are the same text at the same size BY DESIGN (one card
+    // component, two ears). The duplicate rule is a copy-paste-bug detector; across this pair it
+    // can only fire on the intended structure. Every other test keeps the full blocking set.
     const auto blocking = [] (const eb::hig::Finding& f) {
-        return f.category == "overlap" || f.category == "clip" || f.category == "duplicate"
+        return f.category == "overlap" || f.category == "clip"
             || f.category == "target-size" || f.category == "contrast"; };
 
-    // Case 1: the WORST captured state - both ears graded but CLIPPED with low SNR (the longest
-    // compact line2: two full clip-cut clauses) under the Warn headline.
-    eb::EarGradeSnapshot clipped;
-    clipped.state = (int) eb::RefMonState::GradedClean;
-    clipped.irSnrDb = 54.0f; clipped.thdPercent = 0.3f; clipped.sweepSnrDb = 12.0f; clipped.peakDb = 1.6f;
-    eb::RunningSnapshot s1;
-    s1.referenceLoaded = true; s1.earL = clipped; s1.earR = clipped;
-    const auto out1 = eb::runningStatus (s1);
-
-    // Case 2: the longest CALM captured state - verified ears with peak tails, plus the chain
-    // advisory tail (only calm lines carry it) on the green headline.
-    eb::EarGradeSnapshot verified = clipped;
-    verified.sweepSnrDb = 31.0f; verified.peakDb = -6.2f;
-    eb::RunningSnapshot s2;
-    s2.referenceLoaded = true; s2.earL = verified; s2.earR = verified;
-    s2.advisoryTail = " - input, cable 16-bit - 24-bit+ recommended for the cleanest measurement";
-    const auto out2 = eb::runningStatus (s2);
+    const auto snap = [] (eb::RefMonState st, float snr, float ir, float thd, float peak) {
+        eb::EarGradeSnapshot e;
+        e.state = (int) st; e.sweepSnrDb = snr; e.irSnrDb = ir; e.thdPercent = thd; e.peakDb = peak;
+        return e;
+    };
+    // (1) CLIPPED on a marginal ear: clip beats the band note - clipFixBody is the longest fix body.
+    const auto clipped = eb::verdictCardModelAuto ("LEFT EAR",
+        snap (eb::RefMonState::GradedMarginal, 18.0f, 54.0f, 0.3f, +1.6f), 0u, {}, false, false);
+    CHECK (clipped.fixBody == eb::clipFixBody (1.6f));               // the intended worst case IS driven
+    // (2) longest CALM: clean + the RATIFIED drift note headlining ("Worth checking." lead).
+    eb::ShapeScalars drift; drift.driftMaxDb = -9.4f; drift.hfShelfDb = -4.4f;
+    const auto calmDrift = eb::verdictCardModelAuto ("LEFT EAR",
+        snap (eb::RefMonState::GradedClean, 31.0f, 56.0f, 0.4f, -6.2f), eb::ShapeFlag::kDrift, drift, false, false);
+    CHECK (calmDrift.fixLead == "Worth checking.");
+    // (3) SUSPECT: the Red-SNR ladder action note (T2 review: needs 3 lines vs the old fixed 32px -
+    // a clipped action line on the Danger card is a trust bug; the card wraps to MEASURED height).
+    const auto suspect = eb::verdictCardModelAuto ("LEFT EAR",
+        snap (eb::RefMonState::GradedSuspect, 8.0f, 20.0f, 6.0f, -8.0f), 0u, {}, false, false);
+    CHECK (suspect.badge == "Suspect");
+    // (4) RE-LEARN: gradeWord "No match" beside the qualifier (unpinned copy - the squish scene).
+    const auto relearn = eb::verdictCardModelAuto ("LEFT EAR",
+        snap (eb::RefMonState::ReferenceStale, 0, 0, 0, -120.0f), 0u, {}, false, false);
+    CHECK (relearn.badge == "Re-learn");
+    // Sibling RIGHT cards: clean beside the non-clean cases, marginal beside the clean calm+drift
+    // case (scene variety - and no scene renders the same grade word on both cards).
+    const auto cleanR = eb::verdictCardModelAuto ("RIGHT EAR",
+        snap (eb::RefMonState::GradedClean, 30.0f, 56.0f, 0.8f, -8.0f), 0u, {}, false, false);
+    const auto margR = eb::verdictCardModelAuto ("RIGHT EAR",
+        snap (eb::RefMonState::GradedMarginal, 18.0f, 52.0f, 0.3f, -8.0f), 0u, {}, false, false);
 
     const auto jf = tmp.getChildFile ("h.json");
     const auto pf = tmp.getChildFile ("h.png");
     juce::StringArray bad;
-    struct Case { const eb::StatusOut* o; const char* name; };
-    const Case cases[] = { { &out1, "clipped" }, { &out2, "verified+advisory" } };
+    struct Case { const eb::VerdictCardModel* m; const eb::VerdictCardModel* r; const char* name; };
+    const Case cases[] = { { &clipped, &cleanR, "clipped" }, { &calmDrift, &margR, "calm+drift" },
+                           { &suspect, &cleanR, "suspect" }, { &relearn, &cleanR, "relearn" } };
     for (bool dark : { true, false }) {
         mc.forceThemeForTest (dark);
         for (auto& c : cases) {
             mc.setSize (900, 720);                       // the app's hard minimum (Main.cpp setResizeLimits)
-            // The driven status lines + dots now live in MeasureStage — pin it so they're in the visible tree.
-            mc.forceWizardStepForTest (eb::WizardStep::Measure);
-            mc.driveHeaderForTest (c.o->line1.text, c.o->line2.text, /*showDots*/ true);
+            mc.driveVerdictForTest (*c.m, *c.r, false);
             hig::writeDesignProbe (mc, jf, pf);
-            for (auto& f : eb::hig::scoreDescriptor (juce::JSON::parse (jf)))
+            const auto tree = juce::JSON::parse (jf);
+            for (auto& f : eb::hig::scoreDescriptor (tree))
                 if (blocking (f))
                     bad.add (juce::String (dark ? "dark" : "light") + "/" + c.name + ": "
                              + f.category + " on " + f.element + " - " + f.message);
+            // The fix body's measured-wrap budget, pinned non-vacuously (the test_verdictcard idiom):
+            // the label must be IN the descriptor with textOverflows:false.
+            bool sawFixBody = false;
+            if (const auto* els = tree.getProperty ("elements", {}).getArray())
+                for (auto& e2 : *els)
+                    if (e2.getProperty ("label", {}).toString() == c.m->fixBody) {
+                        sawFixBody = true;
+                        if ((bool) e2.getProperty ("textOverflows", false))
+                            bad.add (juce::String (dark ? "dark" : "light") + "/" + c.name
+                                     + ": fix body overflows the card");
+                    }
+            if (! sawFixBody)
+                bad.add (juce::String (dark ? "dark" : "light") + "/" + c.name
+                         + ": fix body label missing from the descriptor (vacuous budget check)");
         }
     }
     mc.forceThemeForTest (wasDark);
-    INFO ("line1(clipped)  = " << out1.line1.text
-          << "\nline2(clipped)  = " << out1.line2.text
-          << "\nline1(verified) = " << out2.line1.text
-          << "\nline2(verified) = " << out2.line2.text
-          << "\nblocking findings (" << bad.size() << "):\n" << bad.joinIntoString ("\n"));
+    INFO ("blocking findings (" << bad.size() << "):\n" << bad.joinIntoString ("\n"));
     CHECK (bad.isEmpty());
     tmp.deleteRecursively();
 }
@@ -779,16 +814,42 @@ TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3
     auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
     eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
                                                           tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
-    static_assert (eb::MeasureStage::kWorkflowStateCount == 6,
-                   "new Measure workflow state: extend this gate's driver (Task 7 grows it)");
+    static_assert (eb::MeasureStage::kWorkflowStateCount == 9,
+                   "new Measure workflow state: extend this gate's driver");
     using WS = eb::MeasureStage::WorkflowState;
     mc.setSize (900, 720);
     mc.forceWizardStepForTest (eb::WizardStep::Measure);
     auto& stage = mc.measureStageForTest();
 
+    // P3 Task 7: the verdict-state card models (clean L + marginal R; stale variants; the
+    // details-open R carries a flagged Drift chip + observation - warn-toned content the RULE2
+    // walker must keep above the fold).
+    const auto snap = [] (eb::RefMonState st, float snr, float ir, float thd) {
+        eb::EarGradeSnapshot e;
+        e.state = (int) st; e.sweepSnrDb = snr; e.irSnrDb = ir; e.thdPercent = thd; e.peakDb = -8.0f;
+        return e;
+    };
+    const auto cleanL = eb::verdictCardModelAuto ("LEFT EAR",
+        snap (eb::RefMonState::GradedClean, 30, 56, 0.8f), 0u, {}, false, false);
+    const auto margR = eb::verdictCardModelAuto ("RIGHT EAR",
+        snap (eb::RefMonState::GradedMarginal, 18, 52, 0.3f), 0u, {}, false, false);
+    const auto staleL = eb::verdictCardModelAuto ("LEFT EAR",
+        snap (eb::RefMonState::GradedClean, 30, 56, 0.8f), 0u, {}, true, false);
+    const auto staleR = eb::verdictCardModelAuto ("RIGHT EAR",
+        snap (eb::RefMonState::GradedMarginal, 18, 52, 0.3f), 0u, {}, true, false);
+    eb::ShapeScalars drift; drift.driftMaxDb = -9.4f;
+    const auto margDriftR = eb::verdictCardModelAuto ("RIGHT EAR",
+        snap (eb::RefMonState::GradedMarginal, 18, 52, 0.3f), eb::ShapeFlag::kDrift, drift, false, false);
+
     const auto apply = [&] (WS s) {
         using Lead = eb::MeasureStage::Lead;
         using CC   = eb::CaptureCardModel;
+        // The three verdict arms drive the SAME seam the render-ratification uses (pin + lead +
+        // models + details); everything else drives the stage feeds directly.
+        if (s == WS::VerdictBoth)        { mc.driveVerdictForTest (cleanL, margR, false); return; }
+        if (s == WS::VerdictStale)       { mc.driveVerdictForTest (staleL, staleR, false); return; }
+        if (s == WS::VerdictDetailsOpen) { mc.driveVerdictForTest (cleanL, margDriftR, true); return; }
+        mc.driveVerdictForTest (eb::VerdictCardModel{}, eb::VerdictCardModel{}, false);   // grid back to CaptureCards
         const Lead lead = s == WS::ReferenceNeeded ? Lead::Reference
                         : s == WS::HwDirac ? Lead::HwDirac : Lead::Waiting;
         stage.setLead (lead);
@@ -812,11 +873,90 @@ TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3
         apply ((WS) i);
         auto& vp = stage.viewportForTest();
         const int contentH = vp.getViewedComponent()->getHeight(), vpH = vp.getHeight();
-        if (contentH > vpH)
+        // RULE1 (content <= viewport) for every state EXCEPT VerdictDetailsOpen - details expansion
+        // is sanctioned push-down displacement (spec 4 RULE2), gated by the triplet below instead.
+        if (i != (int) WS::VerdictDetailsOpen && contentH > vpH)
             bad.add ("RULE1 state " + juce::String (i) + ": content " + juce::String (contentH)
                      + " > viewport " + juce::String (vpH));
+        if (i == (int) WS::VerdictDetailsOpen) {
+            auto& card = stage.verdictCardForTest (1);
+            if (! fullyVisibleIn (vp, card))
+                bad.add ("RULE2a VerdictDetailsOpen: the opened card does not fully fit the viewport");
+            if (! fullyVisibleIn (vp, card.detailsRowForTest()))
+                bad.add ("RULE2b VerdictDetailsOpen: the collapse affordance left the visible area");
+        }
         for (auto& s2 : displacedWarnSurfaces (vp))
             bad.add ("RULE2 state " + juce::String (i) + ": warn surface displaced: " + s2);
+    }
+
+    // ---- T5-routed scene: the chain-mismatch waiting hint (the most-specific-known escalation
+    // carrying a real chain summary) renders inside the fold with no displaced warn surface and
+    // no clipped text (the hint is a 2-line INFO label; a production-shaped summary is the widest).
+    {
+        mc.driveVerdictForTest (eb::VerdictCardModel{}, eb::VerdictCardModel{}, false);
+        stage.setLead (eb::MeasureStage::Lead::Waiting);
+        const auto head = eb::MeasureStage::measureHeadCopy (eb::MeasureStage::Lead::Waiting, false, false);
+        stage.setHeadCopy (head.title, head.sub);
+        stage.setWaitHint (eb::MeasureStage::waitingHint (
+            eb::MeasureStage::kArmedNoSweepHintSeconds, false, /*chainMismatch*/ true,
+            "input 44.1k, cable 44.1k, Dirac output 44.1k - set it to 48k", false));
+        mc.resized();
+        auto& vp = stage.viewportForTest();
+        if (vp.getViewedComponent()->getHeight() > vp.getHeight())
+            bad.add ("RULE1 chain-mismatch hint: content > viewport");
+        for (auto& s2 : displacedWarnSurfaces (vp))
+            bad.add ("RULE2 chain-mismatch hint: warn surface displaced: " + s2);
+        const auto jf = tmp.getChildFile ("chain.json");
+        hig::writeDesignProbe (mc, jf, tmp.getChildFile ("chain.png"));
+        for (auto& f : eb::hig::scoreDescriptor (juce::JSON::parse (jf)))
+            if (f.category == "clip")
+                bad.add ("chain-mismatch hint: " + f.category + " on " + f.element + " - " + f.message);
+        stage.setWaitHint ({});
+    }
+
+    // ---- T2-review gate: the PATHOLOGICAL all-findings details-open card, MEASURED --------------
+    // The spec's ~456 estimate was invalidated by measured-wrap. The true worst case: kNoBand is
+    // STRUCTURALLY EXCLUSIVE with kTruncHi/kTruncLo (detectTruncation returns zero edges with both
+    // trunc flags false when the banded derivation fails - the ONLY path MainComponent maps to
+    // kNoBand; the trunc bits come from the same report's valid-band path), so the worst is every
+    // other anomaly bit + BOTH trunc bits: 9 observation lines + the provisional footer, 7 flagged
+    // chips. COLLAPSED it must obey RULE1 like any verdict state (asserted). OPEN it exceeds the
+    // viewport at 900x720 - a KNOWN, reported bound awaiting an internal-budgeting ruling (P3 T7
+    // report; "propose, don't improvise") - so the open state asserts only what MUST hold today:
+    // the collapse affordance stays visible (RULE2b) and the measured bound is logged via WARN.
+    {
+        eb::ShapeScalars s;
+        s.driftMaxDb = -9.4f; s.hfShelfDb = -4.4f; s.combDepthDb = 6.2f; s.combDelayMs = 1.23f;
+        s.effLoHz = 152.0f; s.effHiHz = 8010.0f; s.lobeWidth = 3.5f; s.stepDb = 2.6f;
+        s.resonanceHz = 4200.0f; s.humBaseHz = 50;
+        const unsigned worstFlags = eb::ShapeFlag::kAllAnomalyMask & ~eb::ShapeFlag::kNoBand;
+        eb::EarGradeSnapshot worstE;
+        worstE.state = (int) eb::RefMonState::GradedSuspect;
+        worstE.sweepSnrDb = 8.0f; worstE.irSnrDb = 20.0f; worstE.thdPercent = 6.0f; worstE.peakDb = -8.0f;
+        const auto patho = eb::verdictCardModelAuto ("RIGHT EAR", worstE, worstFlags, s, false, false);
+        CHECK (patho.flaggedChips == 7);                          // every chip family fires
+        CHECK (patho.observations.size() == 9);                   // 9 findings (kNoBand excluded)
+
+        mc.driveVerdictForTest (cleanL, patho, false);            // COLLAPSED: an ordinary RULE1 state
+        auto& vp = stage.viewportForTest();
+        const int collapsedH = vp.getViewedComponent()->getHeight();
+        if (collapsedH > vp.getHeight())
+            bad.add ("RULE1 pathological collapsed: content " + juce::String (collapsedH)
+                     + " > viewport " + juce::String (vp.getHeight()));
+
+        mc.driveVerdictForTest (cleanL, patho, true);             // OPEN: measure the true worst
+        auto& card = stage.verdictCardForTest (1);
+        const auto cardInVp = vp.getLocalArea (&card, card.getLocalBounds());
+        WARN ("pathological all-findings details-open card: preferredHeight(273) = "
+              << card.preferredHeight (273) << "px, bottom-in-viewport = " << cardInVp.getBottom()
+              << "px vs viewport " << vp.getHeight()
+              << "px - internal budgeting proposal pending (P3 Task 7 report)");
+        if (! fullyVisibleIn (vp, card.detailsRowForTest()))
+            bad.add ("RULE2b pathological open: the collapse affordance left the visible area");
+        // RULE2c holds even here: the fold cuts only the calm dim observation lines - the warn-toned
+        // chips sit directly under the details row, above the fold. No warn surface is ever displaced.
+        for (auto& s2 : displacedWarnSurfaces (vp))
+            bad.add ("RULE2c pathological open: warn surface displaced: " + s2);
     }
 
     // ---- routed ruling (Task 5 review, landed with Task 6): 2-line title mode ----

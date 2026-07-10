@@ -363,8 +363,10 @@ static_assert ((verdictdetail::chipUnion() & ShapeFlag::kBaselineSet) == 0u, "kB
     return {};
 }
 
-struct VerdictObservation { juce::String text; bool provisional = false; };
-struct VerdictChipView    { juce::String label; bool flagged = false; juce::String value; };
+struct VerdictObservation { juce::String text; bool provisional = false;
+                            bool operator== (const VerdictObservation&) const = default; };
+struct VerdictChipView    { juce::String label; bool flagged = false; juce::String value;
+                            bool operator== (const VerdictChipView&) const = default; };
 
 struct VerdictCardModel {
     bool graded = false;                // false && !hwDirac => the grid shows a CaptureCard instead
@@ -382,6 +384,9 @@ struct VerdictCardModel {
     int flaggedChips = 0;
     VerdictChipView chips[kVerdictChipCount];
     std::vector<VerdictObservation> observations;
+    // P3 Task 7: the stage's verdict feed runs on the 30 Hz tick - equality is the set-if-changed
+    // guard (MeasureStage::setVerdictModels), so an unchanged truth never relayouts the column.
+    bool operator== (const VerdictCardModel&) const = default;
 };
 
 // Promoted-fix priority (spec 6, frozen): a failed capture never reaches the card (the grid shows the

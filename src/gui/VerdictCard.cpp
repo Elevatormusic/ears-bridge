@@ -126,8 +126,11 @@ void VerdictCard::setModel (const VerdictCardModel& m) {
     if (anyProv)
         obs.add ("Provisional findings aren't ratified on hardware yet - shown for information only.");
     observations_.setText (obs.joinIntoString ("\n"), juce::dontSendNotification);
+    // Collapsed-state tooltip parity (spec 6): the expanded observation text also rides the details
+    // row's hover tooltip, so the full findings stay discoverable while the card is collapsed.
+    details_.setTooltip (observations_.getText());
     staleTag_.setText (m.stale ? "from your previous configuration" : juce::String(), juce::dontSendNotification);
-    staleTag_.setVisible (m.stale);
+    staleTag_.setVisible (m.stale && inlineStaleTag_);   // in-context the stage strip speaks (see header)
     setAlpha (m.stale ? 0.55f : 1.0f);              // 5.4: evidence dimmed, never deleted (static, never animated)
     setDescription (m.earName + ", " + m.badge + (m.stale ? ", from your previous configuration" : ""));
     resized();
@@ -138,6 +141,14 @@ void VerdictCard::setModel (const VerdictCardModel& m) {
 }
 
 void VerdictCard::setDetailsOpen (bool open) { details_.setOpen (open); }
+
+void VerdictCard::setInlineStaleTagEnabled (bool on) {
+    if (inlineStaleTag_ == on) return;
+    inlineStaleTag_ = on;
+    staleTag_.setVisible (model_.stale && on);
+    resized();
+    if (onLayoutChanged) onLayoutChanged();          // the tag row claims/releases 14px
+}
 
 int VerdictCard::layoutRows (int width, bool apply) {
     auto rr = juce::Rectangle<int> (0, 0, width, 100000).reduced (kPadX, 0);
@@ -182,7 +193,10 @@ int VerdictCard::layoutRows (int width, bool apply) {
     rr.removeFromTop (1);                                       // the hairline above the note
     rr.removeFromTop (6);
     place (fixLead_, kFixLeadH);
-    place (fixBody_, kFixBodyH);
+    // MEASURED wrapped height, floored at the frozen 2-line reserve (P3 Task 7, T2-review gate):
+    // the Red-SNR / clip action bodies run 3 lines at the 273px card width - a fixed slot clipped
+    // the Danger card's action line (a trust bug). Never copy surgery; the geometry follows the text.
+    place (fixBody_, juce::jmax (kFixBodyH, wrappedTextHeight (fixBody_, rr.getWidth())));
     if (staleTag_.isVisible()) place (staleTag_, 14);
     const bool open = details_.isVisible() && details_.isOpen();
     if (details_.isVisible()) place (details_, kDetailsH);

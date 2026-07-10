@@ -977,3 +977,114 @@ TEST_CASE("P3 mid-capture failure: the failed card is sticky and never falls bac
     CHECK (mc.measureStageForTest().captureCardForTest (1).titleForTest().getText() == "Next in the routine");
     tmp.deleteRecursively();
 }
+
+// ==================================================================================================
+// P3 Task 7: "Measure again" semantics. Never auto-advance, never "re-run sweep": the button re-arms
+// the VIEW (and the engine when stopped); the spine's Done-ness stays computed from the stamps.
+// ==================================================================================================
+TEST_CASE("P3 Measure again: verdicts showing -> refresh face; click re-arms the view; new grade restores") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 720);
+    mc.forceWizardStepForTest (eb::WizardStep::Measure);
+    auto& t = mc.measureStageForTest().transportButton();
+    CHECK (t.getButtonText() == "Start listening");                    // no verdicts yet
+
+    mc.publishGradeForTest (0, (int) eb::RefMonState::GradedClean);          // both ears grade
+    mc.publishGradeForTest (1, (int) eb::RefMonState::GradedMarginal, 18.0f); // 18 dB = Orange band
+                                                                              // (classifySweepSnr: [18,25)
+                                                                              // -> Orange, RefMonitor.h)
+    CHECK (t.getButtonText() == "Measure again");                      // the §2 verb - NEVER "re-run sweep"
+    CHECK (t.getProperties()["glyph"].toString() == "refresh");
+    // Both cards render their grades (the grid flipped CaptureCard -> VerdictCard per ear).
+    CHECK (mc.measureStageForTest().verdictCardForTest (0).badgeForTest().getText() == "Clean");
+    CHECK (mc.measureStageForTest().verdictCardForTest (1).badgeForTest().getText() == "Marginal SNR");
+
+    t.onClick();                                                       // Measure again (engine stopped path
+                                                                       //  refuses start via the gate - the
+                                                                       //  VIEW re-arm is what we assert)
+    CHECK (t.getButtonText() == "Start listening");                    // back to the wait/instruction state
+    mc.publishGradeForTest (0, (int) eb::RefMonState::GradedClean);    // a NEW grade lands...
+    CHECK (t.getButtonText() == "Measure again");                      // ...the verdict view returns
+    tmp.deleteRecursively();
+}
+
+TEST_CASE("P3 stale verdicts: config bump dims the cards under the strip; fresh grades clear it") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    mc.setSize (900, 720);
+    mc.forceWizardStepForTest (eb::WizardStep::Measure);
+    mc.publishGradeForTest (0, (int) eb::RefMonState::GradedClean);
+    mc.publishGradeForTest (1, (int) eb::RefMonState::GradedClean);
+    auto& cardL = mc.measureStageForTest().verdictCardForTest (0);
+    CHECK (cardL.getAlpha() > 0.9f);                                   // fresh: full strength
+    mc.bumpConfigGenForTest();
+    mc.forceWizardStepForTest (eb::WizardStep::Measure);               // re-render from the new truth
+    CHECK (cardL.getAlpha() < 0.6f);                                   // §3.2: dimmed, never deleted
+    // T2-review reconciliation (double-stating): IN CONTEXT the stage's stale STRIP is the single
+    // voice - the card's inline tag stays hidden; STANDALONE (no strip) the tag remains the why.
+    CHECK_FALSE (cardL.staleTagForTest().isVisible());
+    {
+        eb::VerdictCard standalone;
+        eb::EarGradeSnapshot e; e.state = (int) eb::RefMonState::GradedClean;
+        e.sweepSnrDb = 30; e.irSnrDb = 56; e.thdPercent = 0.5f; e.peakDb = -8;
+        standalone.setModel (eb::verdictCardModelAuto ("LEFT EAR", e, 0u, {}, /*stale*/ true, false));
+        CHECK (standalone.staleTagForTest().isVisible());
+    }
+    mc.publishGradeForTest (0, (int) eb::RefMonState::GradedClean);
+    mc.publishGradeForTest (1, (int) eb::RefMonState::GradedClean);
+    CHECK (cardL.getAlpha() > 0.9f);                                   // refreshed evidence
+    tmp.deleteRecursively();
+}
+
+// ==================================================================================================
+// P3 Task 7 (routed from Task 6's review): the two CaptureCard/composition holes the happy-path
+// tests missed. (1) applyTheme must re-derive the STATE tones under a HELD model - setModel's
+// set-if-changed early-out no-ops on a theme flip, so the re-tone lives in applyModelTone and this
+// pins it. (2) The composition lambda's Capturing branch (ref.size()/rate -> honest progress) was
+// untested: drive the SAME production composition member through a seam, mirror of
+// driveMidCaptureFailureForTest.
+// ==================================================================================================
+TEST_CASE("P3 CaptureCard theme re-tone: applyTheme re-derives state tones under a HELD model") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    const bool wasDark = eb::Theme::dark();
+    eb::Theme theme;                                        // palette owner for setDarkForTest
+    eb::CaptureCard card;
+    card.setModel (eb::CaptureCardModel::failed ("LEFT EAR"));
+    for (bool dark : { true, false }) {
+        theme.setDarkForTest (dark);
+        card.applyTheme();                                  // the model is HELD - only the palette moved
+        CHECK (card.titleForTest().findColour (juce::Label::textColourId) == eb::Theme::danger());
+        CHECK (card.badgeForTest().findColour (juce::Label::textColourId) == eb::Theme::danger());
+    }
+    card.setModel (eb::CaptureCardModel::capturing ("LEFT EAR", 0.5f, 10));
+    for (bool dark : { true, false }) {
+        theme.setDarkForTest (dark);
+        card.applyTheme();
+        CHECK (card.badgeForTest().findColour (juce::Label::textColourId) == eb::Theme::accentText());
+    }
+    theme.setDarkForTest (wasDark);
+}
+
+TEST_CASE("P3 capture composition: the Capturing branch wires ref.size()/rate into honest progress") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (hermetic (tmp));
+    mc.setSize (900, 720);
+    mc.setReferenceForTest (96000, 48000.0);                // a 2 s learned reference, both ears
+    const auto m = mc.composeCaptureModelForTest (0, 30);   // 30 ticks @ 30 Hz = 1 s elapsed
+    CHECK (m.state == eb::CaptureCardModel::State::Capturing);
+    CHECK (m.foot == "~2 s sweep");                         // duration = ref.size()/rate, labeled approximate
+    CHECK (m.progress == eb::CaptureCard::captureFraction (30, 2.0));   // elapsed over the LEARNED duration
+    // NEGATIVE: no learned reference -> the bar claims NOTHING (never invented Dirac timing).
+    mc.setReferenceForTest (0, 0.0);
+    CHECK (mc.composeCaptureModelForTest (0, 300).progress == 0.0f);
+    // Failed WINS the composition (the sticky §3.1 card names the interrupted capture).
+    mc.driveMidCaptureFailureForTest (1);
+    CHECK (mc.composeCaptureModelForTest (1, 30).state == eb::CaptureCardModel::State::Failed);
+    tmp.deleteRecursively();
+}

@@ -30,6 +30,7 @@ public:
     // duration is unknown (never claim progress the app can't measure). Pure, headless-tested.
     static float captureFraction (int elapsedTicks, double sweepSeconds);
     juce::Label& titleForTest() { return title_; }
+    juce::Label& badgeForTest() { return badge_; }   // P3 Task 7: the theme re-tone pin (applyModelTone)
     void applyTheme();
     void paint (juce::Graphics&) override;
     void resized() override;

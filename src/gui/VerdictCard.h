@@ -20,6 +20,11 @@ public:
     void setDetailsOpen (bool open);                // harness/gate seam + the user path (DisclosureRow)
     bool detailsOpen() const { return details_.isOpen(); }
     int  preferredHeight (int width) const;         // the owner's grid uses this (align-start columns)
+    // P3 Task 7 (T2-review reconciliation of the stale double-stating): in the Measure stage the
+    // §5.4 stale STRIP is the single voice for the staleness clause, so the stage disables the
+    // card's inline tag; standalone (no strip) the tag stays the visible why. Dimming + the a11y
+    // description clause are unconditional either way (spec 5.4).
+    void setInlineStaleTagEnabled (bool on);
 
     std::function<void()> onLayoutChanged;          // details toggled / a model change changed my height
 
@@ -27,6 +32,7 @@ public:
     DisclosureRow& detailsRowForTest() { return details_; }
     juce::Label&   fixBodyForTest()    { return fixBody_; }
     juce::Label&   badgeForTest()      { return badge_; }
+    juce::Label&   staleTagForTest()   { return staleTag_; }
 
     void applyTheme();
     void paint (juce::Graphics&) override;
@@ -41,6 +47,7 @@ private:
     juce::Label chip_[kVerdictChipCount];
     juce::Label observations_, staleTag_;
     VerdictCardModel model_;
+    bool inlineStaleTag_ = true;                    // false in the Measure grid (the strip speaks)
     juce::Rectangle<int> badgeBg_; juce::Rectangle<int> chipBg_[kVerdictChipCount];
     int fixRuleY_ = 0;                              // hairline above the fix note (paint reads)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VerdictCard)

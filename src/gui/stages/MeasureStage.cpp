@@ -87,6 +87,15 @@ MeasureStage::MeasureStage() {
         content_.addChildComponent (*c);                    // visibility is lead-state-driven (layoutContent)
     content_.addChildComponent (capL_);                     // P3 Task 6: the capture grid (Waiting lead only)
     content_.addChildComponent (capR_);
+    content_.addChildComponent (verdL_);                    // P3 Task 7: the per-ear verdict cards + strip
+    content_.addChildComponent (verdR_);
+    content_.addChildComponent (staleStrip_);
+    // A details toggle / model-height change relayouts the column (push-down displacement, spec 4).
+    verdL_.onLayoutChanged = verdR_.onLayoutChanged = [this] { resized(); };
+    // T2-review reconciliation (double-stating): in THIS stage the §5.4 stale strip is the single
+    // voice for the staleness clause - the cards' inline tags stay off (dimming + a11y remain).
+    verdL_.setInlineStaleTagEnabled (false);
+    verdR_.setInlineStaleTagEnabled (false);
     liveL_.setShowTargetBand (true);
     liveR_.setShowTargetBand (true);
     applyTheme();
@@ -96,6 +105,10 @@ void MeasureStage::applyTheme() {
     header_.applyTheme();
     capL_.applyTheme();
     capR_.applyTheme();
+    verdL_.applyTheme();
+    verdR_.applyTheme();
+    staleStrip_.setColour (juce::Label::textColourId, Theme::textDim());
+    staleStrip_.setFont (juce::Font (juce::FontOptions (12.0f)));
     refLead_.setColour (juce::Label::textColourId, Theme::textDim());
     refLead_.setFont (juce::Font (juce::FontOptions (12.0f)));
     refLead_.setText ("The reference is the yardstick every sweep is graded against. Learn it once; it's stored for next time.",
@@ -116,19 +129,13 @@ void MeasureStage::applyTheme() {
     meterLegend_.setText ("green target -18 to -12 dBFS", juce::dontSendNotification);
 }
 
-void MeasureStage::adopt (juce::Label& statusLine, juce::Label& statusLineR,
-                          GradeMetricDotsView& gradeDotsL, GradeMetricDotsView& gradeDotsR,
-                          juce::TextButton& learnRefButton, juce::Label& learnRefResultLabel,
-                          juce::ToggleButton& hwDiracToggle) {
+void MeasureStage::adopt (juce::Label& statusLine, juce::TextButton& learnRefButton,
+                          juce::Label& learnRefResultLabel, juce::ToggleButton& hwDiracToggle) {
     statusLine_ = &statusLine;                   content_.addAndMakeVisible (statusLine);
-    statusLineR_ = &statusLineR;                 content_.addAndMakeVisible (statusLineR);
-    gradeDotsL_ = &gradeDotsL;                   content_.addAndMakeVisible (gradeDotsL);
-    gradeDotsR_ = &gradeDotsR;                   content_.addAndMakeVisible (gradeDotsR);
     learnRefButton_ = &learnRefButton;           content_.addChildComponent (learnRefButton);
     learnRefResultLabel_ = &learnRefResultLabel; content_.addChildComponent (learnRefResultLabel);
     hwDiracToggle_ = &hwDiracToggle;             content_.addAndMakeVisible (hwDiracToggle);
     statusLine.setJustificationType (juce::Justification::centredLeft);
-    statusLineR.setJustificationType (juce::Justification::centredLeft);
 
     int fo = 1;                                            // learn action, hw toggle, transport last
     learnRefButton.setExplicitFocusOrder (fo++);
@@ -145,12 +152,29 @@ void MeasureStage::feedLiveLevels (float l, bool cl, float r, bool cr, float out
     liveL_.setLevel (l, cl); liveR_.setLevel (r, cr); liveOut_.setLevel (out, co);
 }
 void MeasureStage::setActiveEar (int ear) { liveL_.setActive (ear == 0); liveR_.setActive (ear == 1); }
-// The grid's geometry is model-invariant (fixed 148px rows; the bar is paint-only) and its
-// visibility is LEAD-driven in layoutContent, so a model feed never needs a relayout - each card
-// is set-if-changed and repaints itself only on a real change.
+// The capture grid's geometry is model-invariant (fixed 164px rows - see layoutContent's row
+// budget; the bar is paint-only) and its visibility is LEAD-driven in layoutContent, so a model
+// feed never needs a relayout - each card is set-if-changed and repaints itself only on a real
+// change. (Task 7 review fix: this comment said 148px while the code laid 164 - stale since the
+// Task 6 render-measured sub-slot fix.)
 void MeasureStage::setCaptureModels (const CaptureCardModel& l, const CaptureCardModel& r) {
     capL_.setModel (l);
     capR_.setModel (r);
+}
+
+// P3 Task 7: the verdict feed. Set-if-changed at STAGE level (VerdictCardModel::operator==) because
+// this runs on the 30 Hz tick (refreshWizardView -> refreshMeasureView) - an unchanged truth must
+// not relayout/repaint the column every tick (the Task-6 delta-repaint discipline). VerdictCard's
+// own setModel stays unconditional so applyTheme's setModel(model_) re-tone keeps working (the
+// CaptureCard applyModelTone lesson).
+void MeasureStage::setVerdictModels (const VerdictCardModel& l, const VerdictCardModel& r, bool stale) {
+    if (l == verdModelL_ && r == verdModelR_ && stale == verdStale_) return;
+    verdModelL_ = l; verdModelR_ = r; verdStale_ = stale;
+    verdL_.setModel (l);
+    verdR_.setModel (r);
+    staleStrip_.setText (stale ? "From your previous configuration - measure again to refresh."
+                               : juce::String(), juce::dontSendNotification);
+    resized();
 }
 
 void MeasureStage::Content::paint (juce::Graphics& g) {
@@ -202,23 +226,24 @@ int MeasureStage::layoutContent (int width) {
     if (waitHint_.isVisible()) { waitHint_.setBounds (rr.removeFromTop (32)); rr.removeFromTop (4); }
     rr.removeFromTop (8);
 
-    // ---- capture grid (Waiting lead only; hidden for Reference/HwDirac leads) ----
+    // ---- the per-ear grid: VerdictCard once that ear graded (the payoff), else its CaptureCard ----
+    // (Waiting lead only; hidden for Reference/HwDirac leads.)
     const bool grid = isWait;
-    capL_.setVisible (grid); capR_.setVisible (grid);
+    const bool showVerdL = grid && verdModelL_.graded, showVerdR = grid && verdModelR_.graded;
+    staleStrip_.setVisible (grid && verdStale_ && (showVerdL || showVerdR));
+    if (staleStrip_.isVisible()) { staleStrip_.setBounds (rr.removeFromTop (16)); rr.removeFromTop (4); }
+    capL_.setVisible (grid && ! showVerdL);  capR_.setVisible (grid && ! showVerdR);
+    verdL_.setVisible (showVerdL);           verdR_.setVisible (showVerdR);
     if (grid) {
-        const int cardW = (colW - 14) / 2, cardH = 164;     // 164 = 12+18+10+24+4+48+10+6+6+14+12 (CaptureCard rows;
-                                                            // 48px sub = 3 lines, render-measured - see CaptureCard::resized)
-        auto row = rr.removeFromTop (cardH);
-        capL_.setBounds ({ x0, row.getY(), cardW, cardH });
-        capR_.setBounds ({ x0 + cardW + 14, row.getY(), cardW, cardH });
-        rr.removeFromTop (kCardGap);
-    }
-
-    // ---- TRANSITIONAL (Task 7 replaces with the VerdictCard grid) ----
-    if (gradeDotsL_ && gradeDotsR_ && statusLineR_) {
-        gradeDotsL_->setBounds  (rr.removeFromTop (16));
-        gradeDotsR_->setBounds  (rr.removeFromTop (16));
-        statusLineR_->setBounds (rr.removeFromTop (18));
+        const int cardW = (colW - 14) / 2;
+        // CaptureCard rows are fixed 164 = 12+18+10+24+4+48+10+6+6+14+12 (48px sub = 3 lines,
+        // render-measured, Task 6); a VerdictCard claims its own MEASURED preferred height.
+        const int hL = showVerdL ? verdL_.preferredHeight (cardW) : 164;
+        const int hR = showVerdR ? verdR_.preferredHeight (cardW) : 164;
+        const int rowY = rr.getY();
+        if (showVerdL) verdL_.setBounds ({ x0, rowY, cardW, hL });              else capL_.setBounds ({ x0, rowY, cardW, hL });
+        if (showVerdR) verdR_.setBounds ({ x0 + cardW + 14, rowY, cardW, hR }); else capR_.setBounds ({ x0 + cardW + 14, rowY, cardW, hR });
+        rr.removeFromTop (juce::jmax (hL, hR));                                 // align-start columns
         rr.removeFromTop (kCardGap);
     }
 

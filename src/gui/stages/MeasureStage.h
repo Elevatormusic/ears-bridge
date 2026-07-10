@@ -2,28 +2,25 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
 #include "gui/CaptureCard.h"
-#include "gui/GradeMetricDotsView.h"
+#include "gui/VerdictCard.h"
 #include "gui/LevelMeter.h"
 #include "gui/stages/StageHeader.h"
 
 namespace eb {
 
-// MeasureStage - P3 rebuild parts 1+2 (spec 5.4 [P3-refresh 2026-07-05]): StageHeader (live headline;
+// MeasureStage - P3 rebuild parts 1-3 (spec 5.4 [P3-refresh 2026-07-05]): StageHeader (live headline;
 // the CTA slot IS this stage's transport - "Start listening"/"Stop"/"Measure again", §3.3) over a
 // scrolled 560px column: ONE lead block (Reference card | the §2 instruction/wait block | the
-// hardware-Dirac degraded block), the two-column CaptureCard grid (part 2: Waiting / Capturing /
-// Failed per ear, Waiting lead only), the live status line + timeout hint, the live-meters strip,
-// and the hardware-Dirac toggle. Part 3 adds the VerdictCards.
-// TRANSITIONAL: the old per-ear status lines + quality dots stay adopted below the grid so no
-// surface goes dark mid-branch; Task 7 retires them when the VerdictCards supersede.
+// hardware-Dirac degraded block), the two-column per-ear grid (CaptureCard until that ear grades,
+// then its VerdictCard - part 3's payoff), the live status line + timeout hint, the live-meters
+// strip, and the hardware-Dirac toggle. Stale verdicts dim under the §3.2 strip label. The
+// wireframe survivors (statusLineR + quality dots) retired from the tree in part 3.
 class MeasureStage : public juce::Component {
 public:
     MeasureStage();
 
-    void adopt (juce::Label& statusLine, juce::Label& statusLineR,
-                GradeMetricDotsView& gradeDotsL, GradeMetricDotsView& gradeDotsR,
-                juce::TextButton& learnRefButton, juce::Label& learnRefResultLabel,
-                juce::ToggleButton& hwDiracToggle);
+    void adopt (juce::Label& statusLine, juce::TextButton& learnRefButton,
+                juce::Label& learnRefResultLabel, juce::ToggleButton& hwDiracToggle);
 
     // ---- the §3.3 transport (the header CTA slot; ONE action, this stage's labels) ----
     juce::TextButton& transportButton() { return header_.continueButton(); }
@@ -42,6 +39,12 @@ public:
     // real change). The grid's visibility is LEAD-driven (Waiting lead only - layoutContent).
     void setCaptureModels (const CaptureCardModel& l, const CaptureCardModel& r);
     CaptureCard& captureCardForTest (int ear) { return ear == 1 ? capR_ : capL_; }
+    // P3 Task 7: feed the per-ear VerdictCards (composed by MainComponent::refreshMeasureView from
+    // the published grades + smoothed bands). A graded model flips that ear's grid slot CaptureCard
+    // -> VerdictCard; `stale` shows the §3.2 strip over the (model-dimmed) cards. Set-if-changed
+    // (the feed runs on the 30 Hz tick) - no relayout/repaint churn on an unchanged truth.
+    void setVerdictModels (const VerdictCardModel& l, const VerdictCardModel& r, bool stale);
+    VerdictCard& verdictCardForTest (int ear) { return ear == 1 ? verdR_ : verdL_; }
 
     // ---- pure copy rules (spec §2/§5.4/§7; headless-tested in test_wizardnav.cpp) ----
     struct HeadCopy { juce::String title, sub; };
@@ -52,10 +55,12 @@ public:
                                      const juce::String& chainSummary, bool silentInput);
     static constexpr int kArmedNoSweepHintSeconds = 75;    // §2 heuristic - ON-DEVICE TUNING OWED (#ledger)
 
-    // T10 day-one: gated no-scroll workflow states (grew in Task 6; Task 7 grows it again - the
-    // static_assert in the gate fails closed on each growth). KEEP beside layoutContent's branches.
-    // Capturing/MidCaptureFailed are APPENDED after HwDirac so the existing gate indices stay stable.
-    enum class WorkflowState { ReferenceNeeded, ArmedWaiting, TimeoutHint, HwDirac, Capturing, MidCaptureFailed, Count };
+    // T10 day-one: gated no-scroll workflow states (grew in Tasks 6 + 7 - the static_assert in the
+    // gate fails closed on each growth). KEEP beside layoutContent's branches. New states are
+    // APPENDED so the existing gate indices stay stable. VerdictDetailsOpen is the sanctioned
+    // push-down displacement state (spec 4 RULE2, not RULE1).
+    enum class WorkflowState { ReferenceNeeded, ArmedWaiting, TimeoutHint, HwDirac, Capturing,
+                               MidCaptureFailed, VerdictBoth, VerdictStale, VerdictDetailsOpen, Count };
     static constexpr int kWorkflowStateCount = (int) WorkflowState::Count;
     juce::Viewport& viewportForTest() { return viewport_; }
     StageHeader&    headerForTest()   { return header_; }
@@ -87,15 +92,17 @@ private:
     juce::Label hwLead_;
     // P3 Task 6: the two-column per-ear capture grid (Waiting lead only; views - grading untouched).
     CaptureCard capL_, capR_;
+    // P3 Task 7: the per-ear verdict cards (spec 6) + the §3.2 stale strip over them.
+    VerdictCard verdL_, verdR_;
+    juce::Label staleStrip_;
+    VerdictCardModel verdModelL_, verdModelR_;
+    bool verdStale_ = false;
     // Live-meters strip (this stage's OWN instances - components are single-parent; same data truth).
     juce::Label meterTitle_, meterLegend_;
     LevelMeter  liveL_ { "L" }, liveR_ { "R" }, liveOut_ { "Out" };
     std::vector<juce::Rectangle<int>> cardRects_;          // lead card + meters card fills
 
     juce::Label*         statusLine_ = nullptr;
-    juce::Label*         statusLineR_ = nullptr;           // transitional (retires in Task 7)
-    GradeMetricDotsView* gradeDotsL_ = nullptr;            // transitional (retires in Task 7)
-    GradeMetricDotsView* gradeDotsR_ = nullptr;            // transitional (retires in Task 7)
     juce::TextButton*    learnRefButton_ = nullptr;
     juce::Label*         learnRefResultLabel_ = nullptr;
     juce::ToggleButton*  hwDiracToggle_ = nullptr;

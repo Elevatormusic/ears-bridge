@@ -10,7 +10,6 @@
 #include "gui/FormatCluster.h"
 #include "gui/LevelMeter.h"
 #include "gui/RateMenu.h"
-#include "gui/GradeMetricDotsView.h"   // eb::GradeMetricDotsView (3-color per-metric quality dots)
 #include "gui/GradeBandSmoother.h"     // eb::GradeBandSmoother (per-ear anti-flicker band smoothing)
 #include "net/UpdateChecker.h"
 #include "gui/WizardState.h"        // eb::WizardStep / WizardInputs / computeWizardState (Task 1)
@@ -54,11 +53,14 @@ public:
     // colours + relayout) so the headless gate can score contrast in both modes deterministically.
     void forceThemeForTest (bool dark);
 
-    // #68 render-ratification seam: drive the title-bar header (both status lines + the per-ear quality
-    // dots) with GIVEN text so the headless gate can score the CAPTURED two-line state at the minimum
-    // window - those strings only appear mid-run, which a construct-and-probe test never reaches. Sets
-    // label text + representative dot metrics and relays out; display only, no engine/grading state.
-    void driveHeaderForTest (const juce::String& line1, const juce::String& line2, bool showDots);
+    // #68 render-ratification seam (P3 Task 7 re-point - driveHeaderForTest retired with the header
+    // stack): drive the per-ear VerdictCards with GIVEN models so the headless gate can score the
+    // verdict state at the minimum window - real grades need hardware. Pins the Measure step FIRST
+    // (the live refreshMeasureView recompose would clobber driven models - the Task-6 harness
+    // lesson), then forces the Waiting lead + verdict head copy + the models + the details state.
+    // Display only, no engine/grading state.
+    void driveVerdictForTest (const eb::VerdictCardModel& l, const eb::VerdictCardModel& r,
+                              bool detailsOpenRight);
 
     // Wizard step-forcing seam (beside forceThemeForTest): pin a step deterministically + relayout, so
     // the headless gate can iterate the WizardStep axis (the driven Measure labels now live in MeasureStage).
@@ -164,6 +166,20 @@ public:
     // §3.1 Failed card), then re-render through the SAME live path (refreshWizardView ->
     // refreshMeasureView). Display/state only - no engine call; a real device loss cannot run headless.
     void driveMidCaptureFailureForTest (int ear) { failedCaptureEar_ = ear; refreshWizardView(); }
+    // P3 Task 7 seams (T6 review routed): the composition lambda's Capturing branch - the
+    // ref.size()/rate -> honest-progress wiring - is honesty-critical and unreachable headless (it
+    // needs a Running engine). setReferenceForTest fills the SAME members the learn/reload paths
+    // fill (zeros; only size/rate matter to the composition); composeCaptureModelForTest drives the
+    // SAME production composition member refreshMeasureView uses, with running forced true.
+    void setReferenceForTest (int samples, double rate) {
+        loadedReferenceL_.assign ((size_t) samples, 0.0f);
+        loadedReferenceR_.assign ((size_t) samples, 0.0f);
+        loadedReferenceRateL_ = loadedReferenceRateR_ = rate;
+    }
+    eb::CaptureCardModel composeCaptureModelForTest (int ear, int ticks) {
+        captureEar_ = ear; captureTicks_ = ticks;
+        return composeCaptureModel (ear, ear == 1 ? "RIGHT EAR" : "LEFT EAR", /*running*/ true);
+    }
 
 private:
     // The reference/schedule store dir: the TestConfig override (#24, hermetic tests), else %APPDATA%/EarsBridge.
@@ -252,9 +268,23 @@ private:
     void renderWizardView (const WizardState& ws);
     // P3 Task 5: refresh the Measure view (lead block, live headline, §2 timeout hint) from live truth.
     // Called at the END of renderWizardView so BOTH the live path and the forced/test path feed it from
-    // the same state at no extra computeWizardState cost. `ws` is unused until Task 7 (verdictsStale).
+    // the same state at no extra computeWizardState cost. Task 7: also composes + feeds the per-ear
+    // capture/verdict grid (ws.verdictsStale is the staleness truth).
     void refreshMeasureView (const WizardState& ws);
-    void onMeasureTransport();               // this task: a plain forward to onStartStop (Task 7 re-arms)
+    // P3 Task 7: one ear's capture-card composition (Failed wins -> Capturing w/ honest learned-
+    // duration progress -> Waiting). Extracted from refreshMeasureView so the seam above can drive
+    // the Capturing branch headless (`running` is passed in - the engine cannot Run here).
+    eb::CaptureCardModel composeCaptureModel (int ear, const char* name, bool running) const;
+    // P3 Task 7: one ear's published-grade snapshot (the exact body of updateStatusLine's old
+    // earSnap lambda - ONE truth for the ladder AND the verdict card) + the shape scalars.
+    eb::EarGradeSnapshot earGradeSnapshot (int ear) const;
+    eb::ShapeScalars shapeScalars (int ear) const;
+    // §2 "Measure again": the verdict view shows while any ear is graded AND the user hasn't
+    // re-armed. userRearmed_ is a session-scoped VIEW flag - cleared by new evidence (a grade
+    // publish); done-ness stays computed from the stamps (the spine is untouched by it).
+    bool measureVerdictShowing() const;
+    bool userRearmed_ = false;
+    void onMeasureTransport();               // Measure again re-arm, else the one engine action
     int  armedNoSweepTicks_ = 0;             // §2 timeout-hint clock (armed + no sweep, 30 Hz ticks)
     bool refEndpointMismatch_ = false;       // #34: Dirac's output != the reference's learned endpoint
     // P3 Task 6 honest capture progress (§5.4): WHICH ear the engine is capturing now (-1 = none) +
@@ -462,17 +492,17 @@ private:
     bool               learning_ = false;
     // Transport.
     juce::TextButton startStop { "Start" };
-    // Status note in the title bar. Per-Ear Per-Channel Grading (Task 5): TWO stacked lines. statusLine is
-    // the upper/LEFT line, statusLineR the lower/RIGHT line. For every GLOBAL/hard condition (device error,
-    // the 48k config veto, Stopped/gate states, learning, no per-ear reference) statusLine carries the ONE
-    // message and statusLineR is blanked — a hard error must never show a stale per-ear grade beneath it.
-    // #50: the RUNNING wording/precedence lives in the PURE eb::runningStatus (gui/StatusLadder.h,
-    // headlessly tested); updateStatusLine only builds its snapshot and commits the result.
+    // The wait-block status line (MeasureStage adopts it; the ladder feeds it). statusLineR retired
+    // from the TREE in P3 Task 7 (the VerdictCards supersede the two-line header) but survives as an
+    // OFF-TREE sink for the pure ladder's line2 - updateStatusLine still commits both lines, the
+    // ladder itself is unchanged, and nothing renders the second one. #50: the RUNNING wording/
+    // precedence lives in the PURE eb::runningStatus (gui/StatusLadder.h, headlessly tested).
     juce::Label statusLine;
     juce::Label statusLineR;
-    // 3-color per-metric quality dots (SNR/IR/THD) under each ear's status line, fed by a per-ear band smoother.
-    eb::GradeMetricDotsView gradeDotsL_, gradeDotsR_;
+    // Per-ear anti-flicker band smoothing (the retired quality dots' smoothers, re-pointed at the
+    // VerdictCard) + the last SMOOTHED bands (fed on each grade publish; the card model reads them).
     eb::GradeBandSmoother    smootherL_, smootherR_;
+    GradeBandSmoother::Bands smoothedBandsL_, smoothedBandsR_;
     // " - <advisory>" when the chain-config advisory should decorate a calm status line; empty otherwise.
     juce::String chainAdvisoryTail() const;
     // Non-modal "Update available" link shown in the title bar when a newer release exists.

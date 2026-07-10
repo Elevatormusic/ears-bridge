@@ -166,16 +166,10 @@ MainComponent::MainComponent (const TestConfig& cfg)
     statusLine.setFont (juce::Font (juce::FontOptions (12.0f)));
     statusLine.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (statusLine);
-    // Second status line (Task 5): the RIGHT-ear verdict when both per-ear lines show; blank otherwise.
-    // Same typography/justification as statusLine; the per-branch colour is set in updateStatusLine.
+    // statusLineR: OFF-TREE since P3 Task 7 (see the header note) - updateStatusLine still commits
+    // the ladder's line2 to it, but it is never parented; the VerdictCards render that truth now.
     statusLineR.setColour (juce::Label::textColourId, Theme::textDim());
     statusLineR.setFont (juce::Font (juce::FontOptions (12.0f)));
-    statusLineR.setJustificationType (juce::Justification::centredRight);
-    addAndMakeVisible (statusLineR);
-    addAndMakeVisible (gradeDotsL_);
-    addAndMakeVisible (gradeDotsR_);
-    gradeDotsL_.setPrefix ("L");   // distinguish the two stacked per-ear quality rows
-    gradeDotsR_.setPrefix ("R");
 
     // Update link: hidden until a newer release is found; opens the release page in the browser.
     updateLink.setColour (juce::HyperlinkButton::textColourId, Theme::infoText());   // HIG: accent-as-text was 3.5:1; infoText passes ~4.6:1
@@ -550,8 +544,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
     calibrateStage_.setAdvancedOpen (CalibrateStage::advancedFirNonDefault (
         settings.complexPhase(), settings.firLength(), settings.outputTrimDb()));
     levelStage_.adopt (startStop, levelsEyebrow, levelsHint, diracMicGainHint, meterL, meterR, meterOut, inputClipHint);
-    measureStage_.adopt (statusLine, statusLineR, gradeDotsL_, gradeDotsR_,
-                         learnRefButton, learnRefResultLabel, hwDiracToggle);
+    measureStage_.adopt (statusLine, learnRefButton, learnRefResultLabel, hwDiracToggle);
     // §3.3: Measure's header CTA is this stage's transport - the SAME one engine action (onStartStop),
     // a per-stage face (syncTransport owns "Start listening"/"Stop"; Task 7 adds the Measure-again arm).
     measureStage_.onTransport = [this] { onMeasureTransport(); };
@@ -1103,7 +1096,9 @@ void MainComponent::onStartStop() {
             // match (two consecutive matched polls) grades exactly once.
             gradePollTick_ = 0; gradePollerL_.reset(); gradePollerR_.reset(); lastListenTextLogged_.clear();
             maxOutputRenderPeak_ = 0.0f; hwMicRunPeak_ = 0.0f; hwOutputReadable_ = false; hwDetectTick_ = 0;   // fresh hardware-Dirac auto-detect
-            gradeDotsL_.clear(); gradeDotsR_.clear(); smootherL_.reset(); smootherR_.reset();   // fresh quality dots each run
+            smootherL_.reset(); smootherR_.reset();   // fresh anti-flicker band history each run (the
+                                                      // held smoothedBands describe the LAST verdict -
+                                                      // evidence, so they survive; §3.2 never deletes)
             // Surface a silent format downgrade: WASAPI shared mode can grant a different rate/depth
             // than the user selected, which would otherwise resample with no indication. The split:
             // genuine cautions (a real resample, an unverifiable rail) go on preflightLabel (yellow);
@@ -1172,8 +1167,25 @@ MainComponent::GateSnapshot MainComponent::computeStartGate() const {
     return g;
 }
 
-// P3 Task 5: this task: a plain forward to the ONE engine action (§3.3); Task 7 adds the Measure-again arm.
-void MainComponent::onMeasureTransport() { onStartStop(); }
+// §3.3 + §2 "Measure again" (P3 Task 7): with verdicts showing, the ONE Measure action re-arms -
+// the VIEW returns to the instruction/wait state; a stopped engine is started through the SAME
+// gate-checked path. Done-ness stays computed - the spine is untouched. Never auto-advances,
+// never claims to run a sweep (Dirac owns the sweep).
+void MainComponent::onMeasureTransport() {
+    if (measureVerdictShowing()) {
+        userRearmed_ = true;
+        logLine (eb::DiagnosticLog::Level::Debug, "Button: Measure again (view re-armed)");
+        if (engine.status() != EngineStatus::Running) { onStartStop(); return; }   // gate-checked start
+        refreshWizardView();
+        return;
+    }
+    onStartStop();
+}
+
+bool MainComponent::measureVerdictShowing() const {
+    const bool anyGraded = eb::earIsGraded (engine.refMonState (0)) || eb::earIsGraded (engine.refMonState (1));
+    return anyGraded && ! userRearmed_;
+}
 
 void MainComponent::syncTransport (bool running, bool gateReady) {
     // §3.3: ONE engine action (onStartStop), per-stage button faces. Text+glyph+primary flip together
@@ -1188,9 +1200,15 @@ void MainComponent::syncTransport (bool running, bool gateReady) {
         if (changed) b.repaint();
     };
     face (startStop, running ? "Stop" : "Start monitoring", running ? "stop" : "play", ! running);
-    face (measureStage_.transportButton(), running ? "Stop" : "Start listening",
-          running ? "stop" : "play", ! running);
-    measureStage_.transportButton().setEnabled (running || gateReady);
+    // The Measure face is three-state (P3 Task 7): verdicts showing -> primary "Measure again"
+    // (refresh glyph) even while Running - the frozen single-slot resolution (the frames' verdict
+    // frame shows exactly ONE primary action; Stop stays available on Level).
+    const bool again = measureVerdictShowing();
+    face (measureStage_.transportButton(),
+          again ? "Measure again" : running ? "Stop" : "Start listening",
+          again ? "refresh"       : running ? "stop" : "play",
+          again || ! running);
+    measureStage_.transportButton().setEnabled (again || running || gateReady);
     measureStage_.transportButton().setHelpText (startStop.getHelpText());   // M1 parity
 }
 
@@ -1422,6 +1440,11 @@ void MainComponent::publishGradeForTest (int ear, int refMonState, float sweepSn
     if (sweepSnrDb > 0.0f)
         engine.publishCompletedSweepSnrDb (ear, sweepSnrDb);   // the live continuation's sibling publish
     stampVerdictGeneration (ear);
+    {   // Mirror the live continuation's band store (P3 Task 7): the card's badge is band-driven.
+        auto& sm = ear == 1 ? smootherR_ : smootherL_;
+        (ear == 1 ? smoothedBandsR_ : smoothedBandsL_) = sm.update (sweepSnrDb, sweepSnrDb > 0.0f, 50.0f, 0.5f);
+    }
+    userRearmed_ = false;   // new evidence arrived: the verdict view returns (mirrors the live publish)
     updateStartGate();   // the full refresh path (gate + status + wizard view) - what a live publish reaches
 }
 
@@ -1498,12 +1521,13 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
     levelStage_.setRunNote (LevelStage::levelRunNote (
         ws.steps[(int) WizardStep::Level].state == StepState::Blocked,
         levelLatched_, ws.steps[(int) WizardStep::Level].reason));
-    // P3 Task 5: the Measure run-note (pure copy rule; the honesty contract in words - "Arms the
-    // bridge", never "starts the sweep"). measureAgainShowing arrives with Task 7's re-arm.
+    // P3 Task 5+7: the Measure run-note (pure copy rule; the honesty contract in words - "Arms the
+    // bridge", never "starts the sweep"; measure-again = "Then start the measurement again in Dirac
+    // Live." - the correction rides the note, the button never claims to run a sweep).
     measureStage_.setRunNote (MeasureStage::measureRunNote (
         ws.steps[(int) WizardStep::Measure].state == StepState::Blocked,
         ws.steps[(int) WizardStep::Measure].reason,
-        engine.status() == EngineStatus::Running, /*measureAgainShowing*/ false));
+        engine.status() == EngineStatus::Running, measureVerdictShowing()));
 
     // ---- P2 stage view feed (Connect's line lands with Task 7) ---------------------------------
     // Run-note = the machine's own reason (single wording source; empty once Done) - this is the
@@ -1558,36 +1582,55 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
 }
 
 void MainComponent::refreshMeasureView (const eb::WizardState& ws) {
-    juce::ignoreUnused (ws);                       // Task 7 reads ws.verdictsStale
     const bool running  = engine.status() == EngineStatus::Running;
     const bool refLoaded = ! loadedReferenceL_.empty() && ! loadedReferenceR_.empty();
     using Lead = MeasureStage::Lead;
     const Lead lead = settings.diracHardwareProcessor() ? Lead::HwDirac
                     : (! refLoaded ? Lead::Reference : Lead::Waiting);
     measureStage_.setLead (lead);
-    const auto head = MeasureStage::measureHeadCopy (lead, settings.advancedOverride(), /*verdictShowing*/ false);
+    const bool showVerdicts = measureVerdictShowing();
+    const auto head = MeasureStage::measureHeadCopy (lead, settings.advancedOverride(), showVerdicts);
     measureStage_.setHeadCopy (head.title, head.sub);
     measureStage_.setWaitHint (running && lead == Lead::Waiting
         ? MeasureStage::waitingHint (armedNoSweepTicks_ / 30, refEndpointMismatch_,
                                      (chainVerdict_.checked && ! chainVerdict_.all48k) || chainVerdict_.unverifiable,
                                      chainVerdict_.summary, silentTicks_ >= kSilentHoldTicks)
         : juce::String());
-    // P3 Task 6: compose + feed the capture grid. Failed wins (the §3.1 sticky card names ONE capture);
-    // Capturing carries HONEST progress - elapsed GUI ticks over the LEARNED per-ear reference duration
-    // ("~N s sweep", approximate by label). No learned duration -> captureFraction claims 0 and the
-    // card's copy still never invents Dirac timing.
-    const auto capModel = [&] (int ear, const char* name) -> eb::CaptureCardModel {
-        if (failedCaptureEar_ == ear) return eb::CaptureCardModel::failed (name);
-        if (captureEar_ == ear && engine.status() == EngineStatus::Running) {
-            const auto& ref   = ear == 1 ? loadedReferenceR_ : loadedReferenceL_;
-            const double rate = ear == 1 ? loadedReferenceRateR_ : loadedReferenceRateL_;
-            const double secs = (rate > 0.0 && ! ref.empty()) ? (double) ref.size() / rate : 0.0;
-            return eb::CaptureCardModel::capturing (name, eb::CaptureCard::captureFraction (captureTicks_, secs),
-                                                    juce::roundToInt (secs));
-        }
-        return eb::CaptureCardModel::waiting (name);
+    // P3 Task 7: compose + feed the verdict cards (before the capture feed - a graded ear's slot
+    // flips CaptureCard -> VerdictCard in the stage's grid). ws.verdictsStale is the §3.2 staleness
+    // truth (verdictGen < configGen, computed - never a stored flag); the bands are the smoothed
+    // per-ear stores the grade publish fills (anti-flicker preserved from the retired dots).
+    const bool hw = settings.diracHardwareProcessor();
+    const auto vModel = [&] (int ear, const char* name) {
+        const auto& bands = ear == 1 ? smoothedBandsR_ : smoothedBandsL_;
+        return eb::verdictCardModel (name, earGradeSnapshot (ear),
+                                     bands.sweepSnr, bands.irSnr, bands.thd,
+                                     engine.shapeFlags (ear), shapeScalars (ear),
+                                     ws.verdictsStale, hw);
     };
-    measureStage_.setCaptureModels (capModel (0, "LEFT EAR"), capModel (1, "RIGHT EAR"));
+    measureStage_.setVerdictModels (showVerdicts ? vModel (0, "LEFT EAR") : eb::VerdictCardModel{},
+                                    showVerdicts ? vModel (1, "RIGHT EAR") : eb::VerdictCardModel{},
+                                    ws.verdictsStale);
+    // P3 Task 6: compose + feed the capture grid (composeCaptureModel: Failed wins the §3.1 sticky
+    // card; Capturing carries HONEST learned-duration progress; else Waiting).
+    measureStage_.setCaptureModels (composeCaptureModel (0, "LEFT EAR", running),
+                                    composeCaptureModel (1, "RIGHT EAR", running));
+}
+
+// One ear's capture-card composition (P3 Task 6, extracted in Task 7 for the headless seam).
+// Failed wins (the §3.1 sticky card names ONE capture); Capturing carries HONEST progress -
+// elapsed GUI ticks over the LEARNED per-ear reference duration ("~N s sweep", approximate by
+// label). No learned duration -> captureFraction claims 0 and the copy never invents Dirac timing.
+eb::CaptureCardModel MainComponent::composeCaptureModel (int ear, const char* name, bool running) const {
+    if (failedCaptureEar_ == ear) return eb::CaptureCardModel::failed (name);
+    if (captureEar_ == ear && running) {
+        const auto& ref   = ear == 1 ? loadedReferenceR_ : loadedReferenceL_;
+        const double rate = ear == 1 ? loadedReferenceRateR_ : loadedReferenceRateL_;
+        const double secs = (rate > 0.0 && ! ref.empty()) ? (double) ref.size() / rate : 0.0;
+        return eb::CaptureCardModel::capturing (name, eb::CaptureCard::captureFraction (captureTicks_, secs),
+                                                juce::roundToInt (secs));
+    }
+    return eb::CaptureCardModel::waiting (name);
 }
 
 eb::WizardStep MainComponent::resolveShownStage (const eb::WizardState& ws,
@@ -1687,20 +1730,20 @@ void MainComponent::forceThemeForTest (bool dark) {
     resized();
 }
 
-// #68 (see the header): drive the two status lines + the dots for the render gate. Mirrors the
-// EB_HIG_STATES dev harness's mechanism but is a plain seam the headless suite can call.
-void MainComponent::driveHeaderForTest (const juce::String& line1, const juce::String& line2, bool showDots) {
-    statusLine.setText  (line1, juce::dontSendNotification);
-    statusLineR.setText (line2, juce::dontSendNotification);
-    if (showDots) {
-        gradeDotsL_.setMetrics (eb::QualityBand::Green,  "28 dB", eb::QualityBand::Green, "56 dB",
-                                eb::QualityBand::Orange, "0.8%");
-        gradeDotsR_.setMetrics (eb::QualityBand::Orange, "18 dB", eb::QualityBand::Green, "54 dB",
-                                eb::QualityBand::Red,    "12.5%");
-    }
-    gradeDotsL_.setVisible (showDots);
-    gradeDotsR_.setVisible (showDots);
-    resized();
+// #68 re-point (see the header): drive the per-ear VerdictCards for the render gate. ORDER matters
+// (the Task-6 harness lesson): forceWizardStepForTest FIRST - its renderWizardView ->
+// refreshMeasureView recomposes the verdict feed from LIVE truth (no grades headless -> empty
+// models) and would clobber anything driven before it. Then force the Waiting lead (headless has
+// no learned reference, so the live lead is Reference and the grid would be hidden) + the verdict
+// head copy + the given models + the details state. Display only, no engine/grading state.
+void MainComponent::driveVerdictForTest (const eb::VerdictCardModel& l, const eb::VerdictCardModel& r,
+                                         bool detailsOpenRight) {
+    forceWizardStepForTest (WizardStep::Measure);
+    measureStage_.setLead (MeasureStage::Lead::Waiting);
+    const auto head = MeasureStage::measureHeadCopy (MeasureStage::Lead::Waiting, false, /*verdictShowing*/ true);
+    measureStage_.setHeadCopy (head.title, head.sub);
+    measureStage_.setVerdictModels (l, r, l.stale || r.stale);
+    measureStage_.verdictCardForTest (1).setDetailsOpen (detailsOpenRight);
 }
 
 void MainComponent::driveConnectWarningsForTest (bool stdCableHintWithFix, bool rateResampleWarn) {
@@ -1862,6 +1905,43 @@ static void setTooltipIfChanged (juce::Label& label, const juce::String& tip) {
     if (label.getTooltip() != tip) label.setTooltip (tip);
 }
 
+// One ear's published-grade snapshot (P3 Task 7: the exact body of the old updateStatusLine
+// earSnap lambda, extracted so the ladder AND the VerdictCard composition read ONE truth).
+eb::EarGradeSnapshot MainComponent::earGradeSnapshot (int ear) const {
+    eb::EarGradeSnapshot e;
+    e.state      = engine.refMonState (ear);
+    e.irSnrDb    = engine.refIrSnrDb (ear);
+    e.thdPercent = engine.refThdPercent (ear);
+    e.sweepSnrDb = engine.refSweepSnrDb (ear);
+    e.peakDb     = engine.referenceSweepPeakDb (ear);
+    // SP3 INFO note: the worst-offender shape anomaly for this ear (empty when none). Read the
+    // published flags + magnitudes lock-free and compose the neutral one-liner. INFO-ONLY.
+    const unsigned sf = engine.shapeFlags (ear);   // ONE acquire load; the scalars follow (relaxed)
+    e.shapeNote  = eb::shapeInfoNote (sf, engine.shapeDriftMaxDb (ear),
+                                      engine.shapeCombDelayMs (ear), engine.shapeEffHiHz (ear),
+                                      engine.shapeEffLoHz (ear), engine.shapeHumBaseHz (ear));
+    // SP3 INFO tooltip: the FULL numbers behind that note (all active findings, "label: value"
+    // lines) so an over-long status line can elide the note and still be discoverable.
+    e.shapeTip   = eb::shapeInfoTip (sf, engine.shapeDriftMaxDb (ear), engine.shapeHfShelfDb (ear),
+                                     engine.shapeCombDepthDb (ear), engine.shapeCombDelayMs (ear),
+                                     engine.shapeEffLoHz (ear), engine.shapeEffHiHz (ear),
+                                     engine.shapeLobeWidth (ear), engine.shapeStepDb (ear),
+                                     engine.shapeHumBaseHz (ear), engine.shapeResonanceHz (ear));
+    return e;
+}
+
+// The published shape-scalar bundle for one ear (P3 Task 7: the VerdictCard chips/observations
+// read the same atomics the INFO note/tooltip above read).
+eb::ShapeScalars MainComponent::shapeScalars (int ear) const {
+    eb::ShapeScalars s;
+    s.driftMaxDb  = engine.shapeDriftMaxDb (ear);   s.hfShelfDb   = engine.shapeHfShelfDb (ear);
+    s.combDepthDb = engine.shapeCombDepthDb (ear);  s.combDelayMs = engine.shapeCombDelayMs (ear);
+    s.effLoHz     = engine.shapeEffLoHz (ear);      s.effHiHz     = engine.shapeEffHiHz (ear);
+    s.lobeWidth   = engine.shapeLobeWidth (ear);    s.stepDb      = engine.shapeStepDb (ear);
+    s.resonanceHz = engine.shapeResonanceHz (ear);  s.humBaseHz   = engine.shapeHumBaseHz (ear);
+    return s;
+}
+
 void MainComponent::updateStatusLine() {
     const auto st = engine.status();
     // Set-if-changed model (Bug B): every branch computes the FINAL (text, colour, tooltip) for statusLine and
@@ -1898,30 +1978,10 @@ void MainComponent::updateStatusLine() {
         snap.rateVeto    = (chainVerdict_.checked && ! chainVerdict_.all48k) || chainVerdict_.unverifiable;
         snap.rateSummary = chainVerdict_.summary;
         snap.referenceLoaded = engine.referenceLoaded();
-        auto earSnap = [this] (int ear) {
-            eb::EarGradeSnapshot e;
-            e.state      = engine.refMonState (ear);
-            e.irSnrDb    = engine.refIrSnrDb (ear);
-            e.thdPercent = engine.refThdPercent (ear);
-            e.sweepSnrDb = engine.refSweepSnrDb (ear);
-            e.peakDb     = engine.referenceSweepPeakDb (ear);
-            // SP3 INFO note: the worst-offender shape anomaly for this ear (empty when none). Read the
-            // published flags + magnitudes lock-free and compose the neutral one-liner. INFO-ONLY.
-            const unsigned sf = engine.shapeFlags (ear);   // ONE acquire load; the scalars follow (relaxed)
-            e.shapeNote  = eb::shapeInfoNote (sf, engine.shapeDriftMaxDb (ear),
-                                              engine.shapeCombDelayMs (ear), engine.shapeEffHiHz (ear),
-                                              engine.shapeEffLoHz (ear), engine.shapeHumBaseHz (ear));
-            // SP3 INFO tooltip: the FULL numbers behind that note (all active findings, "label: value"
-            // lines) so an over-long status line can elide the note and still be discoverable.
-            e.shapeTip   = eb::shapeInfoTip (sf, engine.shapeDriftMaxDb (ear), engine.shapeHfShelfDb (ear),
-                                             engine.shapeCombDepthDb (ear), engine.shapeCombDelayMs (ear),
-                                             engine.shapeEffLoHz (ear), engine.shapeEffHiHz (ear),
-                                             engine.shapeLobeWidth (ear), engine.shapeStepDb (ear),
-                                             engine.shapeHumBaseHz (ear), engine.shapeResonanceHz (ear));
-            return e;
-        };
-        snap.earL = earSnap (0);
-        snap.earR = earSnap (1);
+        // P3 Task 7: the per-ear snapshot is the extracted earGradeSnapshot() member - ONE truth
+        // shared with the VerdictCard composition (refreshMeasureView) so ladder and card can't drift.
+        snap.earL = earGradeSnapshot (0);
+        snap.earR = earGradeSnapshot (1);
         snap.phaseIdleOrPreflight = h.session == SessionPhase::Idle || h.session == SessionPhase::Preflight;
         snap.phaseComplete        = h.session == SessionPhase::Complete;
         snap.gradeSignalPresent   = engine.gradeSignalPresent();
@@ -2697,16 +2757,15 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
             // test-pinned: a stale run generation publishes NOTHING and stamps NOTHING (#4 + §3.2).
             if (! mc->publishGradeIfRunCurrent (ear, state, irSnr, thd, mismatch, lowQ, myGen))
                 return;   // a Stop/Start happened since post -> drop this stale publish whole (#4)
-            // 3-color quality dots: smooth THIS ear's bands across consecutive grades (anti-flicker) and show
-            // them under that ear's status line. The raw dB/% is shown beside each dot (never colour alone).
-            {
+            {   // Anti-flicker bands for the VerdictCard (the retired dots' smoother, re-pointed at
+                // the card): smooth THIS ear's bands across consecutive grades and store them; the
+                // card model reads the store (refreshMeasureView). The raw dB/% renders beside each
+                // band-toned value on the card (never colour alone).
                 auto& sm = (ear == 1) ? mc->smootherR_ : mc->smootherL_;
-                auto& dv = (ear == 1) ? mc->gradeDotsR_ : mc->gradeDotsL_;
-                const auto bands = sm.update (sweepSnr, snrValid, irSnr, thd);
-                dv.setMetrics (bands.sweepSnr, snrValid ? juce::String (juce::roundToInt (sweepSnr)) + " dB" : juce::String(),
-                               bands.irSnr,    juce::String (juce::roundToInt (irSnr)) + " dB",
-                               bands.thd,      juce::String (thd, thd < 1.0f ? 2 : 1) + "%");
+                auto& bs = (ear == 1) ? mc->smoothedBandsR_ : mc->smoothedBandsL_;
+                bs = sm.update (sweepSnr, snrValid, irSnr, thd);
             }
+            mc->userRearmed_ = false;   // new evidence arrived: the verdict view returns (§2 re-arm clears)
             // Match-window sweep-SNR fix: publish THIS ear's sweep SNR and raise the GUIDANCE LowSnr flag when the
             // sweep ran too close to the room floor. Match-gate already passed (we only get here when g.didGrade),
             // so a non-sweep / silent ear never reaches this -> a silent ear NEVER raises LowSnr. GUIDANCE only.
@@ -2790,6 +2849,12 @@ bool MainComponent::gradeOneEar (int ear, eb::ReferenceGradePoller& poller,
                 + " rate=" + juce::String (rate, 0)
                 + " config48k=" + juce::String (mc->chainVerdict_.checked
                                                 ? (mc->chainVerdict_.all48k ? "yes" : "NO") : "unknown"));
+            // P3 Task 7: immediate transport-face + wizard/Measure re-render from the NEW truth.
+            // AFTER every publish above (grade, SNR, peak, shape) - the brief placed this beside the
+            // band store, but that would compose the card from a half-published verdict for one
+            // render; here the recompose reads the complete evidence. (The 30 Hz tick would catch
+            // up anyway; this makes the flip immediate.)
+            mc->updateStartGate();
             mc->gradeInFlight_.store (false);
         });
     });
@@ -2977,13 +3042,13 @@ void MainComponent::timerCallback() {
                 forceThemeForTest (ap.dark);                        // reapply palette + settle the non-owned labels
                 for (auto& s : states) {
                     statusLine.setText  (s.l, juce::dontSendNotification);
-                    statusLineR.setText (s.r, juce::dontSendNotification);
+                    // P3 Task 7: statusLineR + the quality dots retired from the tree (the
+                    // VerdictCards supersede them). The scene table's `r`/`dots` axes are INERT
+                    // until the Task 8 scene rework replaces them with driveVerdictForTest scenes;
+                    // this block is patched minimally so the harness still compiles + runs.
+                    juce::ignoreUnused (s.r, s.dots);
                     if (s.update) updateLink.setButtonText ("Update available");
                     updateLink.setVisible (s.update);
-                    if (s.dots) {
-                        gradeDotsL_.setMetrics (eb::QualityBand::Green,  "28 dB", eb::QualityBand::Green, "56 dB", eb::QualityBand::Orange, "0.8%");
-                        gradeDotsR_.setMetrics (eb::QualityBand::Orange, "18 dB", eb::QualityBand::Green, "52 dB", eb::QualityBand::Green,  "0.3%");
-                    } else { gradeDotsL_.clear(); gradeDotsR_.clear(); }
                     calibrateStage_.setAdvancedOpen (s.calAdv);     // P2: force the Advanced-FIR disclosure per scene
                     driveConnectWarningsForTest (s.diracHint, s.diracHint);   // T10: the cable-warning scene
                     forceWizardStepForTest (s.step);                // pin + render + show this scene's stage, then resize
@@ -3070,7 +3135,6 @@ void MainComponent::timerCallback() {
         gradeRunGen_.fetch_add (1);
         gradeInFlight_.store (false);
         gradePollerL_.reset(); gradePollerR_.reset();
-        gradeDotsL_.clear();   gradeDotsR_.clear();
         // (P3 Task 4: device-lost resets to the Start face in syncTransport, via updateStartGate below.)
         // #3 heal (same strand as the Stop path): a mid-run FIR change whose build no-oped on the reconfig
         // gate must be re-posted now the engine is out of Running, or the Start gate stays closed forever.
