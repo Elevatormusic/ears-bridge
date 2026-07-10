@@ -1,0 +1,24 @@
+# EARS Bridge — https://elevatormusic.github.io/ears-bridge/
+#
+# NOTE: on a GitHub *project* page this file is served at /ears-bridge/robots.txt,
+# not at the domain root, so crawlers will not discover it automatically — the
+# github.io root is outside this repo's control. It is kept here so it becomes
+# active automatically if the site ever moves to a custom domain, and the sitemap
+# below is submitted directly in Google Search Console / Bing Webmaster Tools.
+
+User-agent: *
+Allow: /
+
+# AI answer-engine crawlers are explicitly welcome (GEO/AEO).
+User-agent: GPTBot
+Allow: /
+User-agent: OAI-SearchBot
+Allow: /
+User-agent: ClaudeBot
+Allow: /
+User-agent: PerplexityBot
+Allow: /
+User-agent: Google-Extended
+Allow: /
+
+Sitemap: https://elevatormusic.github.io/ears-bridge/sitemap.xml

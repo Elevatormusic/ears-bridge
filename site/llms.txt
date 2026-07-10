@@ -1,0 +1,21 @@
+# EARS Bridge
+
+> EARS Bridge is a free, open-source app (Windows 10/11 and macOS) that lets a miniDSP EARS or
+> EARS Pro headphone-measurement jig work with Dirac Live. Dirac Live expects one calibrated
+> microphone; the EARS is a two-channel jig with a separate calibration per ear. EARS Bridge
+> applies each ear's calibration as an inverse FIR filter, follows Dirac's sweep so each earcup is
+> measured in turn (Auto per-ear), and presents the result to Dirac Live as a single calibrated
+> microphone through a virtual audio cable (VB-CABLE on Windows, BlackHole 2ch on macOS).
+
+Key facts:
+- Free, source-available (PolyForm Noncommercial); independent project, not affiliated with miniDSP or Dirac.
+- Use HEQ calibration files for headphones, IDF for in-ear monitors; HEQ includes a mild bass boost, so pair it with a flat bass target in Dirac.
+- Run the whole chain at 48 kHz in shared mode; absolute loudness doesn't matter (Dirac normalizes) but signal-to-noise does.
+- Dirac's "imprecise (excluded from phase correction)" on headphone measurements is almost always per-sweep signal-to-noise (amp hiss / room noise), fixed by raising level into the app's green band and quieting the room.
+- Grades every sweep per ear (Clean / Marginal / Suspect) with SNR, impulse-response and distortion checks, so a bad capture is flagged instead of passing silently.
+
+## Pages
+- [Home](https://elevatormusic.github.io/ears-bridge/): what EARS Bridge does, features, downloads for Windows and macOS.
+- [Setup guide](https://elevatormusic.github.io/ears-bridge/guide.html): full walkthrough — install, calibration files, audio-chain configuration, levels, running the Dirac measurement, applying the correction, troubleshooting.
+- [FAQ](https://elevatormusic.github.io/ears-bridge/faq.html): calibration file types, gain staging, sample rates, "imprecise" measurements, hardware Dirac processors, EARS vs EARS Pro.
+- [Source code](https://github.com/Elevatormusic/ears-bridge): full source, issues, and releases on GitHub.
