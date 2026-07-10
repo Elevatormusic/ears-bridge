@@ -37,6 +37,7 @@ namespace {
 constexpr int kPadX = 16, kPadY = 12, kHeaderH = 24, kHeadGap = 8;
 constexpr int kProblemH = 32, kProblemGap = 8;
 constexpr int kDzIconH = 36, kDzMainH = 18, kDzBrowseH = 28, kDzBrowseW = 150, kDzReqH = 16;
+constexpr int kThumbGap = 6, kFileSerialGap = 2, kButtonRowTopGap = 8;   // T8: loaded-card row gaps (values unchanged)
 constexpr int kDzGap = 10, kDzGapSm = 8, kDzMinBodyH = 136;
 constexpr int kErrStripH = 44, kErrStripGap = 8;
 constexpr int kThumbH = 84, kFileH = 16, kSerialH = 16, kNoteH = 34, kNoteGap = 6;
@@ -366,15 +367,15 @@ void CalSlotComponent::resized() {
 
     if (cal) {
         thumbnail.setBounds (r.removeFromTop (kThumbH));
-        r.removeFromTop (6);
+        r.removeFromTop (kThumbGap);
         fileLabel.setBounds (r.removeFromTop (kFileH));
-        r.removeFromTop (2);
+        r.removeFromTop (kFileSerialGap);
         serialLabel.setBounds (r.removeFromTop (kSerialH));
         if (errorLabel.isVisible()) {
             r.removeFromTop (kNoteGap);
             errorLabel.setBounds (r.removeFromTop (kNoteH));
         }
-        r.removeFromTop (8);
+        r.removeFromTop (kButtonRowTopGap);
         auto btns = r.removeFromTop (kBtnRowH);
         replaceBtn.setBounds (btns.removeFromRight (100));
         btns.removeFromRight (kBtnGap);

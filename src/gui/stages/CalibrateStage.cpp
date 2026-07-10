@@ -10,6 +10,7 @@ namespace {
 constexpr int kGutter = 16;
 constexpr int kContentMaxW = 760, kGridGap = 14;
 constexpr int kDiscH = 24, kDiscIndent = 24;
+constexpr int kSectionGap = 12;   // T8: slot grid -> caption/unity/disclosure column gap (value unchanged)
 constexpr int kCaptionH = 44;
 constexpr int kEyebrowH = 14, kComboH = 28;
 } // namespace
@@ -158,7 +159,7 @@ int CalibrateStage::layoutContent (int width) {
         row.removeFromLeft (kGridGap);
         rightCal_->setBounds (row);
     }
-    rr.removeFromTop (12);
+    rr.removeFromTop (kSectionGap);
 
     if (caption_.isVisible()) {
         caption_.setBounds (rr.removeFromTop (kCaptionH));

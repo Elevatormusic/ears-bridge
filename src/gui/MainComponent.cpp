@@ -2999,7 +2999,7 @@ void MainComponent::timerCallback() {
             // machine state, never label injection); the stage scenes pin Connect/Calibrate/Level at
             // their natural (or forced-disclosure / warned / clip-warned) state. forceWizardStepForTest
             // (per-scene) settles the shown stage; p3 selects the driven P3 state (codes below).
-            // Frame count: 21 scenes x 4 appearances + 2 startready = 86 frames (P3 Task 8: the scene
+            // Frame count: 24 scenes x 4 appearances + 2 startready = 98 frames (P3 Task 8: the scene
             // matrix owns capturing/midcapture-failed, so the Task-6 standalone capture-card block died;
             // verdict-suspect rides beyond the plan's 20-row table - see the task report).
             struct St { const char* name; juce::String statusText; bool update; WizardStep step;
@@ -3007,6 +3007,7 @@ void MainComponent::timerCallback() {
             // p3 codes: 0 none | 1 armed-waiting | 2 timeout-hint | 3 capturing | 4 midcapture-failed
             //           5 verdict | 6 verdict-details | 7 verdict-stale | 8 hwdirac | 9 override
             //           10 level-clip | 11 regression-banner | 12 verdict-suspect
+            //           13 measure-refneeded | 14 calibrate-empty | 15 calibrate-unity (T8)
             static const St states[] = {
                 { "idle",             "",                                                          false, WizardStep::Measure, false, false, 0 },
                 { "running",          "Running" + kDash + "waiting for the Dirac sweep" + kEllipsis,       false, WizardStep::Measure, false, false, 1 },
@@ -3022,6 +3023,7 @@ void MainComponent::timerCallback() {
                 { "verdict-suspect",  "",                                                          false, WizardStep::Measure, false, false, 12 },
                 { "hwdirac",          "",                                                          false, WizardStep::Measure, false, false, 8 },
                 { "override",         "Listening for the sweep" + kEllipsis,                               false, WizardStep::Measure, false, false, 9 },
+                { "measure-refneeded","",                                                          false, WizardStep::Measure, false, false, 13 },
                 // STAGE SCENES: one per non-Measure step at its current state (the gate MEASURES each
                 // hand-laid stage body - the "step axis actually probes 4 stages" honesty check).
                 // connect-dirachint forces the standard-cable/Dirac warning + one-click fix (T10);
@@ -3031,6 +3033,8 @@ void MainComponent::timerCallback() {
                 { "connect-dirachint","", false, WizardStep::Connect,   false, true,  0 },
                 { "calibrate",        "", false, WizardStep::Calibrate, false, false, 0 },
                 { "calibrate-advanced","",false, WizardStep::Calibrate, true,  false, 0 },
+                { "calibrate-empty",  "", false, WizardStep::Calibrate, false, false, 14 },
+                { "calibrate-unity",  "", false, WizardStep::Calibrate, false, false, 15 },
                 { "level",            "", false, WizardStep::Level,     false, false, 0 },
                 { "level-clip",       "", false, WizardStep::Level,     false, false, 10 },
                 { "regression-banner","", false, WizardStep::Measure,   false, false, 11 },
@@ -3067,6 +3071,20 @@ void MainComponent::timerCallback() {
                                                         : juce::String());
                     calibrateStage_.setAdvancedOpen (s.calAdv);     // P2: force the Advanced-FIR disclosure per scene
                     driveConnectWarningsForTest (s.diracHint, s.diracHint);   // T10: the cable-warning scene
+                    // T8: the calibrate-empty/unity scenes render the FIRST-RUN empty state - clear both
+                    // slots via the same route removeBtn.onClick drives. Every OTHER scene re-seeds the
+                    // launch pair if a prior empty scene cleared it: the matrix loops appearances, so a
+                    // cleared pair would otherwise contaminate every later frame (incl. the next pass).
+                    if (s.p3 == 14 || s.p3 == 15) {
+                        if (leftCal.hasCal())  leftCal.clearCal();
+                        if (rightCal.hasCal()) rightCal.clearCal();
+                    } else {
+                        if (! leftCal.hasCal()  && settings.leftCalPath().isNotEmpty())
+                            leftCal.loadFromFile (juce::File (settings.leftCalPath()));
+                        if (! rightCal.hasCal() && settings.rightCalPath().isNotEmpty())
+                            rightCal.loadFromFile (juce::File (settings.rightCalPath()));
+                    }
+                    setUnityAcceptedForTest (s.p3 == 15);   // accepted wording only for calibrate-unity (set AFTER any loads - loading resets the flag)
                     forceWizardStepForTest (s.step);                // pin + render + show this scene's stage, then resize
                     statusLine.setText (s.statusText, juce::dontSendNotification);
                     if (s.update) updateLink.setButtonText ("Update available");
@@ -3076,7 +3094,7 @@ void MainComponent::timerCallback() {
                     // unreachable in a cold harness run (they need a Running engine + a learned reference).
                     // p3 0/10/11 scenes render the pinned stage at LIVE truth - refreshMeasureView already
                     // recomposed the Measure feeds, and the banner scene's displacement IS that truth.
-                    if ((s.p3 >= 1 && s.p3 <= 9) || s.p3 == 12) {
+                    if ((s.p3 >= 1 && s.p3 <= 9) || s.p3 == 12 || s.p3 == 13) {
                         // Verdict models through the SAME pure composer the live feed uses (production
                         // path, never label injection): clean LEFT + marginal RIGHT with a flagged Drift
                         // chip; the stale scene sets the models' own stale bit; the suspect scene pairs
@@ -3093,7 +3111,8 @@ void MainComponent::timerCallback() {
                                                                       s.p3 == 7, false);
                         const auto suspM  = eb::verdictCardModelAuto ("LEFT EAR",  se, 0u, {}, false, false);
                         const auto cleanR = eb::verdictCardModelAuto ("RIGHT EAR", ce, 0u, {}, false, false);
-                        const Lead lead = s.p3 == 8 ? Lead::HwDirac : Lead::Waiting;
+                        const Lead lead = s.p3 == 8  ? Lead::HwDirac
+                                        : s.p3 == 13 ? Lead::Reference : Lead::Waiting;
                         measureStage_.setLead (lead);
                         // The scene's HONEST head copy (the plan snippet drove it only for the override
                         // scene, leaving hwdirac/armed scenes with the Reference-lead head over a
@@ -3164,6 +3183,13 @@ void MainComponent::timerCallback() {
             calibrateStage_.setAdvancedOpen (CalibrateStage::advancedFirNonDefault (
                 settings.complexPhase(), settings.firLength(), settings.outputTrimDb()));
             driveConnectWarningsForTest (false, false);   // T10: clear the forced cable-warning scene
+            // T8: the calibrate-empty/unity scenes cleared the slot pair + set the unity flag; restore
+            // the launch seeding (same guards as startup) and the un-accepted default.
+            setUnityAcceptedForTest (false);
+            if (! leftCal.hasCal() && settings.leftCalPath().isNotEmpty())
+                leftCal.loadFromFile (juce::File (settings.leftCalPath()));
+            if (! rightCal.hasCal() && settings.rightCalPath().isNotEmpty())
+                rightCal.loadFromFile (juce::File (settings.rightCalPath()));
             // P3 (Task 8) restores - belt-and-braces: the final refreshWizardView recomposes every
             // Measure feed from live truth anyway, but leave NO forced scene state behind on any path.
             driveLevelClipForTest (false);
