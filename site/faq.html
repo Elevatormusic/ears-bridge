@@ -30,6 +30,8 @@
       "acceptedAnswer": { "@type": "Answer", "text": "Yes. Dirac Live expects one calibrated microphone and the EARS is a two-channel jig, so you need a bridge: the free, open-source EARS Bridge app applies each ear's calibration and presents the EARS to Dirac Live as a single calibrated microphone through a virtual audio cable." } },
     { "@type": "Question", "name": "Which EARS calibration file should I use for Dirac Live — HEQ, IDF, HPN, or RAW?",
       "acceptedAnswer": { "@type": "Answer", "text": "Use HEQ for regular headphones and IDF for in-ear monitors. HPN is miniDSP's older headphone curve, superseded by HEQ. RAW is uncompensated microphone-only data and is not intended for headphone EQ. HEQ includes a mild bass boost, so pair it with a flat bass target in Dirac." } },
+    { "@type": "Question", "name": "What is the difference between the HPN and HEQ calibration files?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Both translate what the jig's microphones hear into a measurement you can act on. HPN is miniDSP's original headphone curve: it aims for a neutral reading, so any warmth you want has to come from your target curve. HEQ is its successor: it builds the gentle bass warmth most listeners prefer into the measurement itself, so aiming at a flat line already sounds right. miniDSP recommends HEQ because it makes the simple approach — EQ to flat — produce a tuning most people enjoy, without designing a custom target." } },
     { "@type": "Question", "name": "Does the playback level matter when measuring headphones with Dirac Live?",
       "acceptedAnswer": { "@type": "Answer", "text": "Absolute loudness does not matter — Dirac normalizes the measurement. Signal-to-noise does: set your headphone amplifier so the level meters reach the green target band and keep the room quiet, so the sweep sits well above the noise floor." } },
     { "@type": "Question", "name": "Why does Dirac Live mark my headphone measurement 'imprecise (excluded from phase correction)'?",
@@ -138,6 +140,18 @@ headphone-EQ compensation; HPN is the older headphone curve it superseded. RAW i
 microphone-only data — not meant for headphone EQ, and EARS Bridge warns if you load it. One
 practical note: HEQ bakes in a mild bass boost, so start from a <b>flat bass target</b> in Dirac or
 the boost gets counted twice.</p>
+
+<h2 id="hpn-heq">What's the difference between HPN and HEQ, in plain words?</h2>
+<p>Both are translation layers: they turn what the jig's microphones hear into a measurement you
+can act on. <b>HPN</b> is miniDSP's original headphone curve — it aims for a neutral reading, so
+any warmth you want in the final sound has to come from your target curve. <b>HEQ</b> is its
+successor — it builds the gentle bass warmth most listeners prefer into the measurement itself,
+so aiming at a plain flat line already lands on a sound most people like.</p>
+<p>That's why miniDSP recommends HEQ: it makes the simple approach — measure, then EQ to flat
+— produce a pleasant tuning without designing a custom target. The flip side: because HEQ's
+warmth is baked in, a bass-boosted target on top of it doubles the bass. With HPN it's the
+reverse — the measurement is neutral, so the bass belongs in the target (that's the approach the
+<a href="guide.html#target">house target curve</a> takes).</p>
 
 <h2 id="level">Does the playback level matter for the measurement?</h2>
 <p>Absolute loudness doesn't matter — Dirac normalizes the measurement, so there's no SPL number to

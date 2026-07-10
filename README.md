@@ -151,7 +151,7 @@ In Dirac's **Select Sweet Spot** step, pick **Home → Focused** — a jig is a 
 
 Back in Dirac Live, once both ears are measured across your positions, design the correction the way you normally would — choose or draw your target curve and let Dirac compute the filter — and **export** it so the Processor can load it.
 
-Want a starting point? EARS Bridge ships a house target — [**Jazzi Overall**](site/assets/jazzi-overall-dirac-target.txt) ([direct download](https://elevatormusic.github.io/ears-bridge/assets/jazzi-overall-dirac-target.txt)) — a Harman-style bass shelf with a relaxed 2.5–3 kHz presence dip and flat treble. It was tuned against HPN-calibrated measurements; if you measure with HEQ files (which bake in their own bass lift), flatten its low shelf first.
+Want a starting point? EARS Bridge ships a house target — [**Jazzi Overall**](site/assets/jazzi-overall-dirac-target.txt) ([direct download](https://elevatormusic.github.io/ears-bridge/assets/jazzi-overall-dirac-target.txt)) — a Harman-style bass shelf with a relaxed 2.5–3 kHz presence dip and flat treble.
 
 ### 7. Apply it and listen
 
