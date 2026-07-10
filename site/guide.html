@@ -204,12 +204,22 @@ own response is removed before Dirac ever sees the signal.</p>
   <li>Set <b>everything to 48&nbsp;kHz</b> — the EARS, the cable, and Dirac. A mismatched rate means
       the operating system resamples behind your back; EARS Bridge detects and warns about a
       resampled chain, because a silently resampled measurement is less trustworthy.</li>
-  <li><b>Turn off exclusive mode on every device in the chain</b> — the EARS input, the virtual
-      cable, and your output device. In Windows: Sound settings → the device's <i>Properties →
-      Advanced</i> → untick <i>"Allow applications to take exclusive control"</i>. Dirac's
-      recording path can't open an exclusive-mode device — this is the cause of its
+  <li><b>Turn off exclusive mode on every device in the chain</b> (the walkthrough below).
+      Dirac's recording path can't open an exclusive-mode device — this is the cause of its
       "recording device error 600007" — and for the standard VB-CABLE, EARS Bridge offers the
       correct setting as a one-click fix.</li>
+</ol>
+<div class="note"><b>How to turn exclusive mode off (Windows).</b> Press <code>Win+R</code>, type
+<code>mmsys.cpl</code>, press Enter — the classic Sound panel opens. For each device below, select
+it → <b>Properties → Advanced</b> → untick <b>"Allow applications to take exclusive control of
+this device"</b> → Apply.<br>
+On the <b>Playback</b> tab: <b>"CABLE Input"</b> (the virtual cable), your <b>DAC or headphone
+amp</b> (whatever your headphones play through), and — if you use the Dirac Live Processor —
+Dirac's <b>"Virtual Audio Device"</b>.<br>
+On the <b>Recording</b> tab: <b>"CABLE Output"</b> (the cable's capture side) and the
+<b>EARS microphone</b>.<br>
+macOS has no exclusive-mode setting — nothing to do there.</div>
+<ol start="5">
   <li>In <b>Dirac Live</b>, choose the virtual cable (for example <i>CABLE Output</i> /
       <i>BlackHole 2ch</i>) as the recording device. Dirac now sees one calibrated microphone.</li>
   <li><b>Don't load a mic calibration file in Dirac.</b> Dirac offers to attach a calibration
