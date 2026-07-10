@@ -120,6 +120,8 @@ TEST_CASE("P2.9 evidence: offscreen captures of every changed surface, both them
         juce::PNGImageFormat png;
         juce::FileOutputStream os (out.getChildFile (name + ".png"));
         REQUIRE (os.openedOk());
+        os.setPosition (0);          // FileOutputStream appends: truncate, or a re-run into the persistent
+        os.truncate();               // evidence dir keeps decoding the first-ever capture
         png.writeImageToStream (img, os);
     };
     for (bool dark : { true, false }) {

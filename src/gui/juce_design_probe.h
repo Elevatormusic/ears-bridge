@@ -272,7 +272,10 @@ namespace hig
         if (! img.isValid()) return; // empty for zero-size / not-yet-laid-out components
         juce::PNGImageFormat png;
         juce::FileOutputStream os (pngOut);
-        if (os.openedOk()) png.writeImageToStream (img, os);
+        if (! os.openedOk()) return;
+        os.setPosition (0);          // FileOutputStream opens append-at-end: truncate, or a re-probe to the
+        os.truncate();               // same path appends a second PNG and decoders show the FIRST (stale) frame
+        png.writeImageToStream (img, os);
     }
 
     inline void writeDesignProbe (juce::Component& root, const juce::File& jsonOut, const juce::File& pngOut)
