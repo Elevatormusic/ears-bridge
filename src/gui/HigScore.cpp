@@ -43,11 +43,6 @@ double lumOf (const juce::String& hex) {
     auto comp = [&] (int i) { return (double) h.substring (i, i + 2).getHexValue32(); };
     return 0.2126 * chan (comp (0)) + 0.7152 * chan (comp (2)) + 0.0722 * chan (comp (4));
 }
-double contrastRatio (const juce::String& a, const juce::String& b) {
-    const double l1 = lumOf (a), l2 = lumOf (b);
-    const double hi = juce::jmax (l1, l2), lo = juce::jmin (l1, l2);
-    return (hi + 0.05) / (lo + 0.05);
-}
 bool isLarge (const El& e) { return e.fontPt >= kLargeFontPt || (e.bold && e.fontPt >= kLargeBoldFontPt); }
 
 struct Box { double left, top, right, bottom; };
@@ -69,6 +64,15 @@ bool interactive (const El& e) {
 }
 
 } // namespace
+
+// P4 T4: moved OUT of the anonymous namespace above (it sat there with internal linkage) to
+// eb::hig scope, matching the HigScore.h declaration — the token tests and the state-sweep
+// checker consume the same definition scoreDescriptor uses. lumOf/chan stay file-local.
+double contrastRatio (const juce::String& a, const juce::String& b) {
+    const double l1 = lumOf (a), l2 = lumOf (b);
+    const double hi = juce::jmax (l1, l2), lo = juce::jmin (l1, l2);
+    return (hi + 0.05) / (lo + 0.05);
+}
 
 std::vector<Finding> scoreDescriptor (const juce::var& root) {
     std::vector<Finding> out;

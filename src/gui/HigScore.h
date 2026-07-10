@@ -24,4 +24,9 @@ std::vector<Finding> scoreDescriptor (const juce::var& descriptorRoot);
 // fontPt sits under the macOS legibility floor. Category "min-font", severity medium.
 std::vector<Finding> scoreMinFont (const juce::var& descriptorRoot);
 
+// WCAG 2.x contrast ratio over "#rrggbb" hex strings — the byte-faithful native-review port that
+// scoreDescriptor already uses internally, exposed so the token tests (P4 T4) and the state-sweep
+// checker (P4 T7) share the codebase's ONE WCAG implementation.
+double contrastRatio (const juce::String& fgHex, const juce::String& bgHex);
+
 } // namespace eb::hig

@@ -102,6 +102,11 @@ Stage title = Title1 (22 Bold, 26 row). Eyebrows = Subheadline (11 Bold + tracki
 Lead/body = Body 13 (2-line reserve 34). Hints = Callout 12 (line unit 16, 2-line reserve 32).
 Combos/buttons 28; CTA capsule 34; disclosure row 24 (>= 24px WCAG target floor). Card pad
 16x12; card gap 8; intra-group 4; inter-group 8. StageHeader 96 (12 top pad). Fold budget at
-900x720: stage viewport = 546px — see the T10 plan's height ledger. Colour tokens: M3 landed in
-P2.9 (Theme::primaryFill / Theme::accentText live — the accent-fill + 4.5:1-safe accent-text tokens);
-M2/M4 remain P4.
+900x720: stage viewport = 546px — see the T10 plan's height ledger.
+Colour tokens: M3 landed in P2.9 (Theme::primaryFill / Theme::accentText); M2 + M4 landed in P4 -
+controlBorder = 0x59ffffff dark / 0x70000000 light (>=3:1 vs bg, combos + enabled secondary-button
+strokes only; decorative hairlines stay sep()/sep2()), disabled primary = primaryFill @ a0.40 over bg
+(borderless), and the light primary CTA darkened #0088FF -> #0067D6 so the white label clears 4.5:1
+(5.37:1; Apple's own white-on-blue context is the darker selection blue). Eyebrow note: the
+Subheadline eyebrow token is LEADING 14 (the type row); StageHeader gives the eyebrow label 16px of
+BOUNDS (2px optical padding) - bounds may exceed leading; the token is the leading (T10-2 ruling).

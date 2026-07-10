@@ -36,6 +36,15 @@ public:
     static juce::Colour accentHover();
     static juce::Colour primaryFill();  // M3 (P2.9): primary-CTA FILL - W2 --accent-fill; accent() stays selection/focus
     static juce::Colour accentText();   // accent AS TEXT - 4.5:1-safe in both themes (stage eyebrows, "You are here")
+    static juce::Colour controlBorder();       // M4 (P4): >=3:1 boundary stroke for ENABLED interactive
+                                               // controls (combo outline + secondary-button stroke).
+                                               // Decorative hairlines stay sep()/sep2().
+    static juce::Colour primaryFillDisabled(); // M2 (P4): dimmed-but-recognisable primary (translucent
+                                               // primaryFill over bg; no border - the fill IS the identity)
+    // The ONE button-label colour rule drawButtonText paints (headless-testable). Enabled primary =
+    // onAccentText (white on the blue capsule, BOTH themes); everything else = the registered
+    // textColourOn/OffId path (disabled primary keeps text() - HIG M2 'leave the label path alone').
+    static juce::Colour buttonLabelColour (const juce::TextButton&);
     static juce::Colour ok();           // CLEAN/running status TEXT (WCAG 4.5:1-safe; use okFill for fills)
     static juce::Colour warn();         // resample/amber status TEXT (4.5:1-safe)
     static juce::Colour danger();       // clip/error status TEXT (4.5:1-safe)

@@ -31,9 +31,17 @@ juce::Colour Theme::textDim()   { return pick (0x9effffff, 0x99000000); }
 juce::Colour Theme::textFaint() { return pick (0x4dffffff, 0x59000000); }
 juce::Colour Theme::axis()      { return pick (0xff98989D, 0xff5C5C61); }
 juce::Colour Theme::accent()    { return pick (0xff0091FF, 0xff0088FF); }
-juce::Colour Theme::accentHover(){ return pick (0xff1F9DFF, 0xff0A7BEA); }
-juce::Colour Theme::primaryFill(){ return pick (0xff0A6FE0, 0xff0088FF); }  // W2 --accent-fill / macOS 27 System Blue
+juce::Colour Theme::accentHover(){ return pick (0xff1F9DFF, 0xff005CC2); }  // P4: hover darkens below the new light idle (6.35:1 w/ white); dark stays W2-exact
+juce::Colour Theme::primaryFill(){ return pick (0xff0A6FE0, 0xff0067D6); }  // W2 --accent-fill / P4: light darkened to the accentText-family blue - white label 5.37:1 (Apple's white-on-blue context is the darker selection blue)
 juce::Colour Theme::accentText() { return pick (0xff0091FF, 0xff0067D6); }  // 5.16:1 on #1E1E1E / 4.55:1 on #ECECEE
+juce::Colour Theme::controlBorder() {
+    // M4 (WCAG 1.4.11): composited over bg() this reads ~#6D6D6D dark (3.18:1) / ~#848485 light
+    // (3.17:1) - the 3:1 component-boundary floor holds in both themes. Computed against bg() (the
+    // outside edge that identifies the control); values re-derive if bg() ever moves.
+    const auto c = pick (0x59ffffff, 0x70000000);
+    return SystemA11y::increaseContrast() ? c.withAlpha (juce::jmin (1.0f, c.getFloatAlpha() * 2.0f)) : c;
+}
+juce::Colour Theme::primaryFillDisabled() { return primaryFill().withAlpha (0.40f); }  // over bg: #163E6C dark / #8EB7E4 light
 // LIGHT VALUE AT THE FLOOR: 4.551:1 vs 4.5 - do NOT lighten; darker is safe (any lightening flips the gate).
 // HIG audit (2026-06-23): ok/warn/danger are the TEXT colours (status/warning/error labels), tuned to pass
 // WCAG 4.5:1 on the ACTUAL label backgrounds in BOTH appearances (recomputed on barBg #F6F6F8 / bg #ECECEE /
@@ -77,7 +85,7 @@ void Theme::applyColours() {
     setColour (juce::Label::textColourId,                    text());
     setColour (juce::ComboBox::backgroundColourId,           ctrl());
     setColour (juce::ComboBox::textColourId,                 text());
-    setColour (juce::ComboBox::outlineColourId,              sep2());
+    setColour (juce::ComboBox::outlineColourId,              controlBorder());   // M4 (P4): >=3:1 boundary stroke
     setColour (juce::ComboBox::arrowColourId,                textDim());
     setColour (juce::PopupMenu::backgroundColourId,          surface());
     setColour (juce::PopupMenu::textColourId,                text());
@@ -107,16 +115,16 @@ void Theme::drawButtonBackground (juce::Graphics& g, juce::Button& b,
     const bool primary = (bool) b.getProperties().getWithDefault ("primary", false);
 
     juce::Colour fill;
-    if (! b.isEnabled())   fill = ctrl();
-    else if (primary)      fill = over ? accentHover() : primaryFill();   // M3: idle #0A6FE0, hover #1F9DFF (W2 states)
+    if (! b.isEnabled())   fill = primary ? primaryFillDisabled() : ctrl();   // M2: identity preserved
+    else if (primary)      fill = over ? accentHover() : primaryFill();       // M3: idle/hover (W2 states)
     else                   fill = over ? ctrlHover()  : ctrl();
     if (down && b.isEnabled())                                            // macOS 27 clicked recipe: + #000 a0.10
         fill = fill.overlaidWith (juce::Colours::black.withAlpha (0.10f));
 
     g.setColour (fill);
     g.fillRoundedRectangle (r, radius);
-    if (! primary || ! b.isEnabled()) {
-        g.setColour (sep2());
+    if (! primary) {                                   // M4: primary (enabled OR disabled) is borderless
+        g.setColour (b.isEnabled() ? controlBorder() : sep2());   // disabled stays quiet (1.4.11-exempt)
         g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.0f);
     }
     if (b.hasKeyboardFocus (true)) {   // HIG M4: visible keyboard-focus ring (white on the accent primary, accent elsewhere)
@@ -208,13 +216,18 @@ void Theme::paintCardSurface (juce::Graphics& g, juce::Rectangle<float> r, float
     g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.0f);
 }
 
+juce::Colour Theme::buttonLabelColour (const juce::TextButton& b) {
+    const bool primary = (bool) b.getProperties().getWithDefault ("primary", false);
+    if (primary && b.isEnabled()) return onAccentText();
+    return b.findColour (b.getToggleState() ? juce::TextButton::textColourOnId
+                                            : juce::TextButton::textColourOffId);
+}
+
 void Theme::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool /*over*/, bool /*down*/) {
     const juce::Font font (getTextButtonFont (b, b.getHeight()));
-    const juce::Colour col = b.findColour (b.getToggleState() ? juce::TextButton::textColourOnId
-                                                              : juce::TextButton::textColourOffId)
-                                .withMultipliedAlpha (b.isEnabled() ? 1.0f : 0.5f);
+    // P4: every face routes through the ONE label rule (enabled primary = white BOTH themes).
+    const juce::Colour col = buttonLabelColour (b).withMultipliedAlpha (b.isEnabled() ? 1.0f : 0.5f);
     const auto id = b.getProperties().getWithDefault ("glyph", juce::String()).toString();
-    if (id.isEmpty()) { LookAndFeel_V4::drawButtonText (g, b, false, false); return; }
 
     using Fn = void (*) (juce::Graphics&, juce::Rectangle<float>, juce::Colour);
     Fn fn = nullptr;
@@ -226,7 +239,16 @@ void Theme::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool /*over*
     else if (id == "folder")  fn = glyph::drawFolder;
     else if (id == "export")  fn = glyph::drawExport;
     else if (id == "warning") fn = glyph::drawWarning;
-    if (fn == nullptr) { LookAndFeel_V4::drawButtonText (g, b, false, false); return; }
+    if (fn == nullptr) {
+        // No glyph (or an unknown id): direct centred draw. NOT the V4 delegation - that re-resolves
+        // the colour itself and would bypass the primary rule; all our TextButtons are centred
+        // capsules, so V4's indent logic added nothing.
+        g.setColour (col);
+        g.setFont (font);
+        g.drawFittedText (b.getButtonText(), b.getLocalBounds().reduced (8, 0),
+                          juce::Justification::centred, 1);
+        return;
+    }
 
     constexpr float ico = 14.0f, gap = 7.0f;                       // W2 .btn .ico 14px + 7px gap
     const float availW = (float) b.getWidth() - 16.0f;             // capsule side padding
