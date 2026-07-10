@@ -101,7 +101,7 @@ nav a.navlink:hover{ color:var(--tx); }
 .demoframe{ display:block; width:100%; height:800px; border:0; background:transparent; border-radius:12px; box-shadow:0 30px 60px -30px rgba(0,0,0,.35); }
 @media (prefers-color-scheme: dark){ .demoframe{ box-shadow:0 30px 60px -30px rgba(0,0,0,.8); } }
 .demowrap .mobshot, .demowrap .nojs{ display:none; }
-.demowrap .mobshot img, .demowrap .nojs{ width:100%; border-radius:14px; border:1px solid var(--sep); }
+.demowrap .mobshot img, .demowrap .nojs{ width:100%; height:auto; border-radius:14px; border:1px solid var(--sep); }
 @media (max-width:700px){ .demoframe{ display:none; } .demowrap .mobshot{ display:block; } }
 
 section{ padding:90px 0; }
@@ -146,7 +146,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
 </head>
 <body>
 <nav><div class="wrap">
-  <a class="brand" href="#top"><img src="assets/icon.svg?v=3" alt="" aria-hidden="true">EARS Bridge</a>
+  <a class="brand" href="#top"><img src="assets/icon.svg?v=3" width="24" height="24" alt="" aria-hidden="true">EARS Bridge</a>
   <span class="grow"></span>
   <a class="navlink" href="#how">How it works</a>
   <a class="navlink" href="#download">Download</a>
@@ -156,13 +156,13 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
 </div></nav>
 
 <div role="note" style="background:var(--bg2);border-bottom:1px solid var(--sep);font-size:14px;line-height:1.5;color:var(--tx2);text-align:center;padding:9px 16px;">
-  <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#E0850E;vertical-align:middle;margin-right:7px;"></span><strong style="color:var(--tx);font-weight:600;">Alpha · pre-release.</strong> Expect bugs and rough edges while EARS Bridge is in active testing — please <a href="https://github.com/Elevatormusic/ears-bridge/issues" style="color:var(--accent);">report an issue</a>.
+  <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#E0850E;vertical-align:middle;margin-right:7px;"></span><strong style="color:var(--tx);font-weight:600;">Alpha · pre-release.</strong> Expect bugs and rough edges while EARS Bridge is in active testing — please <a href="https://github.com/Elevatormusic/ears-bridge/issues" style="color:var(--accent);text-decoration:underline;text-underline-offset:2px;">report an issue</a>.
 </div>
 
 <a id="top"></a>
 <main>
 <header class="hero"><div class="wrap">
-  <img class="appicon" src="assets/icon.svg?v=3" alt="EARS Bridge app icon">
+  <img class="appicon" src="assets/icon.svg?v=3" width="124" height="124" alt="EARS Bridge app icon">
   <h1>EARS Bridge</h1>
   <p class="tag">Measure your headphones with Dirac Live.</p>
   <p class="lede">Dirac Live takes one calibrated microphone. A miniDSP EARS has two — one per ear. EARS Bridge sits between them: it applies each ear's calibration and presents it to Dirac through a virtual audio device as the single microphone it expects. By default it runs in Auto per-ear mode, following Dirac's sweep so each earcup is measured in turn rather than combined.</p>
@@ -174,10 +174,12 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
   <div class="demowrap">
     <iframe class="demoframe" title="Interactive EARS Bridge demo — try the dropdowns, load a calibration, and press Start" src="demo.html" loading="lazy"></iframe>
     <picture class="mobshot">
+      <source media="(prefers-color-scheme: dark)" type="image/webp" srcset="assets/app-dark.webp?v=5">
       <source media="(prefers-color-scheme: dark)" srcset="assets/app-dark.png?v=5">
-      <img src="assets/app-light.png?v=5" alt="EARS Bridge: Auto per-ear mode, per-ear calibration plots, the Dirac shared-mode confirmation, and live level meters sitting in the green target band">
+      <source type="image/webp" srcset="assets/app-light.webp?v=5">
+      <img src="assets/app-light.png?v=5" width="1680" height="1652" alt="EARS Bridge: Auto per-ear mode, per-ear calibration plots, the Dirac shared-mode confirmation, and live level meters sitting in the green target band">
     </picture>
-    <noscript><img class="nojs" src="assets/app-light.png?v=5" alt="EARS Bridge interface: Auto per-ear mode, per-ear calibration plots, and level meters"></noscript>
+    <noscript><img class="nojs" src="assets/app-light.png?v=5" width="1680" height="1652" alt="EARS Bridge interface: Auto per-ear mode, per-ear calibration plots, and level meters"></noscript>
   </div>
   <script>addEventListener('message',function(e){if(e.data&&typeof e.data.ebDemoHeight==='number'){var f=document.querySelector('.demoframe');if(f){var h=Math.max(560,Math.min(1120,e.data.ebDemoHeight))+'px';if(f.style.height!==h)f.style.height=h;}}});</script>
 </div></header>
@@ -438,7 +440,7 @@ footer .disc{ width:100%; margin-top:14px; line-height:1.5; }
 
 </main>
 <footer><div class="wrap">
-  <a class="fbrand" href="#top"><img src="assets/icon.svg?v=3" alt="" aria-hidden="true">EARS Bridge</a>
+  <a class="fbrand" href="#top"><img src="assets/icon.svg?v=3" width="20" height="20" alt="" aria-hidden="true">EARS Bridge</a>
   <span class="grow"></span>
   <a href="guide.html">Guide</a>
   <a href="faq.html">FAQ</a>
