@@ -1,0 +1,9 @@
+{
+  "findings": [
+    {
+      "category": "two-state-inert",
+      "severity": "info",
+      "element": "i2"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "findings": [
+    {
+      "category": "unstyled-control-states",
+      "severity": "high",
+      "element": "i3p"
+    }
+  ]
+}

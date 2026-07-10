@@ -155,4 +155,139 @@ std::vector<Finding> scoreMinFont (const juce::var& root) {
     return out;
 }
 
+// ===== P4: the state-sweep checker (native-review.mjs stateFindings, tiers 1-2; v1.10.0) =========
+// Transcribed from the plugin source with the semantics verified line-by-line. Two fidelity notes vs
+// the plan's draft: (1) isPrimaryAction is the FULL upstream predicate (primary || prominent ||
+// variant~=/prominent/i), not primary alone; (2) upstream runs tier 2 even when tier 1 found the
+// control inert (no early continue) - outcome-equivalent given the tolerances (equal-within-2/0.01
+// samples can never differ by the 0.75/0.05 louder margins), but mirrored exactly for parity.
+// bg is accepted in the descriptor's schema form (hex string); the JS also tolerates an [r,g,b]
+// array used by its internal test callers - our probe and fixtures only ever emit hex.
+namespace {
+constexpr const char* kSweepStates[] = { "normal", "over", "down", "disabled", "toggledOn", "toggledOff" };
+
+struct Sample { bool ok = false; double r = 0, g = 0, b = 0, alpha = 1; juce::Array<juce::var> grid; };
+
+Sample sampleOf (const juce::var& s) {
+    Sample out;
+    if (! s.isObject()) return out;
+    const auto rgb = s.getProperty ("rgb", {});
+    auto* a = rgb.getArray();
+    if (a == nullptr || a->size() != 3) return out;
+    out.r = (double) (*a)[0]; out.g = (double) (*a)[1]; out.b = (double) (*a)[2];
+    out.alpha = s.hasProperty ("alpha") ? (double) s.getProperty ("alpha", 1.0) : 1.0;
+    if (auto* g = s.getProperty ("grid", {}).getArray()) out.grid = *g;
+    out.ok = true;
+    return out;
+}
+bool measurable (const Sample& s) { return s.ok && s.alpha >= kSweepLowAlpha; }
+double chDiff (const Sample& a, const Sample& b) {
+    return juce::jmax (std::abs (a.r - b.r), std::abs (a.g - b.g), std::abs (a.b - b.b));
+}
+// samplesEqual: mean rgb within tol AND alpha within tol AND every co-indexed grid cell within tol
+// (a missing grid on either side degrades to mean-only - never a forced difference).
+bool samplesEqual (const Sample& a, const Sample& b) {
+    if (! a.ok || ! b.ok) return false;
+    if (chDiff (a, b) > (double) kSweepRgbTol) return false;
+    if (std::abs (a.alpha - b.alpha) > kSweepAlphaTol) return false;
+    const int n = juce::jmin (a.grid.size(), b.grid.size());
+    for (int i = 0; i < n; ++i) {
+        auto* ga = a.grid[i].getArray(); auto* gb = b.grid[i].getArray();
+        if (ga != nullptr && gb != nullptr && ga->size() == 3 && gb->size() == 3) {
+            const double d = juce::jmax (std::abs ((double) (*ga)[0] - (double) (*gb)[0]),
+                                         juce::jmax (std::abs ((double) (*ga)[1] - (double) (*gb)[1]),
+                                                     std::abs ((double) (*ga)[2] - (double) (*gb)[2])));
+            if (d > (double) kSweepRgbTol) return false;
+        }
+    }
+    return true;
+}
+// Hue in degrees, or -1 for achromatic (no meaningful hue). hueDelta = smallest angular difference;
+// 0 when either side is achromatic (a gray has no hue to rotate).
+double hueDeg (const Sample& s) {
+    const double r = s.r / 255.0, g = s.g / 255.0, b = s.b / 255.0;
+    const double mx = juce::jmax (r, juce::jmax (g, b)), mn = juce::jmin (r, juce::jmin (g, b)), c = mx - mn;
+    if (c < 1.0e-6) return -1.0;
+    double h;
+    if (mx == r)      h = std::fmod ((g - b) / c, 6.0);
+    else if (mx == g) h = (b - r) / c + 2.0;
+    else              h = (r - g) / c + 4.0;
+    return std::fmod (h * 60.0 + 360.0, 360.0);
+}
+double hueDelta (const Sample& a, const Sample& b) {
+    const double ha = hueDeg (a), hb = hueDeg (b);
+    if (ha < 0.0 || hb < 0.0) return 0.0;
+    const double d = std::abs (ha - hb);
+    return juce::jmin (d, 360.0 - d);
+}
+juce::String rgbHex (const Sample& s) {
+    return "#" + juce::String::toHexString ((int) (s.r + 0.5)).paddedLeft ('0', 2)
+               + juce::String::toHexString ((int) (s.g + 0.5)).paddedLeft ('0', 2)
+               + juce::String::toHexString ((int) (s.b + 0.5)).paddedLeft ('0', 2);
+}
+// The FULL upstream predicate: descriptor `primary`/`prominent` flags or a variant naming "prominent".
+bool isPrimaryAction (const juce::var& ev) {
+    return (bool) ev.getProperty ("primary", false)
+        || (bool) ev.getProperty ("prominent", false)
+        || ev.getProperty ("variant", {}).toString().containsIgnoreCase ("prominent");
+}
+} // namespace
+
+std::vector<Finding> scoreStateSweep (const juce::var& root) {
+    std::vector<Finding> out;
+    auto* els = root.getProperty ("elements", {}).getArray();
+    if (els == nullptr) return out;
+    for (auto& ev : *els) {
+        const auto id = ev.getProperty ("id", {}).toString();
+        const auto states = ev.getProperty ("states", {});
+        if (! states.isObject()) continue;
+
+        // ---- tier 1: inertness across ALL measurable swept states ----
+        juce::StringArray present;
+        Sample first; bool allEqual = true;
+        for (auto* k : kSweepStates) {
+            const auto s = sampleOf (states.getProperty (juce::Identifier (k), {}));
+            if (! measurable (s)) continue;
+            if (present.isEmpty()) first = s;
+            else if (! samplesEqual (s, first)) allEqual = false;
+            present.add (k);
+        }
+        if (present.size() >= 2 && allEqual) {
+            if (present.size() == 2)
+                out.push_back ({ "two-state-inert", "info", id,
+                    "control renders identically across its 2 swept states (" + present.joinIntoString ("/")
+                    + ") - may be sanctioned; verify intent" });
+            else
+                out.push_back ({ "unstyled-control-states",
+                    isPrimaryAction (ev) ? "high" : "medium", id,
+                    "control renders identically across all " + juce::String (present.size())
+                    + " swept states (" + present.joinIntoString ("/") + ") - states appear unstyled" });
+            // NO continue: upstream still runs tier 2 on an inert control (it can never fire there -
+            // equality tolerance is far tighter than the louder margins - but parity mirrors the flow).
+        }
+
+        // ---- tier 2: disabled-not-louder (one-direction, threshold-gated) ----
+        const auto n = sampleOf (states.getProperty ("normal", {}));
+        const auto d = sampleOf (states.getProperty ("disabled", {}));
+        if (! measurable (n) || ! measurable (d)) continue;
+        const bool bgOk = (bool) ev.getProperty ("bgIntrospectable", false);
+        const auto bgHex = ev.getProperty ("bg", {}).toString();
+        if (bgOk && bgHex.startsWithChar ('#')) {
+            if (hueDelta (n, d) > kHueSwapDeg && std::abs (d.alpha - n.alpha) <= kAlphaLouderMargin)
+                continue;                                        // a colour SWAP, not a dimming failure
+            const double cn = contrastRatio (rgbHex (n), bgHex);
+            const double cd = contrastRatio (rgbHex (d), bgHex);
+            if (cd > cn + kContrastLouderMargin)
+                out.push_back ({ "disabled-louder", "low", id,
+                    "disabled contrast " + juce::String (cd, 2) + ":1 exceeds normal "
+                    + juce::String (cn, 2) + ":1 - disabled reads louder than idle" });
+        } else if (d.alpha > n.alpha + kAlphaLouderMargin) {
+            out.push_back ({ "disabled-louder", "low", id,
+                "disabled alpha " + juce::String (d.alpha, 2) + " exceeds normal alpha "
+                + juce::String (n.alpha, 2) + " - disabled reads louder than idle" });
+        }
+    }
+    return out;
+}
+
 } // namespace eb::hig

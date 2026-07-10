@@ -18,4 +18,13 @@ inline constexpr double kMinFontPt = 7.5;   // T10 min-font floor, PROBE units (
                                             // >=0.5 margin on both CI platforms (see the [T10]
                                             // min-font test); recalibrate (measured-0.5), never drop.
 
+// P4 state-sweep checker constants - mirror native-review.mjs stateFindings (plugin v1.10.0).
+// Parity-locked by the state-* fixtures in tests/fixtures/hig; change both + regenerate.
+inline constexpr int    kSweepRgbTol          = 2;     // per-channel |d| <= 2 counts as identical
+inline constexpr double kSweepAlphaTol        = 0.01;
+inline constexpr double kSweepLowAlpha        = 0.05;  // below = not measurable (excluded, never compared)
+inline constexpr double kContrastLouderMargin = 0.75;  // Apple's own sanctioned louder-deltas reach ~0.57
+inline constexpr double kAlphaLouderMargin    = 0.05;
+inline constexpr double kHueSwapDeg           = 60.0;  // beyond = a colour SWAP, not a dimming failure
+
 } // namespace eb::hig

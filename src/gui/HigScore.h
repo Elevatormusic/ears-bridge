@@ -29,4 +29,14 @@ std::vector<Finding> scoreMinFont (const juce::var& descriptorRoot);
 // checker (P4 T7) share the codebase's ONE WCAG implementation.
 double contrastRatio (const juce::String& fgHex, const juce::String& bgHex);
 
+// P4 EB extension (kept OUT of scoreDescriptor - the golden parity contract is untouched): the
+// state-sweep checker, a port of native-review.mjs stateFindings tiers 1-2 (v1.10.0). Tier 1
+// inertness: 'unstyled-control-states' (medium; high when element.primary==true) when >=3 measurable
+// states are all identical; 'two-state-inert' (info) when exactly 2 (often sanctioned - stock V4
+// sliders, Apple's Disabled==Idle identities). Tier 2: 'disabled-louder' (low) when the disabled
+// sample's contrast-vs-bg exceeds normal by > kContrastLouderMargin (hue swaps skipped), else the
+// alpha fallback. Tier 3 (macOS recipe diff) is deliberately NOT adopted - advisory-by-design and
+// the frames are our design authority (P4 frozen decision 8).
+std::vector<Finding> scoreStateSweep (const juce::var& descriptorRoot);
+
 } // namespace eb::hig

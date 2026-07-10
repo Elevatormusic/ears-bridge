@@ -15,6 +15,8 @@ TEST_CASE("HigScore matches the native-review golden findings on every fixture")
 
     for (auto& descFile : descriptors) {
         const auto name = descFile.getFileName().upToLastOccurrenceOf (".descriptor.json", false, false);
+        if (name.startsWith ("state-")) continue;   // P4 T7: the state corpus parity-locks scoreStateSweep
+                                                    // (next case), not scoreDescriptor - split, never mixed
         auto expectedFile = dir.getChildFile (name + ".expected.json");
         REQUIRE (expectedFile.existsAsFile());
 
@@ -26,6 +28,34 @@ TEST_CASE("HigScore matches the native-review golden findings on every fixture")
         auto* expected = expectedFindings.getArray();
         REQUIRE (expected != nullptr);
 
+        juce::StringArray got, want;
+        for (auto& f : findings) got.add (f.category + "|" + f.severity + "|" + f.element);
+        for (auto& e : *expected) want.add (e.getProperty ("category", {}).toString() + "|"
+                                          + e.getProperty ("severity", {}).toString() + "|"
+                                          + e.getProperty ("element", {}).toString());
+        got.sort (false); want.sort (false);
+        INFO ("fixture: " << name << "  got=[" << got.joinIntoString (", ") << "]  want=[" << want.joinIntoString (", ") << "]");
+        CHECK (got == want);
+    }
+}
+
+// P4 T7: the state-sweep corpus. Same golden discipline for scoreStateSweep (stateFindings tiers 1-2,
+// plugin v1.10.0): expected.json captured by gen.mjs from the SAME plugin source the checker ports, so
+// the C++ port and the JS advisory cannot drift. Parity = (category | severity | element); messages out
+// of scope. Fix port defects against the fixture truth - never regenerate fixtures to match the port.
+TEST_CASE("scoreStateSweep matches the native-review golden on every state fixture") {
+    juce::File dir (EB_HIG_FIXTURE_DIR);
+    auto descriptors = dir.findChildFiles (juce::File::findFiles, false, "state-*.descriptor.json");
+    REQUIRE (descriptors.size() > 0);
+    for (auto& descFile : descriptors) {
+        const auto name = descFile.getFileName().upToLastOccurrenceOf (".descriptor.json", false, false);
+        auto expectedFile = dir.getChildFile (name + ".expected.json");
+        REQUIRE (expectedFile.existsAsFile());
+        auto findings = eb::hig::scoreStateSweep (juce::JSON::parse (descFile));
+        const auto expectedRoot     = juce::JSON::parse (expectedFile);
+        const auto expectedFindings = expectedRoot.getProperty ("findings", {});
+        auto* expected = expectedFindings.getArray();
+        REQUIRE (expected != nullptr);
         juce::StringArray got, want;
         for (auto& f : findings) got.add (f.category + "|" + f.severity + "|" + f.element);
         for (auto& e : *expected) want.add (e.getProperty ("category", {}).toString() + "|"

@@ -1100,3 +1100,56 @@ TEST_CASE("writeDesignProbe re-probe overwrites the PNG: same path decodes to th
     CHECK (img.getHeight() == 120);
     tmp.deleteRecursively();
 }
+
+// ==================================================================================================
+// P4 T7: the live state-sweep gate. Sweeps every stage's controls through their forceable states
+// (normal/over/down/toggled/disabled) via the probe's opt-in sweep and scores the result with the
+// parity-locked scoreStateSweep port. 'two-state-inert' is a sanctioned class (stock V4 sliders,
+// Apple's Disabled==Idle identities) - logged, never failing. A sweep that covers ZERO controls is
+// itself a failure (fail-closed: a silently-vacuous gate must not pass).
+// ==================================================================================================
+TEST_CASE("State-sweep gate: swept controls style their states; disabled never louder [P4]") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    auto tmp = juce::File::createTempFile (""); tmp.createDirectory();
+    eb::MainComponent mc (eb::MainComponent::TestConfig { tmp, true,
+                                                          tmp.getChildFile ("appdata"), tmp.getChildFile ("logs") });
+    const bool wasDark = eb::Theme::dark();
+    mc.setSize (900, 720);
+    juce::StringArray bad, info;
+    int totalSwept = 0;
+    // DARK-ONLY (plan-pre-approved trim): both themes measured 48 s; the inertness signal is
+    // LnF-code-path-driven and barely theme-dependent, so the light pass bought no coverage the
+    // dark pass lacks. Dark is the app default and the denser failure surface.
+    for (bool dark : { true }) {
+        mc.forceThemeForTest (dark);
+        struct StageRef { const char* name; eb::WizardStep step; juce::Component* c; };
+        const StageRef stages[] = {
+            { "connect",   eb::WizardStep::Connect,   &mc.connectStageForTest() },
+            { "calibrate", eb::WizardStep::Calibrate, &mc.calibrateStageForTest() },
+            { "level",     eb::WizardStep::Level,     &mc.levelStageForTest() },
+            { "measure",   eb::WizardStep::Measure,   &mc.measureStageForTest() },
+        };
+        for (const auto& st : stages) {
+            mc.forceWizardStepForTest (st.step);
+            // Sweep the STAGE as root (smaller snapshots than the whole window; the stage carries
+            // every control the step owns). sweep=true is the explicit opt-in (EB divergence 2).
+            const auto json = hig::describeComponentTree (*st.c, "sweep.png", /*sweep*/ true);
+            const auto tree = juce::JSON::parse (json);
+            const int swept = (int) tree.getProperty ("sweep", {}).getProperty ("sweptControls", 0);
+            totalSwept += swept;
+            if (swept <= 0)                                            // a vacuous sweep is a fail
+                bad.add (juce::String (st.name) + (dark ? "/dark" : "/light") + ": swept ZERO controls");
+            for (auto& f : eb::hig::scoreStateSweep (tree)) {
+                const auto line = juce::String (st.name) + (dark ? "/dark: " : "/light: ")
+                                + f.category + "/" + f.severity + " on " + f.element + " - " + f.message;
+                if (f.category == "two-state-inert") info.add (line);   // sanctioned class: logged only
+                else bad.add (line);                                    // unstyled / disabled-louder FAIL
+            }
+        }
+    }
+    mc.forceThemeForTest (wasDark);
+    INFO ("swept " << totalSwept << " controls; sanctioned two-state notes:\n" << info.joinIntoString ("\n"));
+    INFO ("blocking findings:\n" << bad.joinIntoString ("\n"));
+    CHECK (bad.isEmpty());
+    tmp.deleteRecursively();
+}
