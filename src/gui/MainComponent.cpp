@@ -1589,7 +1589,8 @@ void MainComponent::refreshMeasureView (const eb::WizardState& ws) {
                     : (! refLoaded ? Lead::Reference : Lead::Waiting);
     measureStage_.setLead (lead);
     const bool showVerdicts = measureVerdictShowing();
-    const auto head = MeasureStage::measureHeadCopy (lead, settings.advancedOverride(), showVerdicts);
+    const auto head = MeasureStage::measureHeadCopy (lead, settings.advancedOverride(), showVerdicts,
+                                                     settings.combineMode());   // P3 T7 ruling: mode-aware head
     measureStage_.setHeadCopy (head.title, head.sub);
     measureStage_.setWaitHint (running && lead == Lead::Waiting
         ? MeasureStage::waitingHint (armedNoSweepTicks_ / 30, refEndpointMismatch_,
@@ -1630,7 +1631,7 @@ eb::CaptureCardModel MainComponent::composeCaptureModel (int ear, const char* na
         return eb::CaptureCardModel::capturing (name, eb::CaptureCard::captureFraction (captureTicks_, secs),
                                                 juce::roundToInt (secs));
     }
-    return eb::CaptureCardModel::waiting (name);
+    return eb::CaptureCardModel::waiting (name, settings.combineMode());   // P3 T7 ruling: mode-aware sub
 }
 
 eb::WizardStep MainComponent::resolveShownStage (const eb::WizardState& ws,
@@ -1740,7 +1741,8 @@ void MainComponent::driveVerdictForTest (const eb::VerdictCardModel& l, const eb
                                          bool detailsOpenRight) {
     forceWizardStepForTest (WizardStep::Measure);
     measureStage_.setLead (MeasureStage::Lead::Waiting);
-    const auto head = MeasureStage::measureHeadCopy (MeasureStage::Lead::Waiting, false, /*verdictShowing*/ true);
+    const auto head = MeasureStage::measureHeadCopy (MeasureStage::Lead::Waiting, false, /*verdictShowing*/ true,
+                                                     settings.combineMode());   // hermetic gates: AutoPerEar default
     measureStage_.setHeadCopy (head.title, head.sub);
     measureStage_.setVerdictModels (l, r, l.stale || r.stale);
     measureStage_.verdictCardForTest (1).setDetailsOpen (detailsOpenRight);
@@ -3086,17 +3088,19 @@ void MainComponent::timerCallback() {
                 forceThemeForTest (dk);
                 forceWizardStepForTest (WizardStep::Measure);
                 measureStage_.setLead (MeasureStage::Lead::Waiting);
-                const auto head = MeasureStage::measureHeadCopy (MeasureStage::Lead::Waiting, false, false);
+                // Canonical AUTO scenes (the routine the grid depicts); the mode variants are pinned headless.
+                const auto head = MeasureStage::measureHeadCopy (MeasureStage::Lead::Waiting, false, false,
+                                                                 eb::CombineMode::AutoPerEar);
                 measureStage_.setHeadCopy (head.title, head.sub);               // the 2-line armed title, rendered
                 const juce::String mtag = dk ? "dark" : "light";
                 measureStage_.setCaptureModels (eb::CaptureCardModel::capturing ("LEFT EAR", 0.58f, 10),
-                                                eb::CaptureCardModel::waiting ("RIGHT EAR"));
+                                                eb::CaptureCardModel::waiting ("RIGHT EAR", eb::CombineMode::AutoPerEar));
                 resized();
                 hig::writeDesignProbe (*getTopLevelComponent(),
                     dir.getChildFile ("hig-" + mtag + "-normal-capturecards.json"),
                     dir.getChildFile ("hig-" + mtag + "-normal-capturecards.png"));
                 measureStage_.setCaptureModels (eb::CaptureCardModel::failed ("LEFT EAR"),
-                                                eb::CaptureCardModel::waiting ("RIGHT EAR"));
+                                                eb::CaptureCardModel::waiting ("RIGHT EAR", eb::CombineMode::AutoPerEar));
                 hig::writeDesignProbe (*getTopLevelComponent(),
                     dir.getChildFile ("hig-" + mtag + "-normal-capturefailed.json"),
                     dir.getChildFile ("hig-" + mtag + "-normal-capturefailed.png"));

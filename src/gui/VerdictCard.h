@@ -33,6 +33,7 @@ public:
     juce::Label&   fixBodyForTest()    { return fixBody_; }
     juce::Label&   badgeForTest()      { return badge_; }
     juce::Label&   staleTagForTest()   { return staleTag_; }
+    juce::Label&   observationsForTest() { return observations_; }   // P3 T7 ruling: the cap/parity pins
 
     void applyTheme();
     void paint (juce::Graphics&) override;

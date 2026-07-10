@@ -105,6 +105,75 @@ TEST_CASE("VerdictCard model: hardware-Dirac ungraded variant + stale passthroug
     CHECK (st.stale);
 }
 
+TEST_CASE("VerdictCard view: observation cap + tooltip/a11y parity (P3 T7 ruling)") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::VerdictCard card;
+    card.setSize (273, 400);
+
+    // The pathological all-findings model (every anomaly bit minus the structurally-exclusive
+    // kNoBand): 9 logical observations - 5 past the cap. The MODEL keeps full evidence; the cap
+    // is a VIEW rule only.
+    eb::ShapeScalars s;
+    s.driftMaxDb = -9.4f; s.hfShelfDb = -4.4f; s.combDepthDb = 6.2f; s.combDelayMs = 1.23f;
+    s.effLoHz = 152.0f; s.effHiHz = 8010.0f; s.lobeWidth = 3.5f; s.stepDb = 2.6f;
+    s.resonanceHz = 4200.0f; s.humBaseHz = 50;
+    const auto patho = eb::verdictCardModelAuto ("RIGHT EAR", ear (RefMonState::GradedSuspect, 8, 20, 6.0f),
+                                                 eb::ShapeFlag::kAllAnomalyMask & ~eb::ShapeFlag::kNoBand,
+                                                 s, false, false);
+    REQUIRE (patho.observations.size() == 9);
+    card.setModel (patho);
+
+    // Expected strings, derived from the MODEL exactly as the view derives them.
+    const juce::String footer = "Provisional findings aren't ratified on hardware yet - shown for information only.";
+    juce::StringArray full;
+    bool anyProv = false;
+    for (const auto& o : patho.observations) {
+        full.add (o.provisional ? o.text + "  [provisional]" : o.text);
+        anyProv = anyProv || o.provisional;
+    }
+    juce::StringArray capped;
+    for (int i = 0; i < 4; ++i) capped.add (full[i]);
+    capped.add ("+5 more - hover Details for the full list");
+    if (anyProv) { full.add (footer); capped.add (footer); }
+
+    // PARITY PIN (the review's ordering trap): the tooltip carries the FULL join - composed BEFORE
+    // the capped label is set, never read back from it - and the a11y help mirrors it (capped
+    // findings must not be hover-only for a screen reader). The label carries exactly the cap.
+    CHECK (card.detailsRowForTest().getTooltip()  == full.joinIntoString ("\n"));
+    CHECK (card.detailsRowForTest().getHelpText() == full.joinIntoString ("\n"));
+    CHECK (card.observationsForTest().getText()   == capped.joinIntoString ("\n"));
+
+    // A provisional finding BEYOND the cap still raises the footer: kStep's "Level step:" line is
+    // the LAST of these five (shapeInfoTip order), past the cap, and the only provisional one.
+    if constexpr (! eb::kShapeCopyRatified) {
+        eb::ShapeScalars b; b.combDepthDb = 6.2f; b.combDelayMs = 1.23f; b.driftMaxDb = -9.4f;
+        b.humBaseHz = 50; b.stepDb = 2.6f;
+        const auto beyond = eb::verdictCardModelAuto ("L", ear (RefMonState::GradedSuspect, 8, 20, 6.0f),
+                                                      eb::ShapeFlag::kComb | eb::ShapeFlag::kPolarity
+                                                    | eb::ShapeFlag::kDrift | eb::ShapeFlag::kHum
+                                                    | eb::ShapeFlag::kStep, b, false, false);
+        REQUIRE (beyond.observations.size() == 5);
+        REQUIRE (beyond.observations[4].provisional);         // the one provisional line...
+        for (int i = 0; i < 4; ++i) CHECK_FALSE (beyond.observations[(size_t) i].provisional);
+        card.setModel (beyond);
+        const auto label = card.observationsForTest().getText();
+        CHECK (label.contains ("+1 more - hover Details for the full list"));
+        CHECK (label.endsWith (footer));                      // ...raises the footer from past the cap
+        CHECK_FALSE (label.contains ("Level step:"));         // the capped line itself is elided
+        CHECK (card.detailsRowForTest().getTooltip().contains ("Level step:"));   // but never lost
+    }
+
+    // NEGATIVE: at or under the cap nothing is elided - no "+N more", label == tooltip == help.
+    eb::ShapeScalars d; d.driftMaxDb = -9.0f;
+    const auto small = eb::verdictCardModelAuto ("L", ear (RefMonState::GradedClean, 30, 56, 0.5f),
+                                                 eb::ShapeFlag::kDrift, d, false, false);
+    REQUIRE (small.observations.size() == 1);
+    card.setModel (small);
+    CHECK_FALSE (card.observationsForTest().getText().contains ("more"));
+    CHECK (card.observationsForTest().getText() == card.detailsRowForTest().getTooltip());
+    CHECK (card.detailsRowForTest().getHelpText() == card.detailsRowForTest().getTooltip());
+}
+
 TEST_CASE("VerdictCard component: details toggle displaces (preferredHeight grows) and fires onLayoutChanged") {
     juce::ScopedJuceInitialiser_GUI juceInit;
     eb::VerdictCard card;

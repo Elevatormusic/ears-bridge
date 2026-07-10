@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "audio/CombineMode.h"   // P3 T7 ruling: the waiting sub speaks the combine-mode truth
 
 namespace eb {
 
@@ -13,7 +14,10 @@ struct CaptureCardModel {
     juce::String ear, badge, title, sub, foot;
     float progress = -1.0f;                     // 0..1 draws the bar; < 0 draws an EMPTY track
 
-    static CaptureCardModel waiting (const char* ear);
+    // P3 Task 7 ruling (user): the waiting sub is MODE-AWARE - the Auto copy on a Two-pass/Combined
+    // configuration described a routine that isn't running (mode-wrong copy is a trust bug). No
+    // default arg on purpose: every caller must state whose truth it renders.
+    static CaptureCardModel waiting (const char* ear, CombineMode mode);
     static CaptureCardModel capturing (const char* ear, float fraction, int sweepSeconds);
     static CaptureCardModel failed (const char* ear);
     bool operator== (const CaptureCardModel& o) const {

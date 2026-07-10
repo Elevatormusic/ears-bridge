@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
+#include "audio/CombineMode.h"   // P3 T7 ruling: measureHeadCopy is combine-mode-aware
 #include "gui/CaptureCard.h"
 #include "gui/VerdictCard.h"
 #include "gui/LevelMeter.h"
@@ -48,7 +49,9 @@ public:
 
     // ---- pure copy rules (spec §2/§5.4/§7; headless-tested in test_wizardnav.cpp) ----
     struct HeadCopy { juce::String title, sub; };
-    static HeadCopy measureHeadCopy (Lead lead, bool overrideOn, bool verdictShowing);
+    // `mode` (P3 T7 ruling): the verdict head drops the per-ear claim under Combined (Average/Sum) -
+    // the capture is one mixed channel there. No default arg: every caller states whose truth it is.
+    static HeadCopy measureHeadCopy (Lead lead, bool overrideOn, bool verdictShowing, CombineMode mode);
     static juce::String measureRunNote (bool blocked, const juce::String& machineReason,
                                         bool running, bool measureAgainShowing);
     static juce::String waitingHint (int armedSeconds, bool refEndpointMismatch, bool chainMismatch,

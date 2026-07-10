@@ -8,6 +8,12 @@ namespace {
 constexpr int kPadX = 16, kPadY = 12;             // house card pad (frame's 18 yields to the fold budget)
 constexpr int kHeadH = 24, kGradeH = 30, kMetricsH = 34, kFixLeadH = 16, kFixBodyH = 32;
 constexpr int kDetailsH = 24, kChipH = 24, kChipGap = 6, kGap = 8;
+// P3 Task 7 ruling (controller): the VIEW shows at most this many logical observation lines; beyond
+// it the label reads "+N more - hover Details for the full list". A VIEW cap, never a model cap: the
+// model keeps FULL evidence (operator== 30 Hz guard, the model pins, the tooltip/a11y mirrors below).
+// 4 is MEASURED against the pathological all-findings card at the 508px Measure viewport - the fit is
+// a HARD gate (test_hig_layout "RULE2a pathological open"), not an estimate.
+constexpr int kObsCap = 4;
 
 juce::Colour toneText (StatusTone t) {
     switch (t) {
@@ -117,18 +123,34 @@ void VerdictCard::setModel (const VerdictCardModel& m) {
                           juce::dontSendNotification);
         chip_[i].setColour (juce::Label::textColourId, m.chips[i].flagged ? Theme::warn() : Theme::textDim());
     }
-    juce::StringArray obs;
+    // Observation cap (kObsCap, ruling above). ORDER IS LOAD-BEARING: compose the FULL join FIRST,
+    // hand it to the tooltip + accessibility help, THEN set the capped label - reading the label back
+    // into the tooltip (the pre-cap idiom) would silently break tooltip-carries-all the day the cap
+    // landed. anyProv scans the FULL list: a provisional finding beyond the cap must still raise the
+    // footer. "+N more" counts logical observations only (the footer is not an observation).
+    juce::StringArray full;
     bool anyProv = false;
     for (const auto& o : m.observations) {
-        obs.add (o.provisional ? o.text + "  [provisional]" : o.text);
+        full.add (o.provisional ? o.text + "  [provisional]" : o.text);
         anyProv = anyProv || o.provisional;
     }
-    if (anyProv)
-        obs.add ("Provisional findings aren't ratified on hardware yet - shown for information only.");
-    observations_.setText (obs.joinIntoString ("\n"), juce::dontSendNotification);
-    // Collapsed-state tooltip parity (spec 6): the expanded observation text also rides the details
-    // row's hover tooltip, so the full findings stay discoverable while the card is collapsed.
-    details_.setTooltip (observations_.getText());
+    juce::StringArray shown = full;
+    if (full.size() > kObsCap) {
+        shown.removeRange (kObsCap, shown.size() - kObsCap);
+        shown.add ("+" + juce::String (full.size() - kObsCap) + " more - hover Details for the full list");
+    }
+    if (anyProv) {
+        const juce::String footer = "Provisional findings aren't ratified on hardware yet - shown for information only.";
+        full.add (footer);
+        shown.add (footer);
+    }
+    const juce::String fullText = full.joinIntoString ("\n");
+    // Collapsed-state tooltip parity (spec 6): the FULL observation text rides the details row's hover
+    // tooltip (discoverable while collapsed AND past the cap) and its accessibility help (capped
+    // findings must never be hover-only for a screen reader). Pinned in test_verdictcard.cpp.
+    details_.setTooltip (fullText);
+    details_.setHelpText (fullText);
+    observations_.setText (shown.joinIntoString ("\n"), juce::dontSendNotification);
     staleTag_.setText (m.stale ? "from your previous configuration" : juce::String(), juce::dontSendNotification);
     staleTag_.setVisible (m.stale && inlineStaleTag_);   // in-context the stage strip speaks (see header)
     setAlpha (m.stale ? 0.55f : 1.0f);              // 5.4: evidence dimmed, never deleted (static, never animated)

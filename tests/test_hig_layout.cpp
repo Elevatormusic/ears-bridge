@@ -854,8 +854,9 @@ TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3
                         : s == WS::HwDirac ? Lead::HwDirac : Lead::Waiting;
         stage.setLead (lead);
         // Render the REAL per-lead head copy too (P3 Task 6): the armed title is the app's widest -
-        // it exercises the 2-line title mode inside the constant kHeaderH reserve.
-        const auto head = eb::MeasureStage::measureHeadCopy (lead, false, false);
+        // it exercises the 2-line title mode inside the constant kHeaderH reserve. Canonical Auto
+        // scenes (the mode-copy variants are pinned headless in test_wizardnav.cpp).
+        const auto head = eb::MeasureStage::measureHeadCopy (lead, false, false, eb::CombineMode::AutoPerEar);
         stage.setHeadCopy (head.title, head.sub);
         stage.setWaitHint (s == WS::TimeoutHint
             ? eb::MeasureStage::waitingHint (eb::MeasureStage::kArmedNoSweepHintSeconds, false, false, {}, false)
@@ -864,8 +865,8 @@ TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3
         // MidCaptureFailed = the sticky danger card (its Labels are what RULE2 must keep above the fold).
         stage.setCaptureModels (s == WS::Capturing        ? CC::capturing ("LEFT EAR", 0.58f, 10)
                               : s == WS::MidCaptureFailed ? CC::failed ("LEFT EAR")
-                                                          : CC::waiting ("LEFT EAR"),
-                                CC::waiting ("RIGHT EAR"));
+                                                          : CC::waiting ("LEFT EAR", eb::CombineMode::AutoPerEar),
+                                CC::waiting ("RIGHT EAR", eb::CombineMode::AutoPerEar));
         mc.resized();
     };
     juce::StringArray bad;
@@ -895,7 +896,8 @@ TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3
     {
         mc.driveVerdictForTest (eb::VerdictCardModel{}, eb::VerdictCardModel{}, false);
         stage.setLead (eb::MeasureStage::Lead::Waiting);
-        const auto head = eb::MeasureStage::measureHeadCopy (eb::MeasureStage::Lead::Waiting, false, false);
+        const auto head = eb::MeasureStage::measureHeadCopy (eb::MeasureStage::Lead::Waiting, false, false,
+                                                             eb::CombineMode::AutoPerEar);
         stage.setHeadCopy (head.title, head.sub);
         stage.setWaitHint (eb::MeasureStage::waitingHint (
             eb::MeasureStage::kArmedNoSweepHintSeconds, false, /*chainMismatch*/ true,
@@ -915,15 +917,15 @@ TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3
     }
 
     // ---- T2-review gate: the PATHOLOGICAL all-findings details-open card, MEASURED --------------
-    // The spec's ~456 estimate was invalidated by measured-wrap. The true worst case: kNoBand is
-    // STRUCTURALLY EXCLUSIVE with kTruncHi/kTruncLo (detectTruncation returns zero edges with both
-    // trunc flags false when the banded derivation fails - the ONLY path MainComponent maps to
-    // kNoBand; the trunc bits come from the same report's valid-band path), so the worst is every
-    // other anomaly bit + BOTH trunc bits: 9 observation lines + the provisional footer, 7 flagged
-    // chips. COLLAPSED it must obey RULE1 like any verdict state (asserted). OPEN it exceeds the
-    // viewport at 900x720 - a KNOWN, reported bound awaiting an internal-budgeting ruling (P3 T7
-    // report; "propose, don't improvise") - so the open state asserts only what MUST hold today:
-    // the collapse affordance stays visible (RULE2b) and the measured bound is logged via WARN.
+    // The true worst case: kNoBand is STRUCTURALLY EXCLUSIVE with kTruncHi/kTruncLo (detectTruncation
+    // returns zero edges with both trunc flags false when the banded derivation fails - the ONLY path
+    // MainComponent maps to kNoBand; the trunc bits come from the same report's valid-band path), so
+    // the worst is every other anomaly bit + BOTH trunc bits: 9 observations + the provisional
+    // footer, 7 flagged chips. COLLAPSED it must obey RULE1 like any verdict state. OPEN: the
+    // controller RULED (T7 review) - the VIEW caps the visible observations (4 + "+N more"; the
+    // details tooltip/a11y help carry all, parity pinned in test_verdictcard.cpp), so the open
+    // pathological card now FITS the viewport and RULE2a is a HARD assertion here (the WARN-and-
+    // await-ruling era ended with the ruling; pre-cap this card measured 527px, bottom 557 vs 508).
     {
         eb::ShapeScalars s;
         s.driftMaxDb = -9.4f; s.hfShelfDb = -4.4f; s.combDepthDb = 6.2f; s.combDelayMs = 1.23f;
@@ -947,14 +949,19 @@ TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3
         mc.driveVerdictForTest (cleanL, patho, true);             // OPEN: measure the true worst
         auto& card = stage.verdictCardForTest (1);
         const auto cardInVp = vp.getLocalArea (&card, card.getLocalBounds());
-        WARN ("pathological all-findings details-open card: preferredHeight(273) = "
-              << card.preferredHeight (273) << "px, bottom-in-viewport = " << cardInVp.getBottom()
-              << "px vs viewport " << vp.getHeight()
-              << "px - internal budgeting proposal pending (P3 Task 7 report)");
+        INFO ("pathological open: preferredHeight(273) = " << card.preferredHeight (273)
+              << "px, bottom-in-viewport = " << cardInVp.getBottom()
+              << "px vs viewport " << vp.getHeight() << "px");
+        // HARD RULE2a (the T7 ruling's own acceptance): the capped open pathological card fits the
+        // viewport whole. If this fires, the observation cap stopped doing its one job - fix the
+        // cap (or its layout), never relax this back to a WARN.
+        if (! fullyVisibleIn (vp, card))
+            bad.add ("RULE2a pathological open: the capped card must fit the viewport (h="
+                     + juce::String (card.preferredHeight (273)) + ", bottom="
+                     + juce::String (cardInVp.getBottom()) + " vs " + juce::String (vp.getHeight()) + ")");
         if (! fullyVisibleIn (vp, card.detailsRowForTest()))
             bad.add ("RULE2b pathological open: the collapse affordance left the visible area");
-        // RULE2c holds even here: the fold cuts only the calm dim observation lines - the warn-toned
-        // chips sit directly under the details row, above the fold. No warn surface is ever displaced.
+        // RULE2c: no warn surface is ever displaced (the warn-toned chips sit under the details row).
         for (auto& s2 : displacedWarnSurfaces (vp))
             bad.add ("RULE2c pathological open: warn surface displaced: " + s2);
     }
@@ -989,3 +996,4 @@ TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3
     CHECK (bad.isEmpty());
     tmp.deleteRecursively();
 }
+

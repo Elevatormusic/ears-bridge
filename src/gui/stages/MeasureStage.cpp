@@ -16,10 +16,18 @@ constexpr int kHeaderH = StageHeader::kHeight + StageHeader::kSubExtraRow + Stag
 
 // ---- pure copy rules ------------------------------------------------------------------------------
 
-MeasureStage::HeadCopy MeasureStage::measureHeadCopy (Lead lead, bool overrideOn, bool verdictShowing) {
-    if (verdictShowing)
+MeasureStage::HeadCopy MeasureStage::measureHeadCopy (Lead lead, bool overrideOn, bool verdictShowing,
+                                                      CombineMode mode) {
+    if (verdictShowing) {
+        // P3 Task 7 ruling (user): under a Combined mode (Average/Sum) the capture is the two earcups
+        // mixed to ONE channel - "each earcup is graded" would be a per-ear claim the evidence can't
+        // back. Two-pass/Auto keep the per-ear head (each earcup does get its own graded capture).
+        if (mode == CombineMode::Average || mode == CombineMode::Sum)
+            return { "Your measurement result",
+                     "The grade reflects the combined capture - both earcups mixed into one channel - expand Details to see the shape checks behind it." };
         return { "Your per-ear result",
                  "Each earcup is graded against the matched reference - expand Details on any ear to see the shape checks behind the grade." };
+    }
     switch (lead) {
         case Lead::HwDirac:
             return { "Measurement grading is off",

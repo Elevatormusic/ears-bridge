@@ -3,9 +3,18 @@
 
 namespace eb {
 
-CaptureCardModel CaptureCardModel::waiting (const char* ear) {
-    return { State::Waiting, ear, "Waiting", "Next in the routine",
-             "Auto per-ear runs one earcup at a time - this sweep follows automatically.", "Queued", -1.0f };
+CaptureCardModel CaptureCardModel::waiting (const char* ear, CombineMode mode) {
+    // P3 Task 7 ruling (user): mode-aware sub. Two-pass names the SELECTED earcup (both cards carry
+    // it - the unselected card's honest why-am-I-waiting); Combined describes the summed capture and
+    // claims nothing per-ear; Auto keeps the routine copy. Pinned in test_wizardnav.cpp (all three
+    // variants + a 3-line fit check against the card's 48px sub slot).
+    const juce::String sub =
+          mode == CombineMode::LeftOnly  ? "Two-pass mode - this pass captures the left earcup only. Run Dirac once per ear."
+        : mode == CombineMode::RightOnly ? "Two-pass mode - this pass captures the right earcup only. Run Dirac once per ear."
+        : mode == CombineMode::Average || mode == CombineMode::Sum
+              ? "Combined mode - the sweep captures both earcups mixed into one channel, not per ear."
+              : "Auto per-ear runs one earcup at a time - this sweep follows automatically.";
+    return { State::Waiting, ear, "Waiting", "Next in the routine", sub, "Queued", -1.0f };
 }
 CaptureCardModel CaptureCardModel::capturing (const char* ear, float fraction, int sweepSeconds) {
     return { State::Capturing, ear, "Capturing", "Sweeping now",

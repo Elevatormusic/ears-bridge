@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <cmath>                     // P3 T7 rulings: the mode-copy fit check's std::ceil
 #include "gui/MainComponent.h"
 #include "gui/FormatCluster.h"       // P2.9 Task 5: the title-bar format cluster (pure builder + seam)
 #include "gui/juce_design_probe.h"   // P2 Task 5: probe the showing/label set of the Calibrate stage
@@ -828,20 +829,21 @@ TEST_CASE("P3 transport face: stopped = primary Start monitoring / play; the tit
 // ==================================================================================================
 TEST_CASE("P3 Measure head copy: lead x override x verdict variants") {
     using MS = eb::MeasureStage;
-    const auto wait = MS::measureHeadCopy (MS::Lead::Waiting, false, false);
+    using CM = eb::CombineMode;
+    const auto wait = MS::measureHeadCopy (MS::Lead::Waiting, false, false, CM::AutoPerEar);
     CHECK (wait.title == "Now run the measurement in Dirac Live");
     CHECK (wait.sub.contains ("CABLE Input (VB-Audio)"));
-    const auto ovr = MS::measureHeadCopy (MS::Lead::Waiting, true, false);
+    const auto ovr = MS::measureHeadCopy (MS::Lead::Waiting, true, false, CM::AutoPerEar);
     CHECK (ovr.title == "Run your measurement sweep");            // §7 generic variant
     CHECK_FALSE (ovr.sub.contains ("Dirac"));                     // the Dirac-shaped copy would be wrong
-    const auto verd = MS::measureHeadCopy (MS::Lead::Waiting, false, true);
+    const auto verd = MS::measureHeadCopy (MS::Lead::Waiting, false, true, CM::AutoPerEar);
     CHECK (verd.title == "Your per-ear result");
-    const auto hw = MS::measureHeadCopy (MS::Lead::HwDirac, false, false);
+    const auto hw = MS::measureHeadCopy (MS::Lead::HwDirac, false, false, CM::AutoPerEar);
     CHECK (hw.sub.contains ("per-ear calibration still works"));
-    const auto ref = MS::measureHeadCopy (MS::Lead::Reference, false, false);
+    const auto ref = MS::measureHeadCopy (MS::Lead::Reference, false, false, CM::AutoPerEar);
     CHECK (ref.title == "Learn your reference");
     // Override does NOT alter Reference/HwDirac heads (negative).
-    CHECK (MS::measureHeadCopy (MS::Lead::Reference, true, false).title == ref.title);
+    CHECK (MS::measureHeadCopy (MS::Lead::Reference, true, false, CM::AutoPerEar).title == ref.title);
 }
 
 TEST_CASE("P3 Measure run-note: contract wording (never 're-run sweep')") {
@@ -943,7 +945,7 @@ TEST_CASE("P3 Measure transport: stopped/running faces + enable mirror (producti
 // ==================================================================================================
 TEST_CASE("P3 CaptureCard copy + fraction: honest, approximate, no invented timing") {
     using CC = eb::CaptureCardModel;
-    const auto w = CC::waiting ("RIGHT EAR");
+    const auto w = CC::waiting ("RIGHT EAR", eb::CombineMode::AutoPerEar);
     CHECK (w.badge == "Waiting"); CHECK (w.title == "Next in the routine");
     CHECK (w.foot == "Queued");  CHECK (w.progress < 0.0f);           // NO bar - a fake bar is a lie
     const auto c = CC::capturing ("LEFT EAR", 0.58f, 10);
@@ -958,6 +960,69 @@ TEST_CASE("P3 CaptureCard copy + fraction: honest, approximate, no invented timi
     CHECK (eb::CaptureCard::captureFraction (150, 10.0) == 0.5f);      // 150 ticks @30Hz = 5s of 10s
     CHECK (eb::CaptureCard::captureFraction (600, 10.0) == 1.0f);      // clamped at the top
     CHECK (eb::CaptureCard::captureFraction (100, 0.0)  == 0.0f);      // no duration -> no claim
+}
+
+// ==================================================================================================
+// P3 Task 7 rulings (user): MODE-AWARE capture copy. The Auto waiting sub on a Two-pass/Combined
+// configuration described a routine that isn't running, and the verdict head's "Each earcup is
+// graded" under Combined is a per-ear claim over ONE mixed channel. Words pinned verbatim (the
+// honesty lives in them); a measured-wrap fit check guards the card's 48px sub slot - the mode
+// variants never pass through the render gates (which drive canonical Auto scenes).
+// ==================================================================================================
+TEST_CASE("P3 mode-aware copy: waiting sub per combine mode + the Combined verdict head") {
+    juce::ScopedJuceInitialiser_GUI juceInit;              // the fit check lays real text
+    using CC = eb::CaptureCardModel;
+    using MS = eb::MeasureStage;
+    using CM = eb::CombineMode;
+
+    // The three waiting-sub variants (LeftOnly/RightOnly share the Two-pass shape).
+    const auto autoSub  = CC::waiting ("LEFT EAR",  CM::AutoPerEar).sub;
+    const auto leftSub  = CC::waiting ("LEFT EAR",  CM::LeftOnly).sub;
+    const auto rightSub = CC::waiting ("RIGHT EAR", CM::RightOnly).sub;
+    const auto combSub  = CC::waiting ("LEFT EAR",  CM::Average).sub;
+    CHECK (autoSub  == "Auto per-ear runs one earcup at a time - this sweep follows automatically.");
+    CHECK (leftSub  == "Two-pass mode - this pass captures the left earcup only. Run Dirac once per ear.");
+    CHECK (rightSub == "Two-pass mode - this pass captures the right earcup only. Run Dirac once per ear.");
+    CHECK (combSub  == "Combined mode - the sweep captures both earcups mixed into one channel, not per ear.");
+    CHECK (CC::waiting ("RIGHT EAR", CM::Sum).sub == combSub);      // Sum and Average share the truth
+    // BOTH cards carry the mode sub - the UNSELECTED ear's card is the one whose Auto copy lied.
+    CHECK (CC::waiting ("RIGHT EAR", CM::LeftOnly).sub == leftSub);
+    // Only the sub is mode-aware (the ruling's scope): state chrome is unchanged.
+    CHECK (CC::waiting ("LEFT EAR", CM::Sum).title == CC::waiting ("LEFT EAR", CM::AutoPerEar).title);
+    CHECK (CC::waiting ("LEFT EAR", CM::Sum).badge == "Waiting");
+
+    // The verdict head: Combined drops the per-ear claim; Two-pass/Auto keep it (each earcup does
+    // get its own graded capture there) - the Combined variant must not leak into them.
+    const auto headAuto = MS::measureHeadCopy (MS::Lead::Waiting, false, true, CM::AutoPerEar);
+    const auto headComb = MS::measureHeadCopy (MS::Lead::Waiting, false, true, CM::Sum);
+    CHECK (headComb.title == "Your measurement result");
+    CHECK (headComb.sub == "The grade reflects the combined capture - both earcups mixed into one channel - expand Details to see the shape checks behind it.");
+    CHECK_FALSE (headComb.sub.contains ("Each earcup"));
+    CHECK (MS::measureHeadCopy (MS::Lead::Waiting, false, true, CM::Average).sub == headComb.sub);
+    CHECK (headAuto.title == "Your per-ear result");
+    CHECK (headAuto.sub.startsWith ("Each earcup is graded"));
+    CHECK (MS::measureHeadCopy (MS::Lead::Waiting, false, true, CM::RightOnly).sub == headAuto.sub);
+    // NEGATIVE: the mode speaks only on the VERDICT head - the armed §2 instruction stays frozen.
+    CHECK (MS::measureHeadCopy (MS::Lead::Waiting, false, false, CM::Sum).sub
+           == MS::measureHeadCopy (MS::Lead::Waiting, false, false, CM::AutoPerEar).sub);
+
+    // Fit (measured wrap, drift-proof): each new sub must claim NO MORE height than the widest
+    // ALREADY-PROVEN string in its slot, at that slot's real width and font. Card sub slot: 48px =
+    // 3 lines render-measured in Task 6 with the Failed sub as the proven worst (CaptureCard.cpp
+    // resized). Header sub slot: the frozen 3-line 2 instruction is the proven worst (StageHeader
+    // kSubExtraRow). Same wrap math as VerdictCard::wrappedTextHeight.
+    const auto wrappedH = [] (const juce::String& text, float fontPt, int slotW) {
+        juce::Label ref;                                   // real Label border insets, no restated magic
+        const auto border = ref.getBorderSize();
+        juce::AttributedString as; as.append (text, juce::Font (juce::FontOptions (fontPt)));
+        juce::TextLayout tl; tl.createLayout (as, (float) slotW - (float) (border.getLeft() + border.getRight()));
+        return (int) std::ceil (tl.getHeight());
+    };
+    const auto provenCard = CC::failed ("LEFT EAR").sub;   // 3 lines at 241px (Task 6, render-measured)
+    for (const auto& sub : { leftSub, rightSub, combSub })
+        CHECK (wrappedH (sub, 12.0f, 241) <= wrappedH (provenCard, 12.0f, 241));
+    const auto provenHead = MS::measureHeadCopy (MS::Lead::Waiting, false, false, CM::AutoPerEar).sub;
+    CHECK (wrappedH (headComb.sub, 13.0f, 294) <= wrappedH (provenHead, 13.0f, 294));
 }
 
 TEST_CASE("P3 mid-capture failure: the failed card is sticky and never falls back to waiting") {
