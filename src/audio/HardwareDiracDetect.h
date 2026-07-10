@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_core/juce_core.h>   // juce::String (for the honest-copy helpers; the decisions are juce-free)
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 
 // Hardware-Dirac detection (pure). When Dirac Live runs on a hardware miniDSP processor (DDRC-24 / SHD /
 // Flex) instead of Dirac Live SOFTWARE on the PC, the per-ear measurement still works (it is entirely
@@ -26,12 +27,12 @@ namespace eb {
 }
 
 // The honest suggestion (shown when auto-detect fires + the toggle isn't set) and the calm grading-off line.
-[[nodiscard]] inline const char* hardwareDiracSuggestion() noexcept {
-    return "Looks like Dirac is running on a hardware processor - its sweep reached the mic but never the PC "
+[[nodiscard]] inline juce::String hardwareDiracSuggestion() {
+    return "Looks like Dirac is running on a hardware processor" + kDash + "its sweep reached the mic but never the PC "
            "output. Turn on \"Dirac runs on a hardware processor\" in Advanced to silence the reference grade.";
 }
-[[nodiscard]] inline const char* hardwareDiracGradingOff() noexcept {
-    return "Reference grading off - Dirac runs on a hardware processor. Your per-ear calibration is still active.";
+[[nodiscard]] inline juce::String hardwareDiracGradingOff() {
+    return "Reference grading off" + kDash + "Dirac runs on a hardware processor. Your per-ear calibration is still active.";
 }
 
 } // namespace eb

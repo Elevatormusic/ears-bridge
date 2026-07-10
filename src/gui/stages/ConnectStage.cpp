@@ -1,4 +1,5 @@
 #include "gui/stages/ConnectStage.h"
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include "gui/Theme.h"
 
 namespace eb {
@@ -58,7 +59,7 @@ void ConnectStage::syncOverrideDisclosure() {
     // "Advanced override on - not the standard Dirac path." advisory remains the second surface.
     const bool on = overrideToggle_ != nullptr && overrideToggle_->getToggleState();
     notUsingDirac_.setLocked (on);                     // locking force-opens
-    notUsingDirac_.setSummary (on ? "Override on - non-Dirac use" : juce::String());
+    notUsingDirac_.setSummary (on ? "Override on" + kDash + "non-Dirac use" : juce::String());
 }
 
 void ConnectStage::adopt (DevicePicker& inputPicker, juce::Label& inputGainHint,

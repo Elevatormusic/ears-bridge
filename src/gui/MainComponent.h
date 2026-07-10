@@ -14,6 +14,7 @@
 #include "net/UpdateChecker.h"
 #include "gui/WizardState.h"        // eb::WizardStep / WizardInputs / computeWizardState (Task 1)
 #include "gui/WizardSpine.h"        // eb::WizardSpine (Task 2, the persistent step rail)
+#include "gui/Copy.h"              // P4 T6: kDash/kEllipsis typography (member-init button labels)
 #include "gui/stages/StageHost.h"  // eb::StageHost (Task 3, the single-child stage switcher)
 #include "gui/stages/ConnectStage.h"
 #include "gui/stages/CalibrateStage.h"
@@ -504,7 +505,7 @@ private:
     // VerdictCard) + the last SMOOTHED bands (fed on each grade publish; the card model reads them).
     eb::GradeBandSmoother    smootherL_, smootherR_;
     GradeBandSmoother::Bands smoothedBandsL_, smoothedBandsR_;
-    // " - <advisory>" when the chain-config advisory should decorate a calm status line; empty otherwise.
+    // kDash + "<advisory>" when the chain-config advisory should decorate a calm status line; empty otherwise.
     juce::String chainAdvisoryTail() const;
     // Non-modal "Update available" link shown in the title bar when a newer release exists.
     juce::HyperlinkButton updateLink;
@@ -538,7 +539,7 @@ private:
     // Diagnostic-log export affordances (Task 3). "Open log folder" reveals %TEMP%/EarsBridge/logs in the
     // OS file browser; "Export log..." zips the whole logs dir to a user-chosen path via ZipFile::Builder.
     juce::TextButton openLogButton    { "Open log folder" };
-    juce::TextButton exportLogButton  { "Export log..." };
+    juce::TextButton exportLogButton  { "Export log" + kEllipsis };
     std::unique_ptr<juce::FileChooser> logChooser;   // kept alive across the async launchAsync
 
     // FIR-length combo item id for the "Auto (scales with rate)" choice. Distinct from every

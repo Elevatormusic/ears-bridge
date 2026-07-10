@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_core/juce_core.h>   // juce::String / jmax / jmin / roundToInt
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include <cmath>                    // std::log10
 
 namespace eb {
@@ -55,7 +56,7 @@ struct SnrVerdict {
 [[nodiscard]] inline juce::String snrNote (const SnrVerdict& v) {
     if (! v.lowSnr) return {};
     return "Sweep is only " + juce::String (juce::roundToInt (v.snrDbMin))
-         + " dB above the room noise - quieten the room or raise the level, then re-measure.";
+         + " dB above the room noise" + kDash + "quieten the room or raise the level, then re-measure.";
 }
 
 } // namespace eb

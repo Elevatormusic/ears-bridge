@@ -19,9 +19,9 @@ TEST_CASE("CalibrateStage caption: guidance when empty, HEQ once, HPN legacy not
 // setting silently - the summary names the current state either way.
 TEST_CASE("CalibrateStage advanced summary composes every field") {
     CHECK (eb::CalibrateStage::advancedFirSummary (false, 0, 0.0)
-           == "Min phase - Auto length - 0.0 dB trim");
+           == "Min phase" + eb::kDash + "Auto length" + eb::kDash + "0.0 dB trim");
     CHECK (eb::CalibrateStage::advancedFirSummary (true, 16384, -2.0)
-           == "Complex phase - 16384 taps - -2.0 dB trim");
+           == "Complex phase" + eb::kDash + "16384 taps" + eb::kDash + "-2.0 dB trim");
 }
 
 // P2.9 T7: the frozen open-iff-non-default contract's ONE testable home. The launch seed and the

@@ -1,5 +1,6 @@
 #pragma once
 #include <cmath>
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include <vector>
 
 #include "audio/Deconvolver.h"        // deconvolve / referenceMatches (Task 1)
@@ -235,15 +236,15 @@ struct QualityVerdict {
 // Precedence = worst gating offender first; the advisory IR-SNR note shows only when nothing else fired.
 [[nodiscard]] inline juce::String qualityNote (const QualityVerdict& v) {
     if (v.state == RefMonState::ReferenceStale)
-        return "Reference doesn't match your sweep - re-learn it.";
+        return "Reference doesn't match your sweep" + kDash + "re-learn it.";
     // sweepSNR predicts Dirac's "imprecise" verdict: low capture SNR corrupts the excess-phase estimate, so
     // Dirac drops the position from phase correction (research-confirmed; the fix is more SNR, not re-measuring
     // blindly). Name the verdict so the grade is actionable.
-    if (v.sweepSnrBand == QualityBand::Red)     return "Noisy capture - Dirac will likely mark it imprecise; raise level or lower noise.";
-    if (v.thdBand      == QualityBand::Red)     return "High distortion - check level/seal.";
-    if (v.sweepSnrBand == QualityBand::Orange)  return "Marginal SNR - Dirac may mark it imprecise; raise level or lower noise.";
-    if (v.sweepSnrBand == QualityBand::Unknown) return "Couldn't verify SNR (no quiet region in the capture) - re-measure.";
-    if (v.irSnrBand    == QualityBand::Red)     return "Weak impulse response - possible time-variance or reference issue.";
+    if (v.sweepSnrBand == QualityBand::Red)     return "Noisy capture" + kDash + "Dirac will likely mark it imprecise; raise level or lower noise.";
+    if (v.thdBand      == QualityBand::Red)     return "High distortion" + kDash + "check level/seal.";
+    if (v.sweepSnrBand == QualityBand::Orange)  return "Marginal SNR" + kDash + "Dirac may mark it imprecise; raise level or lower noise.";
+    if (v.sweepSnrBand == QualityBand::Unknown) return "Couldn't verify SNR (no quiet region in the capture)" + kDash + "re-measure.";
+    if (v.irSnrBand    == QualityBand::Red)     return "Weak impulse response" + kDash + "possible time-variance or reference issue.";
     return {};   // all clear
 }
 

@@ -90,7 +90,7 @@ TEST_CASE("VerdictCard model: the seven chips cover the detector families") {
     CHECK (m.chips[humIdx].flagged);
     CHECK (m.chips[humIdx].value.contains ("res"));
     CHECK (m.chips[bandIdx].flagged);
-    CHECK (m.tally == "5 pass - 2 flagged");
+    CHECK (m.tally == "5 pass" + eb::kMiddot + "2 flagged");
     // NEGATIVE: the other five stay un-flagged.
     int flagged = 0; for (auto& c : m.chips) if (c.flagged) ++flagged;
     CHECK (flagged == 2);
@@ -125,7 +125,7 @@ TEST_CASE("VerdictCard view: observation cap + tooltip/a11y parity (P3 T7 ruling
     card.setModel (patho);
 
     // Expected strings, derived from the MODEL exactly as the view derives them.
-    const juce::String footer = "Provisional findings aren't ratified on hardware yet - shown for information only.";
+    const juce::String footer = "Provisional findings aren't ratified on hardware yet" + eb::kDash + "shown for information only.";
     juce::StringArray full;
     bool anyProv = false;
     for (const auto& o : patho.observations) {
@@ -134,7 +134,7 @@ TEST_CASE("VerdictCard view: observation cap + tooltip/a11y parity (P3 T7 ruling
     }
     juce::StringArray capped;
     for (int i = 0; i < 4; ++i) capped.add (full[i]);
-    capped.add ("+5 more - hover Details for the full list");
+    capped.add ("+5 more" + eb::kDash + "hover Details for the full list");
     if (anyProv) { full.add (footer); capped.add (footer); }
 
     // PARITY PIN (the review's ordering trap): the tooltip carries the FULL join - composed BEFORE
@@ -158,7 +158,7 @@ TEST_CASE("VerdictCard view: observation cap + tooltip/a11y parity (P3 T7 ruling
         for (int i = 0; i < 4; ++i) CHECK_FALSE (beyond.observations[(size_t) i].provisional);
         card.setModel (beyond);
         const auto label = card.observationsForTest().getText();
-        CHECK (label.contains ("+1 more - hover Details for the full list"));
+        CHECK (label.contains ("+1 more" + eb::kDash + "hover Details for the full list"));
         CHECK (label.endsWith (footer));                      // ...raises the footer from past the cap
         CHECK_FALSE (label.contains ("Level step:"));         // the capped line itself is elided
         CHECK (card.detailsRowForTest().getTooltip().contains ("Level step:"));   // but never lost

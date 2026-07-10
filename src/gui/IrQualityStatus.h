@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_core/juce_core.h>   // juce::String / jmax / roundToInt
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include <cmath>                    // std::log10 / std::sqrt / std::abs
 #include <vector>
 
@@ -175,7 +176,7 @@ struct IrQuality {
 // Wording kept <= ~60 chars for the status line (the #8 cut-off lesson).
 [[nodiscard]] inline juce::String irQualityNote (const IrQuality& q) {
     if (! q.matched)
-        return "Reference doesn't match your sweep - re-learn it.";
+        return "Reference doesn't match your sweep" + kDash + "re-learn it.";
     if (! q.lowQuality)
         return {};
     return "Low measurement quality: " + juce::String (juce::roundToInt (q.irSnrDb))

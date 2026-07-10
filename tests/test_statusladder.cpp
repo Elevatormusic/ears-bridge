@@ -231,9 +231,9 @@ TEST_CASE("StatusLadder: the Complete branch keeps its honest verdict mapping + 
 
 TEST_CASE("StatusLadder: the chain advisory decorates calm lines only") {
     eb::RunningSnapshot s;
-    s.advisoryTail = " - input is 16-bit";
+    s.advisoryTail = eb::kDash + "input is 16-bit";
     auto out = eb::runningStatus (s);                    // "clean so far" (Ok) -> decorated
-    CHECK (out.line1.text.endsWith (" - input is 16-bit"));
+    CHECK (out.line1.text.endsWith (eb::kDash + "input is 16-bit"));
     s.outputClip = true;                                 // warn -> NOT decorated
     out = eb::runningStatus (s);
     CHECK_FALSE (out.line1.text.contains ("16-bit"));
@@ -242,7 +242,7 @@ TEST_CASE("StatusLadder: the chain advisory decorates calm lines only") {
 TEST_CASE("StatusLadder: earStatusLine wording parity for the graded states") {
     const auto clean = eb::earStatusLine ("L", ear (RefMonState::GradedClean, 54.4f, 0.3f, 31.0f, -6.2f));
     // NOTE: juce::String(float, 0) = shortest representation (not zero decimals) — matches the old GUI code.
-    CHECK (clean.text == "L: verified - IR-SNR 54 dB, THD 0% (calibration pending) (peak -6.2 dBFS)");
+    CHECK (clean.text == "L: verified" + eb::kDash + "IR-SNR 54 dB, THD 0% (calibration pending) (peak -6.2 dBFS)");
     CHECK (clean.tone == StatusTone::Ok);
 
     const auto stale = eb::earStatusLine ("R", ear (RefMonState::ReferenceStale, 0, 0, 0, -120.0f));
@@ -250,7 +250,7 @@ TEST_CASE("StatusLadder: earStatusLine wording parity for the graded states") {
     CHECK (stale.tone == StatusTone::Warn);
 
     const auto clipped = eb::earStatusLine ("L", ear (RefMonState::GradedClean, 54.0f, 0.3f, 31.0f, 1.6f));
-    CHECK (clipped.text.contains ("clipped +1.6 dBFS - lower the output ~5 dB"));
+    CHECK (clipped.text.contains ("clipped +1.6 dBFS" + eb::kDash + "lower the output ~5 dB"));
     CHECK (clipped.tone == StatusTone::Warn);
 
     const auto lowSnr = eb::earStatusLine ("L", ear (RefMonState::GradedClean, 54.0f, 0.3f, 12.0f, -6.0f));
@@ -259,16 +259,16 @@ TEST_CASE("StatusLadder: earStatusLine wording parity for the graded states") {
 
 TEST_CASE("StatusLadder #68: an over-budget advisory tail rides in the tooltip, never clips the line") {
     eb::RunningSnapshot s;
-    s.advisoryTail = " - input, cable 16-bit - 24-bit+ recommended for the cleanest measurement";  // 74 chars
+    s.advisoryTail = eb::kDash + "input, cable 16-bit" + eb::kDash + "24-bit+ recommended for the cleanest measurement";  // 74 chars (kDash = 3, same as the old ASCII form)
     const auto out = eb::runningStatus (s);                       // "clean so far" (Ok) headline
     CHECK_FALSE (out.line1.text.contains ("16-bit"));             // NOT appended (would overflow at min window)
     CHECK (out.line1.tip.contains ("16-bit"));                    // ...but fully present in the tooltip
-    CHECK_FALSE (out.line1.tip.startsWith (" - "));               // tooltip form drops the tail's separator
+    CHECK_FALSE (out.line1.tip.startsWith (eb::kDash));           // tooltip form drops the tail's separator
 
     // A SHORT tail still decorates the line inline (the #49 behaviour, unchanged).
-    s.advisoryTail = " - input is 16-bit";
+    s.advisoryTail = eb::kDash + "input is 16-bit";
     const auto short1 = eb::runningStatus (s);
-    CHECK (short1.line1.text.endsWith (" - input is 16-bit"));
+    CHECK (short1.line1.text.endsWith (eb::kDash + "input is 16-bit"));
 }
 
 // ==================================================================================================
@@ -351,7 +351,7 @@ TEST_CASE("shapeInfoNote: each line quantifies its finding and stays <= ~70 char
 TEST_CASE("shapeInfoNote: kNoBand copy + precedence over every other finding") {
     // The exact spec copy, and it stays within the line budget.
     const auto note = eb::shapeInfoNote (ShapeFlag::kNoBand, 0, 0, 0, 0, 0);
-    CHECK (note == "no measurable response band - check the chain");
+    CHECK (note == "no measurable response band" + eb::kDash + "check the chain");
     CHECK (note.length() <= 70);
     // No-band OUTRANKS even truncation/comb (a bare truncation edge would understate a fully-empty band).
     unsigned withComb = ShapeFlag::kNoBand | ShapeFlag::kComb | ShapeFlag::kTruncHi;

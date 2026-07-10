@@ -1,6 +1,7 @@
 #include "gui/stages/CalibrateStage.h"
 #include "gui/Theme.h"
 #include "gui/Glyphs.h"
+#include "gui/Copy.h"   // P4 T6: kDash typography
 #include <cmath>   // P2.9 Task 7: std::abs (double) for the trim near-zero compare
 
 namespace eb {
@@ -65,10 +66,13 @@ void CalibrateStage::setAdvancedOpen (bool open) {
     advancedFir_.setOpen (open);                       // fires onOpenChanged -> resized()
 }
 
+juce::String CalibrateStage::unityHintText (bool accepted) {
+    return accepted ? "Continuing without calibration" + kDash + "the measurement won't be corrected for the EARS mic."
+                    : "Calibration is recommended" + kDash + "without it the measurement isn't corrected for the EARS mic.";
+}
+
 void CalibrateStage::setUnityState (bool bothEmpty, bool accepted) {
-    const juce::String msg = ! bothEmpty ? juce::String()
-        : accepted ? "Continuing without calibration - the measurement won't be corrected for the EARS mic."
-                   : "Calibration is recommended - without it the measurement isn't corrected for the EARS mic.";
+    const juce::String msg = ! bothEmpty ? juce::String() : unityHintText (accepted);
     const bool showHint = bothEmpty;
     const bool showBtn  = bothEmpty && ! accepted;
     if (unityHint_.getText() == msg && unityHint_.isVisible() == showHint
@@ -82,18 +86,18 @@ void CalibrateStage::setUnityState (bool bothEmpty, bool accepted) {
 
 juce::String CalibrateStage::stageCaptionFor (std::optional<CalType> l, std::optional<CalType> r) {
     if (! l.has_value() || ! r.has_value())
-        return "Use HEQ files for headphones, IDF for IEMs - files are matched to left and right automatically.";
+        return "Use HEQ files for headphones, IDF for IEMs" + kDash + "files are matched to left and right automatically.";
     const bool heq = (*l == CalType::Heq) || (*r == CalType::Heq);
     const bool hpn = (*l == CalType::Hpn) || (*r == CalType::Hpn);
-    if (heq) return "HEQ curves include a mild bass boost - in Dirac, start from a flat bass target.";
-    if (hpn) return "HPN is miniDSP's older curve - it works, but HEQ is now recommended for headphone EQ.";
+    if (heq) return "HEQ curves include a mild bass boost" + kDash + "in Dirac, start from a flat bass target.";
+    if (hpn) return "HPN is miniDSP's older curve" + kDash + "it works, but HEQ is now recommended for headphone EQ.";
     return {};   // IDF/RAW/Unknown pairs: the cards carry their own cautions
 }
 
 juce::String CalibrateStage::advancedFirSummary (bool complexPhase, int firLength, double trimDb) {
     juce::String s = complexPhase ? "Complex phase" : "Min phase";
-    s += (firLength > 0) ? (" - " + juce::String (firLength) + " taps") : juce::String (" - Auto length");
-    s += " - " + juce::String (trimDb, 1) + " dB trim";
+    s += (firLength > 0) ? (kDash + juce::String (firLength) + " taps") : (kDash + "Auto length");
+    s += kDash + juce::String (trimDb, 1) + " dB trim";
     return s;
 }
 

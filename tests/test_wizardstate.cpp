@@ -115,7 +115,7 @@ TEST_CASE("WizardState error navigability: deviceError + pinned Connect -> activ
     CHECK (s.active == WizardStep::Connect);
     CHECK (s.steps[(int) WizardStep::Connect].state == StepState::Error);   // Error stays Error, not Active
     CHECK (s.steps[(int) WizardStep::Connect].reason
-           == juce::String ("Device error - check the EARS and cable"));
+           == "Device error" + eb::kDash + "check the EARS and cable");
     // Active step IS the broken step -> no banner.
     CHECK (s.banner.isEmpty());
 }
@@ -148,7 +148,7 @@ TEST_CASE("WizardState calBuilding: Calibrate Todo Rebuilding filters, NOT Done,
     in.calBuilding = true;
     const auto s = eb::computeWizardState (in, std::nullopt);
     CHECK (s.steps[(int) WizardStep::Calibrate].state == StepState::Active);   // active+Todo -> Active
-    CHECK (s.steps[(int) WizardStep::Calibrate].reason == juce::String ("Rebuilding filters..."));
+    CHECK (s.steps[(int) WizardStep::Calibrate].reason == "Rebuilding filters" + eb::kEllipsis);
     CHECK (s.active == WizardStep::Calibrate);
 }
 
@@ -189,7 +189,7 @@ TEST_CASE("WizardState regression banner: all Done, pin Measure, then deviceErro
     CHECK (pinnedMeasure.steps[(int) WizardStep::Connect].state == StepState::Error);
     CHECK (pinnedMeasure.banner.isNotEmpty());
     CHECK (pinnedMeasure.bannerTarget == WizardStep::Connect);
-    CHECK (pinnedMeasure.banner.contains ("Device error - check the EARS and cable"));
+    CHECK (pinnedMeasure.banner.contains ("Device error" + eb::kDash + "check the EARS and cable"));
 
     // AND the banner is EMPTY when the user is pinned on the broken step itself.
     const auto pinnedConnect = eb::computeWizardState (in, WizardStep::Connect);
@@ -212,7 +212,7 @@ TEST_CASE("WizardState composeBanner: follows the shown step, not just ws.active
     const auto atMeasure = eb::composeBanner (ws, WizardStep::Measure);
     CHECK (atMeasure.text.isNotEmpty());
     CHECK (atMeasure.target == WizardStep::Connect);
-    CHECK (atMeasure.text.contains ("Device error - check the EARS and cable"));
+    CHECK (atMeasure.text.contains ("Device error" + eb::kDash + "check the EARS and cable"));
 
     // Shown = Calibrate (still after Connect) -> banner also surfaces (the held-pin case: the shown stage
     // is EARLIER than ws.active == Measure, yet an Error before it must not be swallowed).
@@ -286,7 +286,7 @@ TEST_CASE("WizardState calProblem: Calibrate Error even when Connect is not Done
     const auto s = eb::computeWizardState (in, std::nullopt);
     CHECK (s.steps[(int) WizardStep::Calibrate].state == StepState::Error);
     CHECK (s.steps[(int) WizardStep::Calibrate].reason
-           == juce::String ("A calibration file was rejected - see the card"));
+           == "A calibration file was rejected" + eb::kDash + "see the card");
     // Active is still Connect (first unmet); a broken step BEFORE the active one has no banner
     // because Calibrate is AFTER Connect. No banner.
     CHECK (s.active == WizardStep::Connect);

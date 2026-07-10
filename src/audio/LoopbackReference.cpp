@@ -1,4 +1,5 @@
 #include "audio/LoopbackReference.h"
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 
 #include <juce_dsp/juce_dsp.h>                      // juce::dsp::FFT (out-of-place) for the single-ridge self-test
 #include <juce_cryptography/juce_cryptography.h>    // juce::SHA256 for contentHash
@@ -295,24 +296,24 @@ ReferenceValidation validateReferenceCapture (const float* samples, int n, doubl
     //    too-short blip (a stray transient that armed + trailing-stopped).
     const double seconds = (double) n / rate;
     if (seconds < minSeconds)
-        return { false, "capture too short - got only " + juce::String (seconds, 1)
+        return { false, "capture too short" + kDash + "got only " + juce::String (seconds, 1)
                         + " s (need at least " + juce::String (minSeconds, 0)
                         + " s); re-run the Dirac sweep" };
 
     // 2. LEVEL — peak in a sane window, and no sustained clipping run.
     const int clipRun = longestClipRun (samples, n);
     if (clipRun >= kClipRunSamples)
-        return { false, "capture clips - a clipping run of " + juce::String (clipRun)
+        return { false, "capture clips" + kDash + "a clipping run of " + juce::String (clipRun)
                         + " samples was found; reduce the level and re-run" };
 
     const float peak = peakAbs (samples, n);
     const float peakDb = peak > 0.0f ? 20.0f * std::log10 (peak) : -144.0f;
     if (peakDb < minPeakDb)
-        return { false, "capture too quiet - peak " + juce::String (peakDb, 1)
+        return { false, "capture too quiet" + kDash + "peak " + juce::String (peakDb, 1)
                         + " dBFS is below the " + juce::String (minPeakDb, 0)
                         + " dBFS floor; raise the level and re-run" };
     if (peakDb > maxPeakDb)
-        return { false, "capture level too hot - peak " + juce::String (peakDb, 1)
+        return { false, "capture level too hot" + kDash + "peak " + juce::String (peakDb, 1)
                         + " dBFS exceeds " + juce::String (maxPeakDb, 0)
                         + " dBFS; reduce the level and re-run" };
 
@@ -329,7 +330,7 @@ ReferenceValidation validateReferenceCapture (const float* samples, int n, doubl
                           && ridge.monotonicity >= kMinMonotonicity
                           && ridge.binSpan      >= kMinRidgeSpanBins;   // #48: a steady tone has no travel
     if (! singleSweep)
-        return { false, "capture is not a clean single sweep - a second source, a steady tone, or noise was "
+        return { false, "capture is not a clean single sweep" + kDash + "a second source, a steady tone, or noise was "
                         "detected (tone-purity " + juce::String (ridge.meanCrest, 2)
                         + ", rising " + juce::String (ridge.monotonicity, 2)
                         + ", travel " + juce::String (ridge.binSpan)
@@ -703,7 +704,7 @@ StereoLoopbackResult captureLoopbackStereo (const juce::String& filter, double s
         { res.ok = false; res.cancelled = true; res.reason = "cancelled"; return res; }
 
     if (totalFrames <= 0 || nonSilent <= 0)
-        { res.ok = false; res.reason = "captured silence - nothing was playing on the render endpoint"; return res; }
+        { res.ok = false; res.reason = "captured silence" + kDash + "nothing was playing on the render endpoint"; return res; }
 
     res.ok = true;
     return res;

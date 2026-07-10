@@ -1,4 +1,5 @@
 #include "gui/stages/MeasureStage.h"
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include "gui/Theme.h"
 
 namespace eb {
@@ -24,14 +25,14 @@ MeasureStage::HeadCopy MeasureStage::measureHeadCopy (Lead lead, bool overrideOn
         // back. Two-pass/Auto keep the per-ear head (each earcup does get its own graded capture).
         if (mode == CombineMode::Average || mode == CombineMode::Sum)
             return { "Your measurement result",
-                     "The grade reflects the combined capture - both earcups mixed into one channel - expand Details to see the shape checks behind it." };
+                     "The grade reflects the combined capture" + kDash + "both earcups mixed into one channel" + kDash + "expand Details to see the shape checks behind it." };
         return { "Your per-ear result",
-                 "Each earcup is graded against the matched reference - expand Details on any ear to see the shape checks behind the grade." };
+                 "Each earcup is graded against the matched reference" + kDash + "expand Details on any ear to see the shape checks behind the grade." };
     }
     switch (lead) {
         case Lead::HwDirac:
             return { "Measurement grading is off",
-                     "Dirac runs on a hardware processor - there is no PC loopback to grade against. The per-ear calibration still works." };
+                     "Dirac runs on a hardware processor" + kDash + "there is no PC loopback to grade against. The per-ear calibration still works." };
         case Lead::Reference:
             return { "Learn your reference",
                      "One time only: EARS Bridge captures Dirac's own sweep as the grading reference. Run a Dirac measurement while it listens." };
@@ -39,7 +40,7 @@ MeasureStage::HeadCopy MeasureStage::measureHeadCopy (Lead lead, bool overrideOn
         default:
             if (overrideOn)                                          // §7: the Dirac-shaped copy would be wrong
                 return { "Run your measurement sweep",
-                         "Play a measurement sweep from your measurement software - EARS Bridge listens and grades each earcup as it lands." };
+                         "Play a measurement sweep from your measurement software" + kDash + "EARS Bridge listens and grades each earcup as it lands." };
             return { "Now run the measurement in Dirac Live",
                      "In Dirac Live, choose CABLE Input (VB-Audio) as the recording device and click Start measurement. EARS Bridge listens and grades each earcup as it lands." };
     }
@@ -49,7 +50,7 @@ juce::String MeasureStage::measureRunNote (bool blocked, const juce::String& mac
                                            bool running, bool measureAgainShowing) {
     if (blocked) return machineReason;
     if (measureAgainShowing) return "Then start the measurement again in Dirac Live.";   // §2 correction
-    if (! running) return "Arms the bridge - the sweep still runs in Dirac";             // the contract, stated
+    if (! running) return "Arms the bridge" + kDash + "the sweep still runs in Dirac";             // the contract, stated
     return {};
 }
 
@@ -57,13 +58,13 @@ juce::String MeasureStage::waitingHint (int armedSeconds, bool refEndpointMismat
                                         const juce::String& chainSummary, bool silentInput) {
     if (armedSeconds < kArmedNoSweepHintSeconds) return {};          // passive INFO, never premature
     if (refEndpointMismatch)                                         // #34: the most specific knowledge
-        return "Still listening - Dirac's output isn't the device the reference was learned from. "
+        return "Still listening" + kDash + "Dirac's output isn't the device the reference was learned from. "
                "Switch it back, or re-learn the reference.";
     if (chainMismatch && chainSummary.isNotEmpty())
-        return "Still listening - " + chainSummary;
+        return "Still listening" + kDash + chainSummary;
     if (silentInput)   // spec §2 fragment kept lowercase mid-sentence (the brief's test pins it so)
-        return "Still listening - no signal at all - is Dirac playing? Check Dirac's recording device.";
-    return "No sweep detected yet - in Dirac Live, click Start measurement. "
+        return "Still listening" + kDash + "no signal at all" + kDash + "is Dirac playing? Check Dirac's recording device.";
+    return "No sweep detected yet" + kDash + "in Dirac Live, click Start measurement. "
            "EARS Bridge can't start it for you.";
 }
 
@@ -125,8 +126,7 @@ void MeasureStage::applyTheme() {
     waitHint_.setFont (juce::Font (juce::FontOptions (12.0f)));
     hwLead_.setColour (juce::Label::textColourId, Theme::textDim());
     hwLead_.setFont (juce::Font (juce::FontOptions (12.0f)));
-    hwLead_.setText ("Measurement grading isn't available when Dirac runs on a hardware processor - "
-                     "the per-ear calibration still works.", juce::dontSendNotification);
+    hwLead_.setText ("Measurement grading isn't available when Dirac runs on a hardware processor" + kDash + "the per-ear calibration still works.", juce::dontSendNotification);
     meterTitle_.setColour (juce::Label::textColourId, Theme::textDim());
     meterTitle_.setFont (juce::Font (juce::FontOptions (12.0f).withStyle ("Bold")).withExtraKerningFactor (0.04f));
     meterTitle_.setText ("LIVE LEVEL", juce::dontSendNotification);
@@ -180,7 +180,7 @@ void MeasureStage::setVerdictModels (const VerdictCardModel& l, const VerdictCar
     verdModelL_ = l; verdModelR_ = r; verdStale_ = stale;
     verdL_.setModel (l);
     verdR_.setModel (r);
-    staleStrip_.setText (stale ? "From your previous configuration - measure again to refresh."
+    staleStrip_.setText (stale ? "From your previous configuration" + kDash + "measure again to refresh."
                                : juce::String(), juce::dontSendNotification);
     resized();
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include <functional>
 #include <optional>
 #include "gui/CalSlotComponent.h"
@@ -45,6 +46,7 @@ public:
     // Unity path (spec 5.2): visible only while BOTH slots are empty; `accepted` swaps the
     // wording and retires the button (the header CTA takes over). MainComponent owns the flag.
     void setUnityState (bool bothSlotsEmpty, bool accepted);
+    static juce::String unityHintText (bool accepted);   // P4 T6: the two wordings, single source (pinned)
     std::function<void()> onContinueWithoutCal;
     juce::TextButton& unityButtonForTest() { return unityBtn_; }
 
@@ -85,7 +87,7 @@ private:
     };
 
     StageHeader    header_ { "STEP 2 OF 4", "Load your ear calibrations",
-                             "Drop each earcup's file - the per-ear filter that corrects the measurement.",
+                             "Drop each earcup's file" + kDash + "the per-ear filter that corrects the measurement.",
                              "Continue to level" };
     juce::Viewport viewport_;
     Content        content_;

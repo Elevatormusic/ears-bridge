@@ -1,4 +1,5 @@
 #include "gui/CalSlotComponent.h"
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include "gui/Theme.h"
 #include <cmath>
 
@@ -53,7 +54,7 @@ CalSlotComponent::CalSlotComponent (juce::String name) : earName (std::move (nam
     fileLabel.setJustificationType (juce::Justification::centredLeft);
     addChildComponent (fileLabel);
 
-    replaceBtn.setButtonText ("Replace...");                  // opens a chooser -> ellipsis verb
+    replaceBtn.setButtonText ("Replace" + kEllipsis);        // opens a chooser -> ellipsis verb
     serialLabel.setColour (juce::Label::textColourId, Theme::textDim());
     serialLabel.setFont (juce::Font (juce::FontOptions (11.5f)));
     serialLabel.setJustificationType (juce::Justification::centredLeft);
@@ -93,11 +94,11 @@ CalSlotComponent::CalSlotComponent (juce::String name) : earName (std::move (nam
     dzMain.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (dzMain);
 
-    browseBtn.setButtonText ("Browse " + earName.toLowerCase() + "...");   // per-ear: a11y + dup gate
+    browseBtn.setButtonText ("Browse " + earName.toLowerCase() + kEllipsis);   // per-ear: a11y + dup gate
     browseBtn.onClick = [this] { browseForCal(); };
     addAndMakeVisible (browseBtn);
 
-    dzReq.setText ("Required - load both ears to measure", juce::dontSendNotification);
+    dzReq.setText ("Required" + kDash + "load both ears to measure", juce::dontSendNotification);
     dzReq.setColour (juce::Label::textColourId, Theme::warn());
     dzReq.setFont (juce::Font (juce::FontOptions (11.5f)));
     dzReq.setJustificationType (juce::Justification::centred);
@@ -166,7 +167,7 @@ bool CalSlotComponent::loadFromFile (const juce::File& file) {
     if (file.getSize() > 10 * 1024 * 1024) {
         errorLabel.setColour (juce::Label::textColourId, Theme::danger());
         errorLabel.setText ("File too large (" + juce::File::descriptionOfSizeInBytes (file.getSize())
-                            + ") - not an EARS calibration file.", juce::dontSendNotification);
+                            + ")" + kDash + "not an EARS calibration file.", juce::dontSendNotification);
         errorLabel.setVisible (true);
         removeBtn.setVisible (true);
         refreshStateVisibility();
@@ -187,7 +188,7 @@ bool CalSlotComponent::loadFromFile (const juce::File& file) {
             auto sideWord = [] (eb::CalSide s) { return s == eb::CalSide::Left ? "LEFT" : "RIGHT"; };
             parsed.parseWarnings.add (juce::String ("Filename says ") + sideWord (fnSide)
                                       + " but the file content says " + sideWord (parsed.side)
-                                      + " - keeping the content side.");
+                                      + kDash + "keeping the content side.");
         }
         applyParsed (parsed, file);
         if (onCalLoaded) onCalLoaded (file);
@@ -220,12 +221,12 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
         // Kept to the note area's 2-line budget (kNoteH). The old two-sentence copy needed 3 lines at
         // the narrow card width and clipped (caught by Task 8's RAW-caution gate case); this concise
         // form preserves the three facts: RAW is uncompensated/mic-only, miniDSP-unsupported, use HEQ.
-        errorLabel.setText ("RAW is uncompensated (mic-only) and miniDSP-unsupported - use an HEQ file for Dirac.",
+        errorLabel.setText ("RAW is uncompensated (mic-only) and miniDSP-unsupported" + kDash + "use an HEQ file for Dirac.",
                             juce::dontSendNotification);
         errorLabel.setVisible (true);
     } else if (parsed.type == eb::CalType::Unknown) {
         errorLabel.setColour (juce::Label::textColourId, Theme::warn());
-        errorLabel.setText ("Couldn't identify this calibration type - confirm it's an EARS HEQ file.",
+        errorLabel.setText ("Couldn't identify this calibration type" + kDash + "confirm it's an EARS HEQ file.",
                             juce::dontSendNotification);
         errorLabel.setVisible (true);
     } else {   // Heq / Hpn / Idf - no on-card note (the stage caption carries the pair guidance)
@@ -247,7 +248,7 @@ void CalSlotComponent::applyParsed (const eb::CalFile& parsed, const juce::File&
             // A type note (HEQ/HPN/RAW - the common cases) already owns the label: append a short pointer so
             // the warnings are still VISIBLE on the card, not only in the log (C+D verifier MINOR on #54).
             errorLabel.setText (errorLabel.getText() + " (" + juce::String (parsed.parseWarnings.size())
-                                + " parse warning" + (parsed.parseWarnings.size() > 1 ? "s" : "") + " - see log.)",
+                                + " parse warning" + (parsed.parseWarnings.size() > 1 ? "s" : "") + kDash + "see log.)",
                                 juce::dontSendNotification);
         }
         if (onParseWarnings) onParseWarnings (parsed.parseWarnings);

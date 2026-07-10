@@ -4,7 +4,7 @@
 namespace eb {
 
 // P2.9: distill a raw Windows/CoreAudio endpoint name to a spine-meta-sized summary (W2 shows
-// "EARS -> VB-Audio Cable", not "Hi-Fi Cable Output (VB-Audio Hi-Fi Cable) -> CABLE Input (...").
+// "EARS" + kArrow + "VB-Audio Cable", not the raw endpoint names (joined by MainComponent).
 // Order matters: family checks run most-specific-first (Voicemeeter is ALSO "VB-Audio"). Pure.
 inline juce::String distillDeviceName (const juce::String& raw) {
     const auto name = raw.trim();
@@ -24,7 +24,7 @@ inline juce::String distillDeviceName (const juce::String& raw) {
     if (open >= 0 && close > open)
         core = name.substring (open + 1, close).trim();
     if (core.isEmpty()) core = name;
-    constexpr int kMax = 24;                                     // spine meta budget (~2 lines with " -> ")
+    constexpr int kMax = 24;                                     // spine meta budget (~2 lines; kArrow joiner is 3 chars)
     return core.length() > kMax ? core.substring (0, kMax - 2).trimEnd() + ".." : core;
 }
 

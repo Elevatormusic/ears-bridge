@@ -800,7 +800,7 @@ TEST_CASE("P3 Level soft CTA: enabled once deps un-block; caution note until lat
     CHECK (stage.headerForTest().continueButton().isEnabled());       // (same button - sanity)
 
     // Un-latched -> the caution; latched -> empty.
-    CHECK (eb::LevelStage::levelRunNote (false, false, "x") == "Level not confirmed - the grade will tell you");
+    CHECK (eb::LevelStage::levelRunNote (false, false, "x") == "Level not confirmed" + eb::kDash + "the grade will tell you");
     CHECK (eb::LevelStage::levelRunNote (false, true,  "x") == juce::String());
     CHECK (eb::LevelStage::levelRunNote (true, false, "Finish Connect and Calibrate first")
            == "Finish Connect and Calibrate first");
@@ -853,7 +853,7 @@ TEST_CASE("P3 Measure run-note: contract wording (never 're-run sweep')") {
     CHECK (MS::measureRunNote (false, "", false, true)
            == "Then start the measurement again in Dirac Live.");
     CHECK (MS::measureRunNote (false, "", false, false)
-           == "Arms the bridge - the sweep still runs in Dirac");
+           == "Arms the bridge" + eb::kDash + "the sweep still runs in Dirac");
     CHECK (MS::measureRunNote (false, "", true, false) == juce::String());
 }
 
@@ -980,10 +980,10 @@ TEST_CASE("P3 mode-aware copy: waiting sub per combine mode + the Combined verdi
     const auto leftSub  = CC::waiting ("LEFT EAR",  CM::LeftOnly).sub;
     const auto rightSub = CC::waiting ("RIGHT EAR", CM::RightOnly).sub;
     const auto combSub  = CC::waiting ("LEFT EAR",  CM::Average).sub;
-    CHECK (autoSub  == "Auto per-ear runs one earcup at a time - this sweep follows automatically.");
-    CHECK (leftSub  == "Two-pass mode - this pass captures the left earcup only. Run Dirac once per ear.");
-    CHECK (rightSub == "Two-pass mode - this pass captures the right earcup only. Run Dirac once per ear.");
-    CHECK (combSub  == "Combined mode - the sweep captures both earcups mixed into one channel, not per ear.");
+    CHECK (autoSub  == "Auto per-ear runs one earcup at a time" + eb::kDash + "this sweep follows automatically.");
+    CHECK (leftSub  == "Two-pass mode" + eb::kDash + "this pass captures the left earcup only. Run Dirac once per ear.");
+    CHECK (rightSub == "Two-pass mode" + eb::kDash + "this pass captures the right earcup only. Run Dirac once per ear.");
+    CHECK (combSub  == "Combined mode" + eb::kDash + "the sweep captures both earcups mixed into one channel, not per ear.");
     CHECK (CC::waiting ("RIGHT EAR", CM::Sum).sub == combSub);      // Sum and Average share the truth
     // BOTH cards carry the mode sub - the UNSELECTED ear's card is the one whose Auto copy lied.
     CHECK (CC::waiting ("RIGHT EAR", CM::LeftOnly).sub == leftSub);
@@ -996,7 +996,7 @@ TEST_CASE("P3 mode-aware copy: waiting sub per combine mode + the Combined verdi
     const auto headAuto = MS::measureHeadCopy (MS::Lead::Waiting, false, true, CM::AutoPerEar);
     const auto headComb = MS::measureHeadCopy (MS::Lead::Waiting, false, true, CM::Sum);
     CHECK (headComb.title == "Your measurement result");
-    CHECK (headComb.sub == "The grade reflects the combined capture - both earcups mixed into one channel - expand Details to see the shape checks behind it.");
+    CHECK (headComb.sub == "The grade reflects the combined capture" + eb::kDash + "both earcups mixed into one channel" + eb::kDash + "expand Details to see the shape checks behind it.");
     CHECK_FALSE (headComb.sub.contains ("Each earcup"));
     CHECK (MS::measureHeadCopy (MS::Lead::Waiting, false, true, CM::Average).sub == headComb.sub);
     CHECK (headAuto.title == "Your per-ear result");

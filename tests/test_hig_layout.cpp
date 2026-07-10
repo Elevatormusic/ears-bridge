@@ -164,7 +164,7 @@ TEST_CASE("MainComponent::resized() relays stages: a newly-visible stage surface
     const auto marg  = eb::verdictCardModelAuto ("RIGHT EAR", margE,  0u, {}, false, false);
     mc.driveVerdictForTest (clean, marg, false);
     const juce::String driven = clean.fixBody;   // "A strong, low-noise capture - ..." (spec 6 clean copy)
-    CHECK (driven == "A strong, low-noise capture - Dirac will treat this ear as precise.");
+    CHECK (driven == "A strong, low-noise capture" + eb::kDash + "Dirac will treat this ear as precise.");
 
     hig::writeDesignProbe (mc, jf, pf);
     const auto tree = juce::JSON::parse (jf);
@@ -901,7 +901,7 @@ TEST_CASE("No-scroll + displacement gate: Measure workflow states at 900x720 [P3
         stage.setHeadCopy (head.title, head.sub);
         stage.setWaitHint (eb::MeasureStage::waitingHint (
             eb::MeasureStage::kArmedNoSweepHintSeconds, false, /*chainMismatch*/ true,
-            "input 44.1k, cable 44.1k, Dirac output 44.1k - set it to 48k", false));
+            "input 44.1k, cable 44.1k, Dirac output 44.1k" + eb::kDash + "set it to 48k", false));
         mc.resized();
         auto& vp = stage.viewportForTest();
         if (vp.getViewedComponent()->getHeight() > vp.getHeight())

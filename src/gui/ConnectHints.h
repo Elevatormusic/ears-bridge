@@ -17,5 +17,5 @@ inline constexpr const char* kDiracStdCableShared =
 inline constexpr const char* kDiracOtherVirtual =
     "If Dirac can't open this cable (error 600007), set Dirac to shared mode "
     "or use the standard VB-CABLE.";
-inline constexpr const char* kRateResample = "Not native - will be resampled.";
+inline const juce::String kRateResample = "Not native" + kDash + "will be resampled.";
 } // namespace eb::hints

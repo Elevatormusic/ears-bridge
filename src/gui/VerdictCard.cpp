@@ -1,4 +1,5 @@
 #include "gui/VerdictCard.h"
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include "gui/Theme.h"
 #include "gui/Glyphs.h"
 #include <cmath>
@@ -9,7 +10,7 @@ constexpr int kPadX = 16, kPadY = 12;             // house card pad (frame's 18 
 constexpr int kHeadH = 24, kGradeH = 30, kMetricsH = 34, kFixLeadH = 16, kFixBodyH = 32;
 constexpr int kDetailsH = 24, kChipH = 24, kChipGap = 6, kGap = 8;
 // P3 Task 7 ruling (controller): the VIEW shows at most this many logical observation lines; beyond
-// it the label reads "+N more - hover Details for the full list". A VIEW cap, never a model cap: the
+// it the label reads "+N more" + kDash + "hover Details for the full list". A VIEW cap, never a model cap: the
 // model keeps FULL evidence (operator== 30 Hz guard, the model pins, the tooltip/a11y mirrors below).
 // 4 is MEASURED against the pathological all-findings card at the 508px Measure viewport - the fit is
 // a HARD gate (test_hig_layout "RULE2a pathological open"), not an estimate.
@@ -155,10 +156,10 @@ void VerdictCard::setModel (const VerdictCardModel& m) {
     juce::StringArray shown = full;
     if (full.size() > kObsCap) {
         shown.removeRange (kObsCap, shown.size() - kObsCap);
-        shown.add ("+" + juce::String (full.size() - kObsCap) + " more - hover Details for the full list");
+        shown.add ("+" + juce::String (full.size() - kObsCap) + " more" + kDash + "hover Details for the full list");
     }
     if (anyProv) {
-        const juce::String footer = "Provisional findings aren't ratified on hardware yet - shown for information only.";
+        const juce::String footer = "Provisional findings aren't ratified on hardware yet" + kDash + "shown for information only.";
         full.add (footer);
         shown.add (footer);
     }

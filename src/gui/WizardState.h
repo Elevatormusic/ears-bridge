@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_core/juce_core.h>   // juce::String / jassert
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include <optional>
 
 // The pure, headless 4-step wizard state machine (P1 Task 1 of the guided-wizard redesign).
@@ -84,7 +85,7 @@ struct WizardState {
 // or overridden); else Todo with the FIRST unmet reason.
 [[nodiscard]] inline StepStatus resolveConnect (const WizardInputs& in) {
     if (in.deviceError)
-        return { StepState::Error, juce::String ("Device error - check the EARS and cable") };
+        return { StepState::Error, "Device error" + kDash + "check the EARS and cable" };
 
     if (! in.haveDevs)
         return { StepState::Todo, kReasonNoDevices() };
@@ -99,9 +100,9 @@ struct WizardState {
 // Calibrate: NEVER Blocked (cal loading does not depend on devices — compute, don't cascade).
 [[nodiscard]] inline StepStatus resolveCalibrate (const WizardInputs& in) {
     if (in.calProblem)
-        return { StepState::Error, juce::String ("A calibration file was rejected - see the card") };
+        return { StepState::Error, "A calibration file was rejected" + kDash + "see the card" };
     if (in.calBuilding)
-        return { StepState::Todo, juce::String ("Rebuilding filters...") };
+        return { StepState::Todo, "Rebuilding filters" + kEllipsis };
     if ((in.haveCals && ! in.calBuilding && ! in.calProblem) || in.unityAccepted)
         return { StepState::Done, {} };
     return { StepState::Todo, kReasonNoCals() };
@@ -152,7 +153,7 @@ struct BannerComposition {
     const int shownIdx = (int) shownStep;
     for (int i = 0; i < shownIdx; ++i)
         if (ws.steps[i].state == StepState::Error)
-            return { juce::String ("Needs attention - ") + ws.steps[i].reason, (WizardStep) i };
+            return { "Needs attention" + kDash + ws.steps[i].reason, (WizardStep) i };
     return {};
 }
 
@@ -211,7 +212,7 @@ struct BannerComposition {
     // 5) Banner: a broken step BEFORE the active one. Never when the active step IS the broken step (that
     //    stage surfaces the error natively). Composed via the shared composeBanner() so the VIEW can re-run
     //    the SAME rule against a held-pin shown step earlier than active (§ minor-1). bannerTarget = the
-    //    first such step; text = "Needs attention - " + that step's reason.
+    //    first such step; text = "Needs attention" + kDash + that step's reason.
     const auto banner = composeBanner (out, out.active);
     out.banner       = banner.text;
     out.bannerTarget = banner.target;

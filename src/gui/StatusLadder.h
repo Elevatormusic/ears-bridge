@@ -2,6 +2,7 @@
 #include "audio/RefMonitor.h"   // RefMonState / refMonBlocksGreen / QualityVerdict / classify* / qualityNote
 #include "audio/ResponseShape.h"   // SP3: eb::ShapeFlag (the shape-anomaly bitmask the INFO note reads)
 #include "gui/SnrStatus.h"      // kMinSweepSnrDb (the per-ear "(low SNR)" tag threshold)
+#include "gui/Copy.h"           // P4 T6: kDash/kEmDash/kEllipsis/kMiddot/kArrow typography
 #include <juce_core/juce_core.h>
 
 namespace eb {
@@ -76,7 +77,7 @@ struct RunningSnapshot {
     bool         autoDetectedHardwareDirac = false;
     bool         hardwareDiracSetting     = false;
     bool         lowLevelHold = false;     // debounced never-reached-healthy-level guidance
-    juce::String advisoryTail;             // chainAdvisoryTail(): " - <advisory>" or empty
+    juce::String advisoryTail;             // chainAdvisoryTail(): kDash + "<advisory>" or empty
 };
 
 // The graded-set test the captured branch keys on (mirrors the GUI's isGraded: any quality verdict OR
@@ -99,10 +100,10 @@ struct RunningSnapshot {
     StatusLineOut out;
     if (state == RefMonState::GradingOffHardware) {
         // Hardware Dirac: no loopback reference to grade against. CALM/neutral - NOT a warning, NOT green.
-        out.text = p + "grading off - hardware Dirac; per-ear calibration still active";
+        out.text = p + "grading off" + kDash + "hardware Dirac; per-ear calibration still active";
         out.tone = StatusTone::Dim;
     } else if (state == RefMonState::GradedClean) {
-        out.text = p + "verified - IR-SNR " + juce::String (juce::roundToInt (e.irSnrDb)) + " dB, THD "
+        out.text = p + "verified" + kDash + "IR-SNR " + juce::String (juce::roundToInt (e.irSnrDb)) + " dB, THD "
                  + juce::String (juce::roundToInt (e.thdPercent)) + "% (calibration pending)";
         out.tone = StatusTone::Ok;
     } else if (state == RefMonState::GradedMarginal || state == RefMonState::GradedSuspect) {
@@ -124,7 +125,7 @@ struct RunningSnapshot {
         out.text = p + "re-learn the reference";
         out.tone = StatusTone::Warn;
         out.tip  = "This earcup's sweep didn't match the learned reference channel (the gate failed). Re-learn "
-                   "the reference in Dirac's Windows Audio mode (Advanced -> Learn reference), then measure again.";
+                   "the reference in Dirac's Windows Audio mode (Advanced" + kArrow + "Learn reference), then measure again.";
     } else {
         // Learned / NotGraded / NotLearned: this ear hasn't produced a gradeable sweep yet this run.
         out.text = p + "waiting for the sweep";
@@ -141,23 +142,23 @@ struct RunningSnapshot {
             // Clipped: quantify the overshoot; cut = ceil(peak) + 3 dB margin. This WARN OVERRIDES the
             // IR-SNR/THD INFO on this ear's line — the clip is the actionable thing.
             const int cutDb = juce::roundToInt (std::ceil (e.peakDb)) + 3;
-            out.text = p + "clipped +" + juce::String (e.peakDb, 1) + " dBFS - lower the output ~"
+            out.text = p + "clipped +" + juce::String (e.peakDb, 1) + " dBFS" + kDash + "lower the output ~"
                      + juce::String (cutDb) + " dB";
             out.tone = StatusTone::Warn;
-            out.tip  = "This earcup's sweep peaked at +" + juce::String (e.peakDb, 1) + " dBFS - it overshot "
+            out.tip  = "This earcup's sweep peaked at +" + juce::String (e.peakDb, 1) + " dBFS" + kDash + "it overshot "
                        "full scale and clipped. Lower Dirac's output (or the system level) by about "
                      + juce::String (cutDb) + " dB, then re-measure. The correction is one shared output "
                        "level; the hotter earcup sets the cut.";
         } else if (e.peakDb >= -1.0f) {
             out.text = p + "peaked " + juce::String (e.peakDb, 1)
-                     + " dBFS - right at clipping, ease the output down";
+                     + " dBFS" + kDash + "right at clipping, ease the output down";
             out.tone = StatusTone::Warn;
-            out.tip  = "This earcup's sweep peaked at " + juce::String (e.peakDb, 1) + " dBFS - right at full "
+            out.tip  = "This earcup's sweep peaked at " + juce::String (e.peakDb, 1) + " dBFS" + kDash + "right at full "
                        "scale with no headroom. Ease the output down a few dB so the next sweep can't clip.";
         } else if (e.peakDb >= -12.0f) {
             peakTail = " (peak " + juce::String (e.peakDb, 0) + " dBFS)";          // healthy: neutral note
         } else if (e.peakDb < -18.0f) {
-            peakTail = " (peak " + juce::String (e.peakDb, 0) + " dBFS - low)";    // low: the level-low owns the warn
+            peakTail = " (peak " + juce::String (e.peakDb, 0) + " dBFS" + kDash + "low)";    // low: the level-low owns the warn
         }
     }
     out.text += snrTail + peakTail;
@@ -172,7 +173,7 @@ struct RunningSnapshot {
     // is lost, only relocated (mirrors the running line's advisory-tail budget).
     if (graded && e.shapeNote.isNotEmpty()) {
         static constexpr int kEarLineCharBudget = 78;   // same title-bar budget the #68 render gate ratifies
-        const juce::String sep = "  -  ";
+        const juce::String sep = kDash;
         if (out.text.length() + sep.length() + e.shapeNote.length() <= kEarLineCharBudget) {
             out.text += sep + e.shapeNote;
         } else {
@@ -221,32 +222,32 @@ static constexpr bool kShapeCopyRatified = false;
     // No measurable band FIRST (the loudest finding: the reference had a band but the measurement has none,
     // so the chain is dropping ALL content — a bare truncation edge would understate it). spec §6.
     if (flags & ShapeFlag::kNoBand)
-        return "no measurable response band - check the chain";
+        return "no measurable response band" + kDash + "check the chain";
     // Truncation NEXT (a truncated band is the most consequential — the chain is dropping content).
     if (flags & ShapeFlag::kTruncHi)
         return "content ends near " + juce::String (effHiHz / 1000.0f, 1)
-             + " kHz - the chain may be resampling";
+             + " kHz" + kDash + "the chain may be resampling";
     // kTruncLo copy gated (see kShapeCopyRatified): fires clean at the provisional LF pivot. Flag+number
     // stay live; the accusatory "check the seal" one-liner waits for #54C.
     if (kShapeCopyRatified && (flags & ShapeFlag::kTruncLo))
-        return "no low-frequency content - check the seal or the chain";
+        return "no low-frequency content" + kDash + "check the seal or the chain";
     if (flags & ShapeFlag::kComb)
-        return "possible duplicate path - echo ~" + juce::String (combDelayMs, 1) + " ms";
+        return "possible duplicate path" + kDash + "echo ~" + juce::String (combDelayMs, 1) + " ms";
     if (flags & ShapeFlag::kPolarity)
-        return "the two ears measure with opposite polarity - check wiring";
+        return "the two ears measure with opposite polarity" + kDash + "check wiring";
     if (flags & ShapeFlag::kDrift)
         return "response drifted since sweep 1 (" + juce::String (driftMaxDb, 1)
-             + " dB) - re-seat or check the chain";
+             + " dB)" + kDash + "re-seat or check the chain";
     if (flags & ShapeFlag::kHum)
-        return "mains hum (" + juce::String (humBaseHz) + " Hz) in the noise floor - check ground/amp loop";
+        return "mains hum (" + juce::String (humBaseHz) + " Hz) in the noise floor" + kDash + "check ground/amp loop";
     if (flags & ShapeFlag::kResonance)
         return "possible narrow resonance in the response";
     if (flags & ShapeFlag::kSkew)
-        return "clock skew suspected - check the device sample rates";
+        return "clock skew suspected" + kDash + "check the device sample rates";
     // kStep copy gated (see kShapeCopyRatified): D7's ratio is confounded by the headphone envelope, so
     // every real headphone trips it. Flag+number stay live; the one-liner waits for #54C.
     if (kShapeCopyRatified && (flags & ShapeFlag::kStep))
-        return "level changed mid-sweep - disable enhancements / AGC";
+        return "level changed mid-sweep" + kDash + "disable enhancements / AGC";
     return {};   // no anomaly (or only the baseline-set bit): no note
 }
 
@@ -311,7 +312,7 @@ static constexpr bool kShapeCopyRatified = false;
 // The "n/a" metric placeholder (em dash) - ONE source for the model that writes it and the view
 // that keys the metrics-row visibility off it (all-dash rows are hidden, see VerdictCard.cpp).
 [[nodiscard]] inline juce::String verdictDash() {
-    return juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x94"));
+    return kEmDash;   // P4 T6: the one bare-em-dash source is Copy.h now
 }
 
 struct ShapeScalars {
@@ -380,7 +381,7 @@ struct VerdictCardModel {
     bool snrFlag = false, irFlag = false, thdFlag = false;
     juce::String fixLead, fixBody;      // the ONE promoted fix line (bold lead + wrapped body)
     StatusTone   fixTone = StatusTone::Dim;
-    juce::String tally;                 // "7 checks pass" / "6 pass - 1 flagged"
+    juce::String tally;                 // "7 checks pass" / "6 pass · 1 flagged" (kMiddot)
     int flaggedChips = 0;
     VerdictChipView chips[kVerdictChipCount];
     std::vector<VerdictObservation> observations;
@@ -410,7 +411,7 @@ struct VerdictCardModel {
         m.gradeWord = "Ungraded";                      m.qualifier = "hardware Dirac";
         m.snrVal = m.irVal = m.thdVal = dash;
         m.fixLead = "Grading isn't available.";
-        m.fixBody = "The per-ear calibration still works - measure as usual.";
+        m.fixBody = "The per-ear calibration still works" + kDash + "measure as usual.";
         return m;                                      // details stay hidden (tally empty)
     }
     if (! earIsGraded (e.state)) return m;             // graded stays false
@@ -431,13 +432,13 @@ struct VerdictCardModel {
             m.badge = "Clean";                          m.badgeTone = StatusTone::Ok;
             m.gradeWord = "Clean";                      m.qualifier = "strong capture";
             m.fixLead = "Safe to keep.";                m.fixTone = StatusTone::Dim;
-            m.fixBody = "A strong, low-noise capture - Dirac will treat this ear as precise.";
+            m.fixBody = "A strong, low-noise capture" + kDash + "Dirac will treat this ear as precise.";
             break;
         case RefMonState::GradedMarginal:
             m.badge = m.snrFlag ? "Marginal SNR" : "Marginal";  m.badgeTone = StatusTone::Warn;
             m.gradeWord = "Marginal";                   m.qualifier = m.snrFlag ? "low signal-to-noise" : "usable";
             m.fixLead = "Dirac may mark this ear imprecise.";   m.fixTone = StatusTone::Warn;
-            m.fixBody = note.isNotEmpty() ? note : juce::String ("usable - consider re-measuring");
+            m.fixBody = note.isNotEmpty() ? note : "usable" + kDash + "consider re-measuring";
             break;
         case RefMonState::GradedSuspect:
             m.badge = "Suspect";                        m.badgeTone = StatusTone::Danger;
@@ -482,7 +483,7 @@ struct VerdictCardModel {
     }
     m.tally = m.flaggedChips == 0
         ? juce::String (kVerdictChipCount) + " checks pass"
-        : juce::String (kVerdictChipCount - m.flaggedChips) + " pass - " + juce::String (m.flaggedChips) + " flagged";
+        : juce::String (kVerdictChipCount - m.flaggedChips) + " pass" + kMiddot + juce::String (m.flaggedChips) + " flagged";
     const auto tip = shapeInfoTip (flags, s.driftMaxDb, s.hfShelfDb, s.combDepthDb, s.combDelayMs,
                                    s.effLoHz, s.effHiHz, s.lobeWidth, s.stepDb, s.humBaseHz, s.resonanceHz);
     for (const auto& line : juce::StringArray::fromLines (tip))
@@ -512,10 +513,10 @@ struct VerdictCardModel {
                      || state == RefMonState::GradedSuspect;
     // The clip cut is the single most actionable per-ear datum — it overrides the state word.
     if (graded && e.peakDb >= 0.0f)
-        return p + "clipped +" + juce::String (e.peakDb, 1) + " - lower ~"
+        return p + "clipped +" + juce::String (e.peakDb, 1) + kDash + "lower ~"
              + juce::String (juce::roundToInt (std::ceil (e.peakDb)) + 3) + " dB";
     if (graded && e.peakDb >= -1.0f && e.peakDb > -119.0f)
-        return p + "at clipping - ease the output down";
+        return p + "at clipping" + kDash + "ease the output down";
     const bool lowSnr = e.sweepSnrDb > 0.0f && e.sweepSnrDb < kMinSweepSnrDb;
     const juce::String snrTag = lowSnr ? juce::String (" (low SNR)") : juce::String();
     switch (state) {
@@ -549,19 +550,19 @@ struct VerdictCardModel {
                          || (earIsGraded (earR.state) && earR.peakDb >= 0.0f);
     StatusLineOut out;
     if (worst >= 3) {
-        out.text = "Sweep captured but flagged - noisy or distorted; re-measure";
+        out.text = "Sweep captured but flagged" + kDash + "noisy or distorted; re-measure";
         out.tone = StatusTone::Danger;
     } else if (worst == 2) {
-        out.text = "Sweep didn't match the reference - re-learn or re-measure";
+        out.text = "Sweep didn't match the reference" + kDash + "re-learn or re-measure";
         out.tone = StatusTone::Warn;
     } else if (worst == 1) {
-        out.text = "Sweep captured - marginal quality; usable, consider re-measuring";
+        out.text = "Sweep captured" + kDash + "marginal quality; usable, consider re-measuring";
         out.tone = StatusTone::Warn;
     } else if (anyClipped) {
-        out.text = "Sweep captured - input clipped; lower the output (see the ear line)";
+        out.text = "Sweep captured" + kDash + "input clipped; lower the output (see the ear line)";
         out.tone = StatusTone::Warn;
     } else {
-        out.text = "Sweep captured - safe to run the next sweep";
+        out.text = "Sweep captured" + kDash + "safe to run the next sweep";
         out.tone = StatusTone::Ok;
     }
     return out;
@@ -593,13 +594,13 @@ struct VerdictCardModel {
     }
     // 3. Output hit full scale: the clamp saved the cable, but the sweep is distorted.
     else if (s.outputClip) {
-        out.line1 = { "Output clipping - lower the level or avoid Sum", {}, StatusTone::Warn };
+        out.line1 = { "Output clipping" + kDash + "lower the level or avoid Sum", {}, StatusTone::Warn };
     }
     // 4. #21: SILENT INPUT, hoisted above the captured/activity branches it was shadowed by. The
     //    -50 dBFS floor sits far below room ambient (~-30 dB), so a live mic never trips this — a held
     //    silence means the signal path is dead NOW, which must beat a stale success confirmation.
     else if (s.silentHold) {
-        out.line1 = { "Running - no input signal (check the EARS)", {}, StatusTone::Warn };
+        out.line1 = { "Running" + kDash + "no input signal (check the EARS)", {}, StatusTone::Warn };
     }
     // 5. SNR guidance, before captured/waiting so a noisy sweep never reads "clean"/"safe to run the
     //    next". #15: name the OFFENDING EAR from the per-ear stores (combined snapshot = fallback).
@@ -610,7 +611,7 @@ struct VerdictCardModel {
         else if (s.snrR > 0.0f)                                    { worst = s.snrR; earTag = " (R)"; }
         const int snrDb = juce::roundToInt (worst);
         out.line1.text = "Low SNR" + earTag + ": sweep only " + juce::String (snrDb)
-                       + " dB over the room noise - re-measure";
+                       + " dB over the room noise" + kDash + "re-measure";
         out.line1.tone = StatusTone::Warn;
         out.line1.tip  = "The Dirac sweep was only " + juce::String (snrDb)
                        + " dB above the room-noise floor" + (earTag.isEmpty() ? juce::String()
@@ -641,9 +642,9 @@ struct VerdictCardModel {
     //    case was intercepted above, so referenceLoaded here means "engaged, nothing graded yet".
     else if (s.phaseIdleOrPreflight) {
         out.line1.text = s.referenceLoaded
-                       ? (s.gradeSignalPresent ? juce::String ("Sweep in progress...")
-                                               : juce::String ("Listening for the Dirac sweep..."))
-                       : juce::String ("Running - waiting for the Dirac sweep...");
+                       ? (s.gradeSignalPresent ? "Sweep in progress" + kEllipsis
+                                               : "Listening for the Dirac sweep" + kEllipsis)
+                       : "Running" + kDash + "waiting for the Dirac sweep" + kEllipsis;
         out.line1.tone = StatusTone::Dim;
     }
     // 9. Reference loaded, nothing graded yet, sweep running: the full per-ear waiting/verdict lines.
@@ -654,26 +655,26 @@ struct VerdictCardModel {
     // 10. Sweep finished clean (non-adopters / hardware Dirac): the sweep-scoped combined summary.
     else if (s.phaseComplete) {
         const auto refState = (RefMonState) s.earL.state;   // combined/legacy = ear 0's published state
-        juce::String msg = "Sweep captured - no clipping or dropouts detected";
+        juce::String msg = "Sweep captured" + kDash + "no clipping or dropouts detected";
         StatusTone tone = StatusTone::Ok;
         if (refState == RefMonState::GradingOffHardware) {
-            msg  = "Sweep captured - reference grading off (hardware Dirac); per-ear calibration still active";
+            msg  = "Sweep captured" + kDash + "reference grading off (hardware Dirac); per-ear calibration still active";
             tone = StatusTone::Dim;
         } else if (s.autoDetectedHardwareDirac && ! s.hardwareDiracSetting) {
-            msg  = "Sweep captured - looks like a hardware Dirac processor; turn it on in Advanced to silence the grade";
+            msg  = "Sweep captured" + kDash + "looks like a hardware Dirac processor; turn it on in Advanced to silence the grade";
             tone = StatusTone::Dim;
         } else if (refState == RefMonState::GradedClean) {
-            msg = "Sweep captured + verified against the reference (captured earcup) - IR-SNR "
+            msg = "Sweep captured + verified against the reference (captured earcup)" + kDash + "IR-SNR "
                 + juce::String (juce::roundToInt (s.earL.irSnrDb)) + " dB, THD "
                 + juce::String (juce::roundToInt (s.earL.thdPercent)) + "% (calibration pending)";
         } else if (refState == RefMonState::GradedMarginal) {
-            msg  = "Sweep captured - marginal SNR; usable, consider re-measuring (captured earcup)";
+            msg  = "Sweep captured" + kDash + "marginal SNR; usable, consider re-measuring (captured earcup)";
             tone = StatusTone::Warn;
         } else if (refState == RefMonState::GradedSuspect) {
-            msg  = "Sweep captured but flagged - noisy or distorted, re-measure (captured earcup)";
+            msg  = "Sweep captured but flagged" + kDash + "noisy or distorted, re-measure (captured earcup)";
             tone = StatusTone::Danger;
         }
-        if (s.osResampled) msg += " (OS-resampled - approximate)";
+        if (s.osResampled) msg += " (OS-resampled" + kDash + "approximate)";
         out.line1 = { msg, {}, tone };
         jassert (! (tone == StatusTone::Ok && refMonBlocksGreen (refState)
                     && refState != RefMonState::NotLearned && refState != RefMonState::NotGraded
@@ -681,11 +682,11 @@ struct VerdictCardModel {
     }
     // 11. Signal present but the capture never reached a healthy level: poor SNR reads "tin-can".
     else if (s.lowLevelHold) {
-        out.line1 = { "Running - level low: turn your amp up to the green band", {}, StatusTone::Warn };
+        out.line1 = { "Running" + kDash + "level low: turn your amp up to the green band", {}, StatusTone::Warn };
     }
     // 12. In-sweep, nothing latched: clean so far.
     else {
-        out.line1 = { "Capturing the Dirac sweep - clean so far", {}, StatusTone::Ok };
+        out.line1 = { "Capturing the Dirac sweep" + kDash + "clean so far", {}, StatusTone::Ok };
     }
 
     // Chain advisory tail (#49-composed): decorates a CALM line 1 only (ok/dim), never a warn/error.
@@ -698,7 +699,7 @@ struct VerdictCardModel {
         if (out.line1.text.length() + s.advisoryTail.length() <= kLine1AdvisoryCharBudget)
             out.line1.text += s.advisoryTail;
         else {
-            const auto advisory = s.advisoryTail.startsWith (" - ") ? s.advisoryTail.substring (3)
+            const auto advisory = s.advisoryTail.startsWith (kDash) ? s.advisoryTail.substring (kDash.length())
                                                                     : s.advisoryTail.trimStart();
             out.line1.tip = out.line1.tip.isEmpty() ? advisory : out.line1.tip + "\n" + advisory;
         }

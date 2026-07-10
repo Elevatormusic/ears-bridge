@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_core/juce_core.h>
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include "audio/EngineTypes.h"
 
 namespace eb {
@@ -13,8 +14,8 @@ namespace eb {
     if (rr.mixRate > 0.0)
         return "OS-resampled to " + juce::String (rr.mixRate / 1000.0, 1)
              + " kHz (endpoint mix rate) vs the requested " + juce::String (rr.requestedRate / 1000.0, 1)
-             + " kHz - clip detection approximate.";
-    return "Could not confirm the EARS endpoint rate - clip detection approximate.";
+             + " kHz" + kDash + "clip detection approximate.";
+    return "Could not confirm the EARS endpoint rate" + kDash + "clip detection approximate.";
 }
 
 } // namespace eb

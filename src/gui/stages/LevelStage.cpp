@@ -1,4 +1,5 @@
 #include "gui/stages/LevelStage.h"
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include "gui/Theme.h"
 
 namespace eb {
@@ -13,7 +14,7 @@ constexpr int kClipHintH = 48;
 
 juce::String LevelStage::levelRunNote (bool blocked, bool latched, const juce::String& machineReason) {
     if (blocked) return machineReason;
-    if (! latched) return "Level not confirmed - the grade will tell you";
+    if (! latched) return "Level not confirmed" + kDash + "the grade will tell you";
     return {};
 }
 

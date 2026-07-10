@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_core/juce_core.h>
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include "audio/EngineTypes.h"
 #include "gui/RawRailStatus.h"
 
@@ -36,7 +37,7 @@ struct StartNotes {
     // The bit-depth fact: shared mode is always 32-bit float, so a difference from the stored
     // preference is NORMAL. SHORT + complete (no trailing "preference only" clause that would clip).
     if (grantedBits > 0 && grantedBits != selBits)
-        n.info = "Output: " + juce::String (grantedBits) + "-bit float (shared mode) - normal.";
+        n.info = "Output: " + juce::String (grantedBits) + "-bit float (shared mode)" + kDash + "normal.";
 
     // The raw-rail (D2) caveat stays cautionary if the endpoint rate could not be confirmed.
     const auto railNote = rawRailNote (rail);

@@ -1,4 +1,5 @@
 #include "gui/CaptureCard.h"
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include "gui/Theme.h"
 
 namespace eb {
@@ -9,11 +10,11 @@ CaptureCardModel CaptureCardModel::waiting (const char* ear, CombineMode mode) {
     // claims nothing per-ear; Auto keeps the routine copy. Pinned in test_wizardnav.cpp (all three
     // variants + a 3-line fit check against the card's 48px sub slot).
     const juce::String sub =
-          mode == CombineMode::LeftOnly  ? "Two-pass mode - this pass captures the left earcup only. Run Dirac once per ear."
-        : mode == CombineMode::RightOnly ? "Two-pass mode - this pass captures the right earcup only. Run Dirac once per ear."
+          mode == CombineMode::LeftOnly  ? "Two-pass mode" + kDash + "this pass captures the left earcup only. Run Dirac once per ear."
+        : mode == CombineMode::RightOnly ? "Two-pass mode" + kDash + "this pass captures the right earcup only. Run Dirac once per ear."
         : mode == CombineMode::Average || mode == CombineMode::Sum
-              ? "Combined mode - the sweep captures both earcups mixed into one channel, not per ear."
-              : "Auto per-ear runs one earcup at a time - this sweep follows automatically.";
+              ? "Combined mode" + kDash + "the sweep captures both earcups mixed into one channel, not per ear."
+              : "Auto per-ear runs one earcup at a time" + kDash + "this sweep follows automatically.";
     return { State::Waiting, ear, "Waiting", "Next in the routine", sub, "Queued", -1.0f };
 }
 CaptureCardModel CaptureCardModel::capturing (const char* ear, float fraction, int sweepSeconds) {
@@ -23,7 +24,7 @@ CaptureCardModel CaptureCardModel::capturing (const char* ear, float fraction, i
 }
 CaptureCardModel CaptureCardModel::failed (const char* ear) {
     return { State::Failed, ear, "Failed", "Capture interrupted",
-             "EARS disconnected mid-sweep. This sweep can't be graded - reconnect, then measure again.",
+             "EARS disconnected mid-sweep. This sweep can't be graded" + kDash + "reconnect, then measure again.",
              {}, -1.0f };
 }
 

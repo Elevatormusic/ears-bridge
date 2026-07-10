@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_core/juce_core.h>
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 
 namespace eb {
 
@@ -42,11 +43,11 @@ struct LiveInputStatus {
     const float peakMax = juce::jmax (peakLDb, peakRDb);
 
     if (peakMax >= 0.0f) {   // the sweep PEAK hit/over full scale on the loudest earcup (held, so past-tense)
-        s.text     = "CLIPPED  +" + juce::String (peakMax, 1) + " dBFS - lower the output";
+        s.text     = "CLIPPED  +" + juce::String (peakMax, 1) + " dBFS" + kDash + "lower the output";
         s.severity = LiveInputSeverity::Clip;
         return s;
     }
-    s.text     = "Sweep in progress - peak " + juce::String (peakMax, 1) + " dBFS";
+    s.text     = "Sweep in progress" + kDash + "peak " + juce::String (peakMax, 1) + " dBFS";
     s.severity = LiveInputSeverity::Normal;
     return s;
 }

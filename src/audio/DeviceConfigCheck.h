@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_core/juce_core.h>
+#include "gui/Copy.h"   // P4 T6: typography constants (juce_core only)
 #include <cmath>
 #include "platform/EndpointFormat.h"
 
@@ -92,7 +93,7 @@ struct ConfigVerdict {
     juce::StringArray adv;
     // 1) The input-channels WARN comes FIRST (it's the most important — both earcups can't be measured).
     if (v.inputChannelsLow)
-        adv.add ("input is mono - both earcups can't be measured");
+        adv.add ("input is mono" + kDash + "both earcups can't be measured");
     // 2) Any 16-bit-integer endpoint(s): one compact note naming which side(s). INFO, never a gate.
     {
         juce::StringArray sixteen;
@@ -100,7 +101,7 @@ struct ConfigVerdict {
         if (is16BitInt (c.cable))       sixteen.add ("cable");
         if (is16BitInt (c.diracOutput)) sixteen.add ("Dirac output");
         if (! sixteen.isEmpty())
-            adv.add (sixteen.joinIntoString (", ") + " 16-bit - 24-bit+ recommended for the cleanest measurement");
+            adv.add (sixteen.joinIntoString (", ") + " 16-bit" + kDash + "24-bit+ recommended for the cleanest measurement");
     }
     // 3) A non-2ch cable / Dirac output: INFO only (the input's channel count is handled by the WARN above).
     {
@@ -116,7 +117,7 @@ struct ConfigVerdict {
         // #55: honest fail-closed surface. A poll ran and NOT ONE endpoint was readable — say so
         // instead of silence (the old early-return made an unverifiable chain read as implicitly ok).
         v.unverifiable = true;
-        v.summary = "couldn't read any endpoint rate - 48k chain unverified";
+        v.summary = "couldn't read any endpoint rate" + kDash + "48k chain unverified";
         return v;
     }
     if (v.all48k)
@@ -149,7 +150,7 @@ struct ConfigVerdict {
                         || (c.cable.valid && ! v.cableOk)
                         || (c.diracOutput.valid && ! v.diracOk);
     v.summary = parts.joinIntoString (", ");
-    if (anyOff48k) v.summary << " - set it to 48k";
+    if (anyOff48k) v.summary << kDash + "set it to 48k";
     return v;
 }
 

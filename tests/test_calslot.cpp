@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include "gui/Copy.h"
 #include "gui/CalSlotComponent.h"
 #include "gui/juce_design_probe.h"
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -108,7 +109,7 @@ TEST_CASE("CalSlotComponent empty state: visible, focusable, per-ear Browse butt
     CHECK (browse->getWantsKeyboardFocus());
     // Per-ear text: distinct labels are honest a11y (a screen reader hears WHICH ear) and the
     // design gate's duplicate rule would rightly flag two identical "Browse..." twins.
-    CHECK (browse->getButtonText() == "Browse left ear...");
+    CHECK (browse->getButtonText() == "Browse left ear" + eb::kEllipsis);
 }
 
 // Map #8b: the Required line exists ONLY in the honest asymmetric case (the OTHER ear loaded ->

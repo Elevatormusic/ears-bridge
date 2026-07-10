@@ -77,7 +77,7 @@ private:
     CurveThumbnail thumbnail;
     juce::Label      dzMain;             // "Drop the left ear file here"
     juce::TextButton browseBtn;          // visible Browse CTA (H1)
-    juce::Label      dzReq;              // "Required - load both ears to measure"
+    juce::Label      dzReq;              // "Required" + kDash + "load both ears to measure"
     juce::Rectangle<int> dzIconArea;     // where paint() draws the drop glyph (set by resized)
     bool siblingLoaded = false;
     bool mouseHover = false;

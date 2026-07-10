@@ -15,7 +15,7 @@ TEST_CASE("liveInputStatus: idle defers to the per-ear verdicts (empty text)") {
 TEST_CASE("liveInputStatus: an active sweep reports the PEAK (loudest earcup), not per-channel") {
     const auto s = liveInputStatus (-2.0f, -8.0f, /*sweepActive*/ true);
     CHECK (s.severity == LiveInputSeverity::Normal);
-    CHECK (s.text.toStdString() == "Sweep in progress - peak -2.0 dBFS");
+    CHECK (s.text == "Sweep in progress" + eb::kDash + "peak -2.0 dBFS");
 }
 
 TEST_CASE("liveInputStatus: a clip reads CLIPPED + the positive peak dB") {
@@ -55,11 +55,11 @@ TEST_CASE("liveInputStatus: a large L/R gap during a sweep does NOT emit a resea
     CHECK (s.severity == LiveInputSeverity::Normal);
     CHECK_FALSE (s.text.contains ("reseat"));
     CHECK_FALSE (s.text.contains ("\n"));                                   // single line, no second-line hint
-    CHECK (s.text.toStdString() == "Sweep in progress - peak -3.0 dBFS");   // the active (loud) ear's level
+    CHECK (s.text == "Sweep in progress" + eb::kDash + "peak -3.0 dBFS");   // the active (loud) ear's level
 
     // Same with R as the active ear and L idle -> still just the peak, no reseat.
     const auto s2 = liveInputStatus (-25.0f, -1.0f, /*sweepActive*/ true);
     CHECK (s2.severity == LiveInputSeverity::Normal);
     CHECK_FALSE (s2.text.contains ("reseat"));
-    CHECK (s2.text.toStdString() == "Sweep in progress - peak -1.0 dBFS");
+    CHECK (s2.text == "Sweep in progress" + eb::kDash + "peak -1.0 dBFS");
 }

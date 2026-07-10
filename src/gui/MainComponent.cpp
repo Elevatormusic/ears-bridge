@@ -50,8 +50,8 @@ static void styleEyebrow (juce::Label& l, const juce::String& t) {
 
 // The raw-input clip warning's PRODUCTION copy, file-local so the ctor (the one live populate site -
 // the timer only toggles visibility) and driveLevelClipForTest can never drift (P3 Task 4 copy rule).
-static const char* const kInputClipHintText =
-    "EARS mic input near full scale - lower Dirac's Master output (try ~-12.5 dB). "
+static const juce::String kInputClipHintText =
+    "EARS mic input near full scale" + eb::kDash + "lower Dirac's Master output (try ~-12.5 dB). "
     "Don't touch the EARS gain switch. Dirac won't flag this: the clip is at the "
     "mic, before Dirac records.";
 
@@ -66,7 +66,7 @@ static juce::String stepName (WizardStep s) {
     return {};
 }
 
-// Short cal-type name for the Calibrate spine done-summary ("HEQ pair - <serial>").
+// Short cal-type name for the Calibrate spine done-summary ("HEQ pair" + kDash + "<serial>").
 static juce::String calTypeShortName (eb::CalType t) {
     switch (t) {
         case eb::CalType::Heq: return "HEQ";
@@ -233,7 +233,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
     preflightInfo.setColour (juce::Label::textColourId, Theme::textDim());
     preflightInfo.setFont (juce::Font (juce::FontOptions (12.0f)));
     preflightInfo.setTooltip ("WASAPI shared mode always delivers 32-bit float; your bit-depth is a "
-                              "stored preference and doesn't affect quality - this is expected.");
+                              "stored preference and doesn't affect quality" + kDash + "this is expected.");
 
     // Standard-VB-CABLE-vs-Dirac compatibility hint + one-click fix (hidden unless that cable is chosen).
     diracCableHint.setFont (juce::Font (juce::FontOptions (12.0f)));
@@ -344,7 +344,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
             verifyTicks = 1;   // running; timerCallback polls the verdict and times out
             verifyButton.setButtonText ("Stop check");
             verifyResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
-            verifyResultLabel.setText ("Listening - play a tone in the LEFT earcup...", juce::dontSendNotification);
+            verifyResultLabel.setText ("Listening" + kDash + "play a tone in the LEFT earcup" + kEllipsis, juce::dontSendNotification);
         } else {
             verifyResultLabel.setColour (juce::Label::textColourId, Theme::warn());
             verifyResultLabel.setText (err, juce::dontSendNotification);
@@ -580,7 +580,7 @@ MainComponent::MainComponent (const TestConfig& cfg)
         updateChecker.start (juce::String (EB_VERSION_STRING),
             [this] (UpdateInfo info) {
                 if (info.updateAvailable) {
-                    updateLink.setButtonText ("Update available - v" + info.latestVersion);
+                    updateLink.setButtonText ("Update available" + kDash + "v" + info.latestVersion);
                     updateLink.setURL (juce::URL (info.releaseUrl));
                     updateLink.setVisible (true);
                     resized();
@@ -921,7 +921,7 @@ void MainComponent::onCombineChosen() {
     juce::String h;
     switch (mode) {
         case CombineMode::AutoPerEar:
-            h = "Use this with Dirac. Records only the earcup Dirac is sweeping - clean per-ear "
+            h = "Use this with Dirac. Records only the earcup Dirac is sweeping" + kDash + "clean per-ear "
                 "capture in one pass, no open-back crosstalk.";
             break;
         case CombineMode::Average:
@@ -1111,7 +1111,7 @@ void MainComponent::onStartStop() {
             if (engine.referenceLoaded() && std::abs (loadedReferenceRateL_ - activeRate()) > 1.0)
                 notes.warnings.add ("Reference was learned at " + juce::String (loadedReferenceRateL_ / 1000.0, 1)
                                   + " kHz; this session is " + juce::String (activeRate() / 1000.0, 1)
-                                  + " kHz - re-learn for this rate.");
+                                  + " kHz" + kDash + "re-learn for this rate.");
             // #34: warn when Dirac's output DEVICE differs from the one the reference was learned
             // against - a swap silently changes the comparison basis (the grades would read "re-learn"
             // with no visible reason). Advisory only; legacy sidecars (no binding) stay silent.
@@ -1273,7 +1273,7 @@ void MainComponent::updateDiracMicGainHint() {
     const float n = engine.headroomAttenuationDb();   // >= 0 dB; 0 when no attenuation (unity / cut / flat cal)
     juce::String text = (n >= 0.5f)
         ? "EARS Bridge attenuates its output ~" + juce::String (juce::roundToInt (n))
-          + " dB for headroom - add about +" + juce::String (juce::roundToInt (n))
+          + " dB for headroom" + kDash + "add about +" + juce::String (juce::roundToInt (n))
           + " dB on Dirac's Mic gain (watch Dirac's input meter)."
         : "Set Dirac's Mic gain so Dirac records at a healthy level (watch Dirac's input meter).";
     if (text != diracMicGainHint.getText())
@@ -1299,10 +1299,10 @@ void MainComponent::computeCalProblems (juce::String& leftProblem, juce::String&
     // (1) Per-slot side check (independent of the other slot).
     if (leftCal.hasCal()
         && eb::calSideMismatched (true, leftCal.calFile()->side, eb::CalSide::Left))
-        leftProblem = "This looks like the RIGHT cal, but it's in the LEFT slot - swap the files.";
+        leftProblem = "This looks like the RIGHT cal, but it's in the LEFT slot" + kDash + "swap the files.";
     if (rightCal.hasCal()
         && eb::calSideMismatched (true, rightCal.calFile()->side, eb::CalSide::Right))
-        rightProblem = "This looks like the LEFT cal, but it's in the RIGHT slot - swap the files.";
+        rightProblem = "This looks like the LEFT cal, but it's in the RIGHT slot" + kDash + "swap the files.";
 
     // (2) Pair diagnostic (only when both loaded + the build is current + the pair was rejected).
     const bool building = engine.requestedGeneration() != engine.builtGeneration();
@@ -1315,9 +1315,9 @@ void MainComponent::computeCalProblems (juce::String& leftProblem, juce::String&
         if (leftSlotSwapped || rightSlotSwapped) {
             // A swap the validator named -- but the per-slot check above usually already set it.
             if (leftSlotSwapped && leftProblem.isEmpty())
-                leftProblem = "This looks like the RIGHT cal, but it's in the LEFT slot - swap the files.";
+                leftProblem = "This looks like the RIGHT cal, but it's in the LEFT slot" + kDash + "swap the files.";
             if (rightSlotSwapped && rightProblem.isEmpty())
-                rightProblem = "This looks like the LEFT cal, but it's in the RIGHT slot - swap the files.";
+                rightProblem = "This looks like the LEFT cal, but it's in the RIGHT slot" + kDash + "swap the files.";
         } else {
             // Serial mismatch / HEQ / unknown-type: not ear-specific. Show on both, but never clobber
             // a more specific per-slot swap message.
@@ -1460,7 +1460,7 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
     juce::String viewMetas[kWizardStepCount];
     if (auto in = inputPicker.selectedDevice())
         if (auto out = outputPicker.selectedDevice())
-            viewMetas[(int) WizardStep::Connect] = distillDeviceName (in->name) + " -> "
+            viewMetas[(int) WizardStep::Connect] = distillDeviceName (in->name) + kArrow
                                                  + distillDeviceName (out->name);
     // Calibrate done-summary "HEQ pair · <serial>" (spec § view metas). Only when the step is Done (both
     // cals loaded + applied) — else the machine reason (Todo/Error/rebuilding) stays.
@@ -1474,7 +1474,7 @@ void MainComponent::renderWizardView (const eb::WizardState& ws) {
             const juce::String serial   = lc->serial.isNotEmpty() ? lc->serial
                                         : (rightCal.calFile() ? rightCal.calFile()->serial : juce::String());
             viewMetas[(int) WizardStep::Calibrate] = serial.isNotEmpty()
-                ? (typeName + " pair - " + serial) : (typeName + " pair");
+                ? (typeName + " pair" + kDash + serial) : (typeName + " pair");
         }
     }
     // Level done-summary "In green band" (spec § view metas). Only meaningful once Done (latched).
@@ -2061,10 +2061,10 @@ void MainComponent::updateStatusLine() {
             lCal.has_value()  && lCal->side  == eb::CalSide::Unknown
          && rCal.has_value() && rCal->side == eb::CalSide::Unknown;
         if (overrideRelaxing) {
-            sText = "Advanced override on - not the standard Dirac path.";
+            sText = "Advanced override on" + kDash + "not the standard Dirac path.";
             sCol  = Theme::textDim();
         } else if (bothSideUnknown) {
-            sText = "Couldn't confirm left/right from these files - double-check the slots.";
+            sText = "Couldn't confirm left/right from these files" + kDash + "double-check the slots.";
             sCol  = Theme::textDim();
         } else if ((chainVerdict_.checked && ! chainVerdict_.all48k) || chainVerdict_.unverifiable) {
             // 48k-everywhere warning surfaced PRE-START: devices + cals are ready and no higher-precedence
@@ -2089,7 +2089,7 @@ void MainComponent::updateStatusLine() {
             sText = diag;
             sCol  = Theme::warn();
         } else {
-            sText = "Preparing calibration...";
+            sText = "Preparing calibration" + kEllipsis;
             sCol  = Theme::textDim();
         }
     } else {
@@ -2113,10 +2113,10 @@ void MainComponent::updateStatusLine() {
     setTooltipIfChanged (statusLineR, s2Tip);
 }
 
-// " - <advisory>" when the chain-config advisory should decorate a calm status line; empty otherwise.
+// kDash + "<advisory>" when the chain-config advisory should decorate a calm status line; empty otherwise.
 juce::String MainComponent::chainAdvisoryTail() const {
     return (chainVerdict_.checked && chainVerdict_.all48k && chainVerdict_.advisory.isNotEmpty())
-         ? " - " + chainVerdict_.advisory : juce::String();
+         ? kDash + chainVerdict_.advisory : juce::String();
 }
 
 
@@ -2220,7 +2220,7 @@ void MainComponent::onLearnReference() {
         learnCancelRequested_.store (true, std::memory_order_relaxed);
         learnRefButton.setEnabled (false);   // re-enabled by the job continuation; blocks a double-cancel/start
         learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
-        learnRefResultLabel.setText ("Cancelling...", juce::dontSendNotification);
+        learnRefResultLabel.setText ("Cancelling" + kEllipsis, juce::dontSendNotification);
         return;
     }
 
@@ -2241,7 +2241,7 @@ void MainComponent::onLearnReference() {
         // #22 backstop: the button is normally disabled in hardware-Dirac mode (updateControlsEnabled), but a
         // stale enable must still refuse - the box plays its sweep internally, there is no PC loopback to learn.
         learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
-        learnRefResultLabel.setText ("Hardware Dirac: the processor plays the sweep internally - there is no PC loopback to learn.",
+        learnRefResultLabel.setText ("Hardware Dirac: the processor plays the sweep internally" + kDash + "there is no PC loopback to learn.",
                                      juce::dontSendNotification);
         logLine (eb::DiagnosticLog::Level::Warn, "Learn refused: hardware-Dirac processor mode.");
         return;
@@ -2255,7 +2255,7 @@ void MainComponent::onLearnReference() {
     const juce::String deviceType = eb::readDiracDeviceType();
     if (deviceType.isNotEmpty() && ! eb::diracDeviceTypeIsWindowsAudio (deviceType)) {
         learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
-        learnRefResultLabel.setText ("Dirac is in \"" + deviceType + "\" - set it to Windows Audio AND turn off "
+        learnRefResultLabel.setText ("Dirac is in \"" + deviceType + "\"" + kDash + "set it to Windows Audio AND turn off "
                                      "exclusive mode on your output device, then learn.", juce::dontSendNotification);
         logLine (eb::DiagnosticLog::Level::Warn,
                  "Learn refused: Dirac deviceType is \"" + deviceType + "\" (not Windows Audio).");
@@ -2282,8 +2282,8 @@ void MainComponent::onLearnReference() {
 
     learnRefResultLabel.setColour (juce::Label::textColourId, Theme::textDim());
     learnRefResultLabel.setText (diracDevice.isNotEmpty()
-            ? ("Learning from \"" + diracDevice + "\" - run a Dirac measurement now (stops automatically when the sweep ends)...")
-            : juce::String ("Learning from the default playback device - run a Dirac measurement now (stops automatically when the sweep ends)..."),
+            ? ("Learning from \"" + diracDevice + "\"" + kDash + "run a Dirac measurement now (stops automatically when the sweep ends)" + kEllipsis)
+            : "Learning from the default playback device" + kDash + "run a Dirac measurement now (stops automatically when the sweep ends)" + kEllipsis,
         juce::dontSendNotification);
 
     juce::Component::SafePointer<MainComponent> safe (this);
@@ -2324,12 +2324,12 @@ void MainComponent::onLearnReference() {
             // bounds catch that: the two ears' spans must be DISJOINT in time (Dirac hard-pans - overlapping
             // spans mean the "silent half" wasn't silent), and neither span may swallow most of the capture.
             else if (spanL.first < spanR.last && spanR.first < spanL.last) {
-                resultMsg = "Rejected: the two ears' sweeps overlap in time - not cleanly panned "
+                resultMsg = "Rejected: the two ears' sweeps overlap in time" + kDash + "not cleanly panned "
                             "(leakage, a second source, or a non-hard-panned processor)";
             }
             else if ((spanL.last - spanL.first) > (int) (0.8 * (double) cap.samplesL.size())
                   || (spanR.last - spanR.first) > (int) (0.8 * (double) cap.samplesR.size())) {
-                resultMsg = "Rejected: a sweep span covers most of the capture - no clean silent half "
+                resultMsg = "Rejected: a sweep span covers most of the capture" + kDash + "no clean silent half "
                             "(noise or leakage on the quiet channel?)";
             }
             else {
@@ -2353,9 +2353,9 @@ void MainComponent::onLearnReference() {
                     // lives in the gaps that trimming removes). Offline/pure - safe on this worker thread.
                     schedule = eb::extractSchedule (cap.samplesL.data(), cap.samplesR.data(),
                                                     (int) cap.samplesL.size(), cap.rate);
-                    resultMsg = "Reference learned - both ears captured (L "
+                    resultMsg = "Reference learned" + kDash + "both ears captured (L "
                                 + juce::String (samplesL.size() / capRate, 1) + " s, R "
-                                + juce::String (samplesR.size() / capRate, 1) + " s) - see tip to resume listening.";
+                                + juce::String (samplesR.size() / capRate, 1) + " s)" + kDash + "see tip to resume listening.";
                 }
             }
         }
@@ -2418,7 +2418,7 @@ void MainComponent::onLearnReference() {
                     dir.getChildFile ("schedule.txt").deleteFile();
                     mc->learnRefResultLabel.setColour (juce::Label::textColourId, Theme::warn());
                     mc->learnRefResultLabel.setText ("Reference learned for THIS session, but saving it FAILED "
-                                                     "(disk full / permissions?) - it will need re-learning next launch.",
+                                                     "(disk full / permissions?)" + kDash + "it will need re-learning next launch.",
                                                      juce::dontSendNotification);
                     mc->logLine (eb::DiagnosticLog::Level::Error,
                                  "Reference save FAILED (L=" + juce::String (wroteL ? 1 : 0)
@@ -2882,16 +2882,16 @@ void MainComponent::updateActiveEarIndicator (bool silent) {
     juce::Colour col;
     if (running && autoMode) {
         if (live) {
-            text = (ear == 0) ? "Auto per-ear - capturing the LEFT earcup"
-                              : "Auto per-ear - capturing the RIGHT earcup";
+            text = (ear == 0) ? "Auto per-ear" + kDash + "capturing the LEFT earcup"
+                              : "Auto per-ear" + kDash + "capturing the RIGHT earcup";
             if (engine.autoEarAmbiguous()) {                 // the schedule router flagged this segment OFF-schedule
-                text += "  -  routing ambiguous, re-measure";
+                text += kDash + "routing ambiguous, re-measure";
                 col   = Theme::warn();
             } else {
                 col   = Theme::text();   // readable primary text; the meter's accent dot carries the colour cue
             }
         } else {
-            text = "Auto per-ear - waiting for the next sweep...";
+            text = "Auto per-ear" + kDash + "waiting for the next sweep" + kEllipsis;
             col  = Theme::textDim();
         }
     } else {
@@ -3002,26 +3002,26 @@ void MainComponent::timerCallback() {
             // Frame count: 21 scenes x 4 appearances + 2 startready = 86 frames (P3 Task 8: the scene
             // matrix owns capturing/midcapture-failed, so the Task-6 standalone capture-card block died;
             // verdict-suspect rides beyond the plan's 20-row table - see the task report).
-            struct St { const char* name; const char* statusText; bool update; WizardStep step;
+            struct St { const char* name; juce::String statusText; bool update; WizardStep step;
                         bool calAdv; bool diracHint; int p3; };
             // p3 codes: 0 none | 1 armed-waiting | 2 timeout-hint | 3 capturing | 4 midcapture-failed
             //           5 verdict | 6 verdict-details | 7 verdict-stale | 8 hwdirac | 9 override
             //           10 level-clip | 11 regression-banner | 12 verdict-suspect
             static const St states[] = {
                 { "idle",             "",                                                          false, WizardStep::Measure, false, false, 0 },
-                { "running",          "Running - waiting for the Dirac sweep...",                  false, WizardStep::Measure, false, false, 1 },
-                { "lowlevel",         "Running - level low: turn your amp up to the green band",   false, WizardStep::Measure, false, false, 1 },
-                { "error",            "EARS or audio cable disconnected - measurement stopped.",   false, WizardStep::Measure, false, false, 0 },
-                { "update+armed",     "Listening for Dirac's sweep...",                            true,  WizardStep::Measure, false, false, 1 },
-                { "timeout-hint",     "Listening for Dirac's sweep...",                            false, WizardStep::Measure, false, false, 2 },
-                { "capturing",        "Sweep in progress...",                                      false, WizardStep::Measure, false, false, 3 },
-                { "midcapture-failed","EARS or audio cable disconnected - measurement stopped.",   false, WizardStep::Measure, false, false, 4 },
+                { "running",          "Running" + kDash + "waiting for the Dirac sweep" + kEllipsis,       false, WizardStep::Measure, false, false, 1 },
+                { "lowlevel",         "Running" + kDash + "level low: turn your amp up to the green band", false, WizardStep::Measure, false, false, 1 },
+                { "error",            "EARS or audio cable disconnected" + kDash + "measurement stopped.", false, WizardStep::Measure, false, false, 0 },
+                { "update+armed",     "Listening for Dirac's sweep" + kEllipsis,                           true,  WizardStep::Measure, false, false, 1 },
+                { "timeout-hint",     "Listening for Dirac's sweep" + kEllipsis,                           false, WizardStep::Measure, false, false, 2 },
+                { "capturing",        "Sweep in progress" + kEllipsis,                                     false, WizardStep::Measure, false, false, 3 },
+                { "midcapture-failed","EARS or audio cable disconnected" + kDash + "measurement stopped.", false, WizardStep::Measure, false, false, 4 },
                 { "verdict",          "",                                                          false, WizardStep::Measure, false, false, 5 },
                 { "verdict-details",  "",                                                          false, WizardStep::Measure, false, false, 6 },
                 { "verdict-stale",    "",                                                          false, WizardStep::Measure, false, false, 7 },
                 { "verdict-suspect",  "",                                                          false, WizardStep::Measure, false, false, 12 },
                 { "hwdirac",          "",                                                          false, WizardStep::Measure, false, false, 8 },
-                { "override",         "Listening for the sweep...",                                false, WizardStep::Measure, false, false, 9 },
+                { "override",         "Listening for the sweep" + kEllipsis,                               false, WizardStep::Measure, false, false, 9 },
                 // STAGE SCENES: one per non-Measure step at its current state (the gate MEASURES each
                 // hand-laid stage body - the "step axis actually probes 4 stages" honesty check).
                 // connect-dirachint forces the standard-cable/Dirac warning + one-click fix (T10);
@@ -3063,7 +3063,7 @@ void MainComponent::timerCallback() {
                     // truth - and only THEN the driven display feeds. The plan's Task-8 snippet pinned
                     // LAST, which would have recomposed-away every driven P3 state and rendered 21
                     // identical live-truth frames (flagged in the task report; fixed here).
-                    driveDeviceErrorForTest (s.p3 == 11 ? "Device error - check the EARS and cable"
+                    driveDeviceErrorForTest (s.p3 == 11 ? "Device error" + kDash + "check the EARS and cable"
                                                         : juce::String());
                     calibrateStage_.setAdvancedOpen (s.calAdv);     // P2: force the Advanced-FIR disclosure per scene
                     driveConnectWarningsForTest (s.diracHint, s.diracHint);   // T10: the cable-warning scene
@@ -3182,7 +3182,7 @@ void MainComponent::timerCallback() {
     // audioDeviceStopped() callback. Tear it down and surface it, instead of leaving the engine sitting
     // in a false "Running - clean" while the cable records silence.
     if (engine.status() == EngineStatus::Running && engine.consumeDeviceDied()) {
-        statusErrorMsg_ = "EARS or audio cable disconnected - measurement stopped.";
+        statusErrorMsg_ = "EARS or audio cable disconnected" + kDash + "measurement stopped.";
         logLine (eb::DiagnosticLog::Level::Error, "Device lost mid-run: " + statusErrorMsg_);
         // §3.1 mid-capture regression: the Measure stage OWNS the moment - the active capture converts
         // to an explicit Failed card (sticky until the next Start), never a silent "Listening..." fallback.
@@ -3333,15 +3333,15 @@ void MainComponent::timerCallback() {
             verifyResultLabel.setText (
                 res == LrResult::Pass      ? juce::String ("L/R wiring OK (left earcup drives the left mic)")
               : res == LrResult::Swapped   ? juce::String ("Channels SWAPPED (left earcup drives the right mic)")
-              : res == LrResult::Ambiguous ? juce::String ("Ambiguous - both mics responded (acoustic leak?)")
-                                           : juce::String ("No signal - play a tone into the LEFT earcup"),
+              : res == LrResult::Ambiguous ? "Ambiguous" + kDash + "both mics responded (acoustic leak?)"
+                                           : "No signal" + kDash + "play a tone into the LEFT earcup",
                 juce::dontSendNotification);
         } else if (++verifyTicks > 150) {   // ~5 s at 30 Hz
             engine.endLrVerify();
             verifyTicks = 0;
             verifyButton.setButtonText ("Check L/R wiring");
             verifyResultLabel.setColour (juce::Label::textColourId, Theme::warn());
-            verifyResultLabel.setText ("No signal detected - play a tone into the LEFT earcup", juce::dontSendNotification);
+            verifyResultLabel.setText ("No signal detected" + kDash + "play a tone into the LEFT earcup", juce::dontSendNotification);
         }
     }
 
