@@ -215,3 +215,21 @@ TEST_CASE("P4 DisclosureRow a11y: announces expandable + expanded/collapsed, not
     row.setSummary ("Min phase - Auto length");
     CHECK (row.getDescription() == "Min phase - Auto length");
 }
+
+// Cold-gate T1-T5 fix-forward: the locked-revert path's no-visual-change claim gets its not-X. A
+// click on a LOCKED row reverts silently - it must start NO chevron ramp (the comment in clicked()
+// asserts it; this pins it) and the row stays open.
+TEST_CASE("P4 DisclosureRow: clicking a locked row starts no ramp and stays open") {
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    eb::SystemA11y::setForTest (false, false, false);          // animations allowed - a ramp COULD run
+    eb::DisclosureRow row ("Advanced FIR");
+    row.setOpen (true);
+    row.chevronRampForTest().finishForTest();                  // settle the open ease
+    row.setLocked (true);
+    int changes = 0; row.onOpenChanged = [&] (bool) { ++changes; };
+    row.clickForTest();                                        // user tries to collapse the locked row
+    CHECK (row.isOpen());                                      // refused
+    CHECK_FALSE (row.chevronRampForTest().running());          // NO ramp on the silent revert
+    CHECK (row.chevronAmountForTest() == 1.0f);                // chevron never left the open glyph
+    CHECK (changes == 0);                                      // no phantom change report
+}
