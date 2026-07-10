@@ -41,7 +41,7 @@ CalSide sideFromFilename (const juce::String& fileName) {
     if (wordLeft != wordRight) return wordLeft ? CalSide::Left : CalSide::Right;
     if (wordLeft && wordRight) return CalSide::Unknown;
 
-    // 2) Else a delimited single-letter L/R token (e.g. "L_HPN_...", "..._R", "8604350-R").
+    // 2) Else a delimited single-letter L/R token (e.g. "L_HPN_...", "..._R", "0000000-R").
     const bool letterL = hasDelimitedLetter (upper, 'L');
     const bool letterR = hasDelimitedLetter (upper, 'R');
     if (letterL != letterR) return letterL ? CalSide::Left : CalSide::Right;

@@ -73,7 +73,7 @@ int-milli idiom → the card reads them message-thread-side.
 - No valid floor yet (`!floorValid`) → Unknown verdict, no SNR claim.
 
 ## Testing (pure, no hardware)
-- `CalFile`: parse the exact header `"Sens Factor =0.9dB, EARS Serial 860-4350, compensation HEQ V2"`
+- `CalFile`: parse the exact header `"Sens Factor =0.9dB, EARS Serial 000-0000, compensation HEQ V2"`
   → `sensFactorDb == 0.9`; absent → `nullopt`; still reads type/side/serial.
 - `SplMath`: `capsuleSplDb(dBFS=SensFactor, …, 18) == 94` (the anchor); the `−(DIP−18)` correction;
   `snrDb`. Hand-checked constants.

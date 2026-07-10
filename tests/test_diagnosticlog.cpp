@@ -4,7 +4,7 @@
 // Per-launch, message-thread diagnostic logger (Task 1 of the match-detection +
 // diagnostic-logging build). Four things are load-bearing and tested here:
 //   1. REDACTION    — the EARS serial must NEVER survive into a log line, in either
-//      its dashed ("860-4350") or dash-less ("8604350") form. No real serial is
+//      its dashed ("000-0000") or dash-less ("0000000") form. No real serial is
 //      used; "000-0000" is a synthetic placeholder.
 //   2. PER-LAUNCH   — two DiagnosticLog instances pointed at the SAME dir write to
 //      DIFFERENT files and BOTH open successfully (the overlapping-instance bug:

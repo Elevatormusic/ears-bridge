@@ -154,7 +154,7 @@ juce::String DiagnosticLog::redactSerial (const juce::String& message, const juc
     auto out = message.replace (serial, marker);
 
     // Also scrub the dash-less digits, in case a caller stripped the dash before
-    // logging (e.g. "860-4350" logged as "8604350"). Only when it differs, so we
+    // logging (e.g. "000-0000" logged as "0000000"). Only when it differs, so we
     // don't double-scan an already-dashless serial.
     const auto bare = serial.removeCharacters ("-");
     if (bare.isNotEmpty() && bare != serial)

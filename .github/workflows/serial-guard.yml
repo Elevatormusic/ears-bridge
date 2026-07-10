@@ -1,0 +1,45 @@
+name: serial-guard
+
+# Fail-closed guard: no serial-shaped string may enter the public tree.
+# The pattern is GENERIC by design - this public file must never contain a real
+# serial to compare against. Placeholders (000-0000 / 0000000) are the only
+# allowed serial-shaped strings; date-shaped runs (20YYMMDD...) are excluded.
+# The failure output prints file:line only - never the matched digits.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan for serial-shaped strings in cal/EARS context
+        shell: bash
+        run: |
+          set -uo pipefail
+          # Lines with cal-ish context AND a serial-shaped token, minus placeholders.
+          # Dashed form: \d{3}-\d{4} that is not 000-0000.
+          # Undashed form: a standalone 7-digit run that is not 0000000 and does
+          # not look like a date fragment (starts with 20 followed by a plausible
+          # month digit pair start 0/1).
+          hits=0
+          while IFS= read -r loc; do
+            [ -z "$loc" ] && continue
+            echo "::error::serial-shaped string at $loc (digits withheld from log)"
+            hits=$((hits+1))
+          done < <(
+            git grep -rniE '(serial|ears|heq|idf|hpn|cal)' -- \
+                ':!build' ':!*.png' ':!*.bundle' \
+              | grep -viE 'calibration flow|localhost' \
+              | grep -E '([0-9]{3}-[0-9]{4}|(^|[^0-9])[0-9]{7}([^0-9]|$))' \
+              | grep -vE '000-0000|0000000' \
+              | grep -vE '(^|[^0-9])20[01][0-9]{4,}' \
+              | cut -d: -f1,2
+          )
+          if [ "$hits" -gt 0 ]; then
+            echo "::error::$hits serial-shaped string(s) found. Replace with the 000-0000 / 0000000 placeholders (repo hard rule)."
+            exit 1
+          fi
+          echo "serial-guard: clean"

@@ -118,12 +118,12 @@ TEST_CASE("CalFile: a non-finite data row is skipped and recorded as a parse war
 }
 
 // sideFromFilename is the SECOND ear-side signal (the first is the file content). It must read
-// the side from a real EARS export name (L_HPN_..., R_HPN_..., 8604350-R), the words left/right,
+// the side from a real EARS export name (L_HPN_..., R_HPN_..., 0000000-R), the words left/right,
 // and stay Unknown when the name carries no unambiguous side marker.
 TEST_CASE("CalFile::sideFromFilename derives the ear from common names") {
     CHECK (eb::sideFromFilename ("L_HPN_000-0000.txt") == eb::CalSide::Left);
     CHECK (eb::sideFromFilename ("R_HPN_000-0000.txt") == eb::CalSide::Right);
-    CHECK (eb::sideFromFilename ("8604350-R.txt")      == eb::CalSide::Right);
+    CHECK (eb::sideFromFilename ("0000000-R.txt")      == eb::CalSide::Right);
     CHECK (eb::sideFromFilename ("headphone.txt")      == eb::CalSide::Unknown);
     CHECK (eb::sideFromFilename ("left_ear.frd")       == eb::CalSide::Left);
 }

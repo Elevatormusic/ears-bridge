@@ -55,8 +55,8 @@ public:
     juce::File currentFile() const;   // THIS launch's file (eb-<stamp>.log)
 
     // Replace EVERY occurrence of a known serial value with "[serial redacted]",
-    // matching both the value as given ("860-4350") AND its dash-less form
-    // ("8604350"). A no-op when serial is empty. Pure / static — testable on its
+    // matching both the value as given ("000-0000") AND its dash-less form
+    // ("0000000"). A no-op when serial is empty. Pure / static — testable on its
     // own and usable by callers before they ever hand a string to write().
     [[nodiscard]] static juce::String redactSerial (const juce::String& message,
                                                     const juce::String& serial);
