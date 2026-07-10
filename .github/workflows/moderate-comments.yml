@@ -1,0 +1,115 @@
+name: Moderate comments
+
+# Auto-hide + flag suspicious issue/PR comments (and new issues) that look like the
+# "here's a fix, just run this attachment" malware pattern — but only from
+# untrusted / brand-new accounts, so real bug reports are untouched.
+#
+# Owner/member/collaborator content is never moderated, and it never labels the
+# issue (a public label scares visitors). Everything it does is reversible: just
+# un-hide the comment.
+
+on:
+  issue_comment:
+    types: [created, edited]
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  moderate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const isComment = context.eventName === 'issue_comment';
+            const p = context.payload;
+            const obj = isComment ? p.comment : p.issue;
+            const author = obj.user.login;
+            const assoc = obj.author_association;
+            const body = obj.body || '';
+            const lower = body.toLowerCase();
+
+            // Never moderate trusted people or the bot itself.
+            if (['OWNER', 'MEMBER', 'COLLABORATOR'].includes(assoc)) return;
+            if (author.endsWith('[bot]')) return;
+
+            // --- delivery signals (the "run my fix" malware pattern needs a way to
+            //     actually deliver a payload; prose alone is not a payload) ---
+            // Non-image file attachment (zip/exe/etc go to /files/, images to /assets/).
+            const hasFileAttachment = /user-attachments\/files\//i.test(body);
+            // An archive/executable as a DOWNLOAD LINK — not merely a filename named in
+            // prose. A bug report mentioning `Hermes.exe`, `taskkill`, or a `.ps1` helper
+            // is legitimate and must NOT trip this.
+            const hasArchiveLink = /\bhttps?:\/\/\S+\.(zip|exe|msi|scr|bat|cmd|vbs|7z|rar|dmg|pkg|apk|jar)(?:[?#]|\b)/i.test(body);
+            // A download-and-run dropper: LOLBins, base64-decode, or a piped fetch→shell.
+            // (Bare `curl`/`wget` mentions are common in real reports, so require the pipe.)
+            const dropperCmd = /\b(certutil|bitsadmin|mshta)\b|frombase64string|base64\s+-d|powershell\s+-e(?:nc)?\b|-enc\s|(?:curl|wget|iwr|invoke-webrequest)\b[^\n|]*\|\s*(?:sh|bash|iex|powershell)/i.test(body);
+
+            // No delivery mechanism ⇒ not the malware pattern, however technical the
+            // prose (mentions of .exe, debug ports, "run this", etc. are fine). Bail
+            // out so detailed bug reports from non-collaborators are never flagged.
+            if (!hasFileAttachment && !hasArchiveLink && !dropperCmd) return;
+
+            // Social-engineering phrases only AGGRAVATE once a delivery signal exists.
+            const phrases = [
+              'just run this', 'run this attachment', 'trust me', 'no questions asked',
+              'hidden fix', 'hermes_fix', 'one-click', 'works for me',
+              'bypass the approval', 'disable the approval', 'turn off the approval',
+            ];
+            const phraseHits = phrases.filter((s) => lower.includes(s));
+
+            // Brand-new account?
+            let ageDays = 999;
+            try {
+              const u = await github.rest.users.getByUsername({ username: author });
+              ageDays = (Date.now() - new Date(u.data.created_at).getTime()) / 86400000;
+            } catch {}
+
+            let score = 0;
+            if (hasFileAttachment) score += 3;
+            if (hasArchiveLink) score += 3;
+            if (dropperCmd) score += 3;
+            score += phraseHits.length;
+            if (ageDays < 7) score += 2;
+            if (['NONE', 'FIRST_TIMER', 'FIRST_TIME_CONTRIBUTOR'].includes(assoc)) score += 1;
+
+            if (score < 3) return; // not suspicious enough — leave it alone
+
+            const issue_number = p.issue.number;
+            const { owner, repo } = context.repo;
+
+            // 1) hide the comment (reversible) — issue bodies can't be minimized.
+            //    We deliberately do NOT label the issue: the label shows in the issue
+            //    list/title and scares visitors, and the flag is usually a *comment*
+            //    on an otherwise-fine issue. Hiding + the warning below are enough.
+            if (isComment) {
+              try {
+                await github.graphql(
+                  'mutation($id:ID!){ minimizeComment(input:{subjectId:$id, classifier:SPAM}){ minimizedComment{ isMinimized } } }',
+                  { id: obj.node_id }
+                );
+              } catch (e) { core.warning('minimize: ' + e.message); }
+            }
+
+            // 2) leave a visible warning
+            const reasons = [
+              hasFileAttachment ? 'a file attachment' : null,
+              hasArchiveLink ? 'an archive/executable download link' : null,
+              dropperCmd ? 'a download-and-run command' : null,
+              phraseHits.length ? `phrase(s): ${phraseHits.join(', ')}` : null,
+              ageDays < 7 ? `a ${Math.round(ageDays)}-day-old account` : null,
+            ].filter(Boolean).join('; ');
+            const warn = [
+              `⚠️ **Auto-moderated.** This ${isComment ? 'comment' : 'issue'} from @${author} was flagged (${reasons})` + (isComment ? ' and hidden pending review.' : '.'),
+              '',
+              `**Do not download or run anything it links or attaches.** Legitimate fixes are committed to this repository by its maintainers — never delivered as an attachment or a "run this" script.`,
+              '',
+              '_Maintainer: false positive? Just un-hide the comment._',
+            ].join('\n');
+            try {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: warn });
+            } catch (e) { core.warning('createComment: ' + e.message); }
