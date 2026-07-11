@@ -88,11 +88,13 @@ void CalibrateStage::setUnityState (bool bothEmpty, bool accepted) {
 juce::String CalibrateStage::stageCaptionFor (std::optional<CalType> l, std::optional<CalType> r) {
     if (! l.has_value() || ! r.has_value())
         return "Use HEQ files for headphones, IDF for IEMs" + kDash + "files are matched to left and right automatically.";
-    const bool heq = (*l == CalType::Heq) || (*r == CalType::Heq);
     const bool hpn = (*l == CalType::Hpn) || (*r == CalType::Hpn);
-    if (heq) return "HEQ curves include a mild bass boost" + kDash + "in Dirac, start from a flat bass target.";
     if (hpn) return "HPN is miniDSP's older curve" + kDash + "it works, but HEQ is now recommended for headphone EQ.";
-    return {};   // IDF/RAW/Unknown pairs: the cards carry their own cautions
+    // HEQ pairs are silent: the bass-boost/flat-target caption was removed 2026-07-10 (owner
+    // ruling - Dirac's level handling makes the double-count advice moot; site docs updated the
+    // same day). A mixed HEQ+HPN pair falls to the HPN note above. IDF/RAW/Unknown: the cards
+    // carry their own cautions.
+    return {};
 }
 
 juce::String CalibrateStage::advancedFirSummary (bool complexPhase, int firLength, double trimDb) {

@@ -3,14 +3,15 @@
 #include "gui/MainComponent.h"
 
 // The ONE stage caption (spec 5.2, failure-surface map #4/#5). Pure wording rules:
-// any empty slot -> the load guidance; else HEQ wins; else HPN; else silent (IDF/RAW/Unknown
-// pairs - their cautions live on the cards).
-TEST_CASE("CalibrateStage caption: guidance when empty, HEQ once, HPN legacy note, silent for IDF") {
+// any empty slot -> the load guidance; else HPN legacy note; else silent. HEQ pairs are silent
+// by owner ruling (2026-07-10: the bass-boost/flat-target advice was removed app+docs - Dirac's
+// level handling makes it moot); IDF/RAW cautions live on the cards.
+TEST_CASE("CalibrateStage caption: guidance when empty, HPN legacy note, silent for HEQ and IDF") {
     using CS = eb::CalibrateStage;
     CHECK (CS::stageCaptionFor (std::nullopt, std::nullopt).contains ("HEQ files for headphones"));
     CHECK (CS::stageCaptionFor (eb::CalType::Heq, std::nullopt).contains ("HEQ files for headphones"));
-    CHECK (CS::stageCaptionFor (eb::CalType::Heq, eb::CalType::Heq).contains ("bass boost"));
-    CHECK (CS::stageCaptionFor (eb::CalType::Heq, eb::CalType::Hpn).contains ("bass boost"));  // HEQ wins
+    CHECK (CS::stageCaptionFor (eb::CalType::Heq, eb::CalType::Heq).isEmpty());   // NEGATIVE: the removed bass caption stays removed
+    CHECK (CS::stageCaptionFor (eb::CalType::Heq, eb::CalType::Hpn).contains ("older curve"));  // a mixed pair gets the HPN note
     CHECK (CS::stageCaptionFor (eb::CalType::Hpn, eb::CalType::Hpn).contains ("older curve"));
     CHECK (CS::stageCaptionFor (eb::CalType::Idf, eb::CalType::Idf).isEmpty());   // NEGATIVE: no false caption
 }
